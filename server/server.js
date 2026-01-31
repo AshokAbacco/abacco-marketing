@@ -25,11 +25,17 @@ const prisma = new PrismaClient();
 // --------------------
 // Middlewares (must be first)
 // --------------------
-app.use(cors({
-  origin: "http://localhost:5173", // your frontend
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://abaccomarketing.onrender.com"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    credentials: true,
+  })
+);
+
 
 app.use(express.json());
 
