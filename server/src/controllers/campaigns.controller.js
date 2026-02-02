@@ -3,6 +3,28 @@ import { sendBulkCampaign } from "../services/campaignMailer.service.js";
 import cache from "../utils/cache.js";
 
 /**
+ * Helper function to invalidate all dashboard caches
+ */
+const invalidateDashboardCache = (userId) => {
+  // Invalidate all possible dashboard cache keys
+  const ranges = ['today', 'week', 'month'];
+  ranges.forEach(range => {
+    cache.del(`dashboard:${userId}:${range}`);
+  });
+  
+  // Also invalidate date-specific caches (clear all user caches)
+  const keys = cache.keys();
+  keys.forEach(key => {
+    if (key.startsWith(`dashboard:${userId}:`)) {
+      cache.del(key);
+    }
+  });
+  
+  // Invalidate locked accounts cache
+  cache.del(`locked:${userId}`);
+};
+
+/**
  * Create Campaign
  */
 export const createCampaign = async (req, res) => {
@@ -15,7 +37,8 @@ export const createCampaign = async (req, res) => {
       fromAccountIds,
       pitchIds,
       sendType,
-      scheduledAt
+      scheduledAt,
+      customLimits
     } = req.body;
 
     // 1️⃣ Basic validation
@@ -51,13 +74,11 @@ export const createCampaign = async (req, res) => {
     const locked = new Set();
 
     for (const campaign of sendingCampaigns) {
-      // normal campaigns
       try {
         JSON.parse(campaign.fromAccountIds || "[]")
           .forEach(id => locked.add(Number(id)));
       } catch {}
 
-      // followup campaigns
       campaign.recipients.forEach(r => {
         if (r.accountId) locked.add(Number(r.accountId));
       });
@@ -74,8 +95,7 @@ export const createCampaign = async (req, res) => {
       }
     }
 
-
-    // 3️⃣ PROVIDER LIMIT VALIDATION (SAFE SENDING)
+    // 3️⃣ PROVIDER LIMIT VALIDATION (SAFE SENDING) - Now supporting custom limits
     const accounts = await prisma.emailAccount.findMany({
       where: { id: { in: fromAccountIds } }
     });
@@ -92,14 +112,18 @@ export const createCampaign = async (req, res) => {
 
     for (const acc of accounts) {
       const key = (acc.provider || "custom").toLowerCase();
-      totalCapacity += SAFE_LIMITS[key] || SAFE_LIMITS.custom;
+      
+      let limit = SAFE_LIMITS[key] || SAFE_LIMITS.custom;
+      
+      if (customLimits && customLimits[acc.id]) {
+        limit = customLimits[acc.id];
+      }
+      
+      totalCapacity += limit;
     }
 
     if (recipients.length > totalCapacity) {
-      return res.status(400).json({
-        success: false,
-        message: `You selected ${accounts.length} account(s) with total safe limit ${totalCapacity} emails. You added ${recipients.length}. Please remove some emails or add more From accounts.`
-      });
+      console.log(`⚠️ Recipients (${recipients.length}) exceed hourly capacity (${totalCapacity}). Will send in batches.`);
     }
 
     // 4️⃣ Auto-generate unique campaign name
@@ -124,47 +148,47 @@ export const createCampaign = async (req, res) => {
       finalName = `${baseName} (${i})`;
     }
 
-        // 2.5️⃣ SCHEDULE CONFLICT CHECK
-if (sendType === "scheduled" && scheduledAt) {
-  const scheduledTime = new Date(scheduledAt);
+    // 2.5️⃣ SCHEDULE CONFLICT CHECK
+    if (sendType === "scheduled" && scheduledAt) {
+      const scheduledTime = new Date(scheduledAt);
 
-  const windowStart = new Date(scheduledTime.getTime() - (2 * 60 * 60 * 1000));
-  const windowEnd   = new Date(scheduledTime.getTime() + (2 * 60 * 60 * 1000));
+      const windowStart = new Date(scheduledTime.getTime() - (2 * 60 * 60 * 1000));
+      const windowEnd   = new Date(scheduledTime.getTime() + (2 * 60 * 60 * 1000));
 
-  const conflicting = await prisma.campaign.findMany({
-    where: {
-      OR: [
-        { status: "scheduled" },
-        { status: "sending" }
-      ],
-      scheduledAt: {
-        gte: windowStart,
-        lte: windowEnd
+      const conflicting = await prisma.campaign.findMany({
+        where: {
+          OR: [
+            { status: "scheduled" },
+            { status: "sending" }
+          ],
+          scheduledAt: {
+            gte: windowStart,
+            lte: windowEnd
+          }
+        },
+        select: {
+          fromAccountIds: true
+        }
+      });
+
+      const busyAccounts = new Set();
+
+      for (const c of conflicting) {
+        try {
+          JSON.parse(c.fromAccountIds || "[]")
+            .forEach(id => busyAccounts.add(Number(id)));
+        } catch {}
       }
-    },
-    select: {
-      fromAccountIds: true
+
+      const conflict = fromAccountIds.find(id => busyAccounts.has(Number(id)));
+
+      if (conflict) {
+        return res.status(400).json({
+          success: false,
+          message: "This email account already has another campaign scheduled near this time. Choose another time or account give after 2 hours let."
+        });
+      }
     }
-  });
-
-  const busyAccounts = new Set();
-
-  for (const c of conflicting) {
-    try {
-      JSON.parse(c.fromAccountIds || "[]")
-        .forEach(id => busyAccounts.add(Number(id)));
-    } catch {}
-  }
-
-  const conflict = fromAccountIds.find(id => busyAccounts.has(Number(id)));
-
-  if (conflict) {
-    return res.status(400).json({
-      success: false,
-      message: "This email account already has another campaign scheduled near this time. Choose another time or account give after 2 hours let."
-    });
-  }
-}
 
     // 5️⃣ Create campaign
     const fromIds = fromAccountIds.map(Number);
@@ -181,6 +205,8 @@ if (sendType === "scheduled" && scheduledAt) {
         subject: JSON.stringify(subjects),
         fromAccountIds: JSON.stringify(fromAccountIds),
         pitchIds: JSON.stringify(pitchIds || []),
+        
+        customLimits: customLimits ? JSON.stringify(customLimits) : null,
 
         recipients: {
           create: recipients.map((email, i) => ({
@@ -192,9 +218,8 @@ if (sendType === "scheduled" && scheduledAt) {
       },
     });
 
-
-
-
+    // 🔥 INVALIDATE CACHE after creating campaign
+    invalidateDashboardCache(req.user.id);
 
     return res.json({
       success: true,
@@ -222,9 +247,13 @@ export const sendCampaignNow = async (req, res) => {
     });
 
     if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
     }
 
+    // ❌ Already sending
     if (campaign.status === "sending") {
       return res.status(400).json({
         success: false,
@@ -232,14 +261,13 @@ export const sendCampaignNow = async (req, res) => {
       });
     }
 
-    // 🔒 LOCK CHECK BEFORE SENDING
+    // 🔒 LOCK CHECK (same as before)
     const activeCampaigns = await prisma.campaign.findMany({
       where: {
         status: "sending",
         NOT: { id: campaignId }
       }
     });
-
 
     const locked = new Set();
 
@@ -260,30 +288,79 @@ export const sendCampaignNow = async (req, res) => {
       });
     }
 
-    // ✅ SAFE TO SEND
+    // ✅ KEY FIX: Queue as scheduled = NOW
     await prisma.campaign.update({
       where: { id: campaignId },
-      data: { status: "sending" }
-
+      data: {
+        status: "scheduled",
+        scheduledAt: new Date()
+      }
     });
 
-    sendBulkCampaign(campaignId);
+    // 🔥 Invalidate dashboard cache
+    invalidateDashboardCache(campaign.userId);
 
-    return res.json({ success: true });
+    return res.json({
+      success: true,
+      message: "Campaign queued and will start immediately"
+    });
 
   } catch (err) {
     console.error("Send campaign error:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to send campaign"
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send campaign"
+    });
   }
 };
- 
 
 /**
  * Schedule Campaign
  */
+export const scheduleCampaign = async (req, res) => {
+  try {
+    const campaignId = Number(req.params.id);
+    const { scheduledAt } = req.body;
+
+    if (!scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Scheduled time is required"
+      });
+    }
+
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId }
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
+    }
+
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: {
+        scheduledAt: new Date(scheduledAt),
+        status: "scheduled"
+      }
+    });
+
+    // 🔥 INVALIDATE CACHE
+    invalidateDashboardCache(campaign.userId);
+
+    return res.json({ success: true });
+
+  } catch (err) {
+    console.error("Schedule campaign error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to schedule campaign"
+    });
+  }
+};
 
 export const createFollowupCampaign = async (req, res) => {
   try {
@@ -296,7 +373,6 @@ export const createFollowupCampaign = async (req, res) => {
       });
     }
 
-    // 1️⃣ FIRST: load base campaign
     const baseCampaign = await prisma.campaign.findUnique({
       where: { id: baseCampaignId },
       include: { recipients: true }
@@ -309,250 +385,139 @@ export const createFollowupCampaign = async (req, res) => {
       });
     }
 
-    // 2️⃣ BACKFILL accountId for legacy recipients (SAFE PLACE)
-    if (baseCampaign.sendType !== "followup") {
-      let fromAccountIds = [];
+    const sendingCampaigns = await prisma.campaign.findMany({
+      where: { status: "sending" },
+      include: {
+        recipients: {
+          select: { accountId: true }
+        }
+      }
+    });
+
+    const locked = new Set();
+
+    for (const campaign of sendingCampaigns) {
       try {
-        fromAccountIds = JSON.parse(baseCampaign.fromAccountIds || "[]");
+        JSON.parse(campaign.fromAccountIds || "[]")
+          .forEach(id => locked.add(Number(id)));
       } catch {}
 
-      if (fromAccountIds.length) {
-        for (let i = 0; i < baseCampaign.recipients.length; i++) {
-          const r = baseCampaign.recipients[i];
-
-          if (!r.accountId) {
-            await prisma.campaignRecipient.update({
-              where: { id: r.id },
-              data: {
-                accountId: fromAccountIds[i % fromAccountIds.length],
-              }
-            });
-          }
-        }
-      }
+      campaign.recipients.forEach(r => {
+        if (r.accountId) locked.add(Number(r.accountId));
+      });
     }
 
-    // 3️⃣ Build recipients for follow-up (accountId is now guaranteed)
-    const recipientsToCreate = [];
+    let finalName = `${baseCampaign.name} (Followup)`;
 
-    Object.entries(senderRecipientMap).forEach(([accountId, emails]) => {
-      emails.forEach(email => {
-        recipientsToCreate.push({
-          email,
-          accountId: Number(accountId),
-          status: "pending"
-        });
-      });
+    const existing = await prisma.campaign.findMany({
+      where: {
+        userId: req.user.id,
+        name: { startsWith: finalName }
+      },
+      select: { name: true }
     });
 
-    if (!recipientsToCreate.length) {
-      return res.status(400).json({
-        success: false,
-        message: "No valid recipients found for follow-up"
-      });
+    const used = existing.map(c => c.name);
+
+    if (used.includes(finalName)) {
+      let i = 2;
+      while (used.includes(`${finalName} (${i})`)) {
+        i++;
+      }
+      finalName = `${finalName} (${i})`;
     }
 
-    // 🔒 LOCK CHECK for follow-up (prevent double use of same account)
-const sendingCampaigns = await prisma.campaign.findMany({
-  where: { status: "sending" },
-  include: {
-    recipients: { select: { accountId: true } }
-  }
-});
-
-const locked = new Set();
-
-for (const c of sendingCampaigns) {
-  try {
-    JSON.parse(c.fromAccountIds || "[]")
-      .forEach(id => locked.add(Number(id)));
-  } catch {}
-
-  c.recipients.forEach(r => {
-    if (r.accountId) locked.add(Number(r.accountId));
-  });
-}
-
-// Collect accounts used by this followup
-const followupAccounts = Object.keys(senderRecipientMap).map(Number);
-
-const conflict = followupAccounts.find(id => locked.has(id));
-
-if (conflict) {
-  return res.status(400).json({
-    success: false,
-    message: "This email account is already sending another campaign. Please wait until it completes."
-  });
-}
-
-
-    // 4️⃣ Create follow-up campaign
-    const newCampaign = await prisma.campaign.create({
+    const followupCampaign = await prisma.campaign.create({
       data: {
         userId: req.user.id,
-        name: `Follow-up: ${baseCampaign.name} (${Date.now()})`,
-        bodyHtml,
-        subject: JSON.stringify(subjects),
+        name: finalName,
+        subject: JSON.stringify(subjects || []),
+        bodyHtml: bodyHtml || "",
         sendType: "followup",
-        status: "sending",
+        status: "draft",
         parentCampaignId: baseCampaignId,
-        recipients: {
-          create: recipientsToCreate
-        }
+        fromAccountIds: JSON.stringify([]),
+        pitchIds: JSON.stringify([])
       }
     });
 
-    // 5️⃣ Send emails
-    sendBulkCampaign(newCampaign.id);
+    const recipientCreates = [];
 
-    return res.json({ success: true });
+    for (const [senderId, emailArray] of Object.entries(senderRecipientMap)) {
+      const accountId = Number(senderId);
 
-  } catch (err) {
-    console.error("Follow-up error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Follow-up failed"
-    });
-  }
-};
+      if (locked.has(accountId)) {
+        await prisma.campaign.delete({
+          where: { id: followupCampaign.id }
+        });
 
-export const deleteCampaign = async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const force = req.query.force === "true";
+        return res.status(400).json({
+          success: false,
+          message: "One or more sender accounts are currently busy. Please wait."
+        });
+      }
 
-    const campaign = await prisma.campaign.findUnique({
-      where: { id }
-    });
+      for (const email of emailArray) {
+        const original = baseCampaign.recipients.find(r => r.email === email);
 
-    if (!campaign) {
-      return res.status(404).json({
-        success: false,
-        message: "Campaign not found"
-      });
+        recipientCreates.push({
+          campaignId: followupCampaign.id,
+          email,
+          status: "pending",
+          accountId,
+          sentBodyHtml: original?.sentBodyHtml || "",
+          sentSubject: original?.sentSubject || "",
+          sentFromEmail: original?.sentFromEmail || ""
+        });
+      }
     }
 
-    // If sending and NOT force → block
-    if (campaign.status === "sending" && !force) {
-      return res.status(400).json({
-        success: false,
-        requireForce: true,
-        message: "Campaign is currently sending"
-      });
-    }
-
-    // Delete recipients
-    await prisma.campaignRecipient.deleteMany({
-      where: { campaignId: id }
+    await prisma.campaignRecipient.createMany({
+      data: recipientCreates
     });
 
-    // Delete campaign
-    await prisma.campaign.delete({
-      where: { id }
-    });
+    // 🔥 INVALIDATE CACHE
+    invalidateDashboardCache(req.user.id);
 
     return res.json({
       success: true,
-      message: force
-        ? "Campaign force deleted successfully"
-        : "Campaign deleted successfully"
+      data: followupCampaign
     });
 
   } catch (err) {
-    console.error("Delete campaign error:", err);
-    res.status(500).json({
+    console.error("Followup campaign error:", err);
+    return res.status(500).json({
       success: false,
-      message: "Failed to delete campaign"
+      message: "Server error"
     });
   }
 };
-export const scheduleCampaign = async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { scheduledAt } = req.body;
-
-    if (!scheduledAt) {
-      return res.status(400).json({
-        success: false,
-        message: "scheduledAt is required",
-      });
-    }
-
-    const updated = await prisma.campaign.update({
-      where: { id },
-      data: {
-        status: "scheduled",
-        scheduledAt: new Date(scheduledAt),
-      },
-    });
-
-    res.json({ success: true, data: updated });
-
-  } catch (err) {
-    console.error("Schedule error:", err);
-    res.status(500).json({ success: false });
-  }
-};
-
-
 
 export const getAllCampaigns = async (req, res) => {
   try {
-    const cacheKey = `campaigns:${req.user.id}`;
-    const cached = cache.get(cacheKey);
-
-    if (cached) {
-      console.log("🟢 CACHE HIT: getAllCampaigns");
-      return res.json({ success: true, data: cached });
-    }
-
     const campaigns = await prisma.campaign.findMany({
-      where: {
-        userId: req.user.id,
-        status: "completed",
-        parentCampaignId: null,
-
-        // 👇 ADD THIS LINE (24 hour delay rule)
-        createdAt: {
-          lte: new Date(Date.now() - 24 * 60 * 60 * 1000)
-        }
-      },
+      where: { userId: req.user.id },
       orderBy: { createdAt: "desc" },
       include: { recipients: true }
     });
 
-
-    const followups = await prisma.campaign.findMany({
-      where: {
-        userId: req.user.id,
-        parentCampaignId: { not: null }
-      },
-      select: { parentCampaignId: true }
-    });
-
-    const usedParentIds = new Set(followups.map(f => f.parentCampaignId));
-
-    const filtered = campaigns.filter(
-      c => !usedParentIds.has(c.id)
-    );
-
-    // ✅ store in cache AFTER calculation
-    cache.set(cacheKey, filtered, 60);
-
-    return res.json({ success: true, data: filtered });
-
+    return res.json({ success: true, data: campaigns });
   } catch (err) {
-    console.error(err);
+    console.error("Get campaigns error:", err);
     res.status(500).json({ success: false });
   }
 };
 
-  
 export const getDashboardCampaigns = async (req, res) => {
   try {
-    const { range, date } = req.query;
+    const { range = "today", date } = req.query;
 
-    const cacheKey = `dashboard:${req.user.id}:${range || "all"}:${date || "none"}`;
+    // 🔥 REDUCED CACHE TIME - 30 seconds instead of 60
+    // This ensures more real-time updates
+    const cacheKey = date
+      ? `dashboard:${req.user.id}:${date}`
+      : `dashboard:${req.user.id}:${range}`;
+
     const cached = cache.get(cacheKey);
     if (cached) {
       console.log("🟢 CACHE HIT: getDashboardCampaigns");
@@ -603,9 +568,7 @@ export const getDashboardCampaigns = async (req, res) => {
       include: { recipients: true }
     });
 
-    // =========================
-    // 📊 CAMPAIGN COUNTS
-    // =========================
+    // Campaign counts
     const totalCampaigns = campaigns.filter(
       c => c.sendType !== "followup"
     ).length;
@@ -617,9 +580,7 @@ export const getDashboardCampaigns = async (req, res) => {
       0
     );
 
-    // =========================
-    // 📧 RECIPIENT COUNTS
-    // =========================
+    // Recipient counts
     let totalRecipients = 0;
     let sentRecipients = 0;
     let pendingRecipients = 0;
@@ -637,9 +598,7 @@ export const getDashboardCampaigns = async (req, res) => {
       });
     });
 
-    // =========================
-    // 🧾 RECENT CAMPAIGNS
-    // =========================
+    // Recent campaigns
     const recentCampaigns = [];
 
     for (const campaign of campaigns) {
@@ -679,8 +638,8 @@ export const getDashboardCampaigns = async (req, res) => {
       recentCampaigns
     };
 
-    // ✅ Cache after full calculation
-    cache.set(cacheKey, responseData, 60);
+    // 🔥 Cache for only 30 seconds for more real-time updates
+    cache.set(cacheKey, responseData, 30);
 
     return res.json({ success: true, data: responseData });
 
@@ -689,9 +648,6 @@ export const getDashboardCampaigns = async (req, res) => {
     res.status(500).json({ success: false });
   }
 };
-
-
-
 
 export const getCampaignProgress = async (req, res) => {
   try {
@@ -708,7 +664,13 @@ export const getCampaignProgress = async (req, res) => {
       return res.status(404).json({ success: false });
     }
 
-    // Same limits used in mailer
+    let customLimits = {};
+    if (campaign.customLimits) {
+      try {
+        customLimits = JSON.parse(campaign.customLimits);
+      } catch {}
+    }
+
     const SAFE_LIMITS = {
       gmail: 50,
       gsuite: 80,
@@ -717,7 +679,6 @@ export const getCampaignProgress = async (req, res) => {
       custom: 60
     };
 
-    // helper to format time nicely
     function formatDuration(ms) {
       const totalMinutes = Math.ceil(ms / 60000);
       const h = Math.floor(totalMinutes / 60);
@@ -756,10 +717,18 @@ export const getCampaignProgress = async (req, res) => {
     // Calculate ETA for each account
     for (const row of Object.values(grouped)) {
       const provider = (row.domain || "custom").toLowerCase();
-      const limit = SAFE_LIMITS[provider] || SAFE_LIMITS.custom;
+      
+      let limit = SAFE_LIMITS[provider] || SAFE_LIMITS.custom;
+      
+      const account = await prisma.emailAccount.findFirst({
+        where: { email: row.email }
+      });
+      
+      if (account && customLimits[account.id]) {
+        limit = customLimits[account.id];
+      }
 
-      // exactly same throttle math as mailer
-      const delayPerMail = (2 * 60 * 60 * 1000) / limit;
+      const delayPerMail = (60 * 60 * 1000) / limit;
       const remainingMs = row.processing * delayPerMail;
 
       row.eta = formatDuration(remainingMs);
@@ -775,16 +744,16 @@ export const getCampaignProgress = async (req, res) => {
 
 export const getLockedAccounts = async (req, res) => {
   try {
+    // 🔥 REDUCED CACHE TIME - 10 seconds for more real-time lock status
     const cacheKey = `locked:${req.user.id}`;
     const cached = cache.get(cacheKey);
     if (cached) {
-        console.log("🟢 CACHE HIT: getLockedAccounts");
-        return res.json({ success: true, data: cached });
+      console.log("🟢 CACHE HIT: getLockedAccounts");
+      return res.json({ success: true, data: cached });
     }
 
-
     const sendingCampaigns = await prisma.campaign.findMany({
-      where: {status: "sending"  },
+      where: { status: "sending" },
       include: {
         recipients: {
           select: { accountId: true }
@@ -795,19 +764,17 @@ export const getLockedAccounts = async (req, res) => {
     const locked = new Set();
 
     for (const campaign of sendingCampaigns) {
-      // fromAccountIds (normal campaign)
       try {
         JSON.parse(campaign.fromAccountIds || "[]")
           .forEach(id => locked.add(Number(id)));
       } catch {}
 
-      // recipients.accountId (followup campaign)
       campaign.recipients.forEach(r => {
         if (r.accountId) locked.add(Number(r.accountId));
       });
     }
 
-    cache.set(cacheKey, Array.from(locked), 15);
+    cache.set(cacheKey, Array.from(locked), 10); // 10 seconds cache
     return res.json({
       success: true,
       data: Array.from(locked)
@@ -819,8 +786,35 @@ export const getLockedAccounts = async (req, res) => {
   }
 };
 
+export const deleteCampaign = async (req, res) => {
+  try {
+    const campaignId = Number(req.params.id);
 
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId }
+    });
 
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
 
+    // Delete all recipients first
+    await prisma.campaignRecipient.deleteMany({
+      where: { campaignId }
+    });
 
+    // Delete the campaign
+    await prisma.campaign.delete({
+      where: { id: campaignId }
+    });
 
+    // 🔥 INVALIDATE CACHE immediately after deletion
+    invalidateDashboardCache(campaign.userId);
+
+    return res.json({ success: true });
+
+  } catch (err) {
+    console.error("Delete campaign error:", err);
+    res.status(500).json({ success: false });
+  }
+};

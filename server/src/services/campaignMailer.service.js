@@ -85,6 +85,7 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// 🔥 Default limits (can be overridden by campaign.customLimits)
 const SAFE_LIMITS = {
   gmail: 50,
   gsuite: 80,
@@ -93,7 +94,12 @@ const SAFE_LIMITS = {
   custom: 60
 };
 
-function getLimit(provider = "") {
+function getLimit(provider = "", accountId = null, customLimits = {}) {
+  // 🔥 Check custom limits first
+  if (accountId && customLimits[accountId]) {
+    return customLimits[accountId];
+  }
+  
   const key = provider.toLowerCase();
   return SAFE_LIMITS[key] || SAFE_LIMITS.custom;
 }
@@ -111,7 +117,7 @@ function getDomainLabel(email = "") {
 }
 
 
-/* ------------------ main sender ------------------ */
+/* ------------------ main sender with continuous sending ------------------ */
 
 export async function sendBulkCampaign(campaignId) {
   const campaign = await prisma.campaign.findUnique({
@@ -120,6 +126,16 @@ export async function sendBulkCampaign(campaignId) {
   });
 
   if (!campaign) throw new Error("Campaign not found");
+
+  // 🔥 Load custom limits if they exist
+  let customLimits = {};
+  if (campaign.customLimits) {
+    try {
+      customLimits = JSON.parse(campaign.customLimits);
+    } catch (err) {
+      console.error("Failed to parse custom limits:", err);
+    }
+  }
 
   // ---------------- subjects ----------------
   let subjects;
@@ -151,7 +167,11 @@ export async function sendBulkCampaign(campaignId) {
 
   // ---------------- recipients ----------------
   const recipients = campaign.recipients.filter(r => r.status === "pending");
-  if (!recipients.length) return;
+  if (!recipients.length) {
+    console.log("No pending recipients, marking campaign as completed");
+    await updateCampaignStatus(campaignId);
+    return;
+  }
 
   // ---------------- original body for followup ----------------
   let originalBodyHtml = "";
@@ -167,7 +187,6 @@ export async function sendBulkCampaign(campaignId) {
   // ============================================================
   if (campaign.sendType === "followup") {
 
-    // 🔽 ADD THIS DIRECTLY BELOW
     const subjectPlan = distribute(subjects, recipients.length);
 
     const pitchPlan = pitchBodies.length
@@ -189,40 +208,39 @@ export async function sendBulkCampaign(campaignId) {
       });
       if (!account) continue;
 
+      // 🔥 Get the limit for this account (1 hour window now)
+      const limit = getLimit(account.provider, account.id, customLimits);
+      const delayPerEmail = (60 * 60 * 1000) / limit; // 1 hour window
 
+      let smtpPassword = account.encryptedPass;
 
-        let smtpPassword = account.encryptedPass;
+      if (typeof smtpPassword === "string" && smtpPassword.includes(":")) {
+        smtpPassword = decrypt(smtpPassword);
+      }
 
-        if (typeof smtpPassword === "string" && smtpPassword.includes(":")) {
-          smtpPassword = decrypt(smtpPassword);
-        }
+      const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
 
-        const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
+      const transporter = nodemailer.createTransport({
+        host: account.smtpHost,
+        port: Number(account.smtpPort),
+        secure: Number(account.smtpPort) === 465,
 
-        const transporter = nodemailer.createTransport({
-          host: account.smtpHost,
-          port: Number(account.smtpPort),
-          secure: Number(account.smtpPort) === 465,
+        name: domain,  
 
-          // 🔥 THIS FIXES REDIFF HELO ERROR
-          name: domain,  
-
-          auth: {
-            user: account.smtpUser || account.email,
-            pass: smtpPassword,
-          },
-          requireTLS: Number(account.smtpPort) === 587,
-          tls: {
-            rejectUnauthorized: false,
-            minVersion: "TLSv1.2",
-          },
-        });
-
-
+        auth: {
+          user: account.smtpUser || account.email,
+          pass: smtpPassword,
+        },
+        requireTLS: Number(account.smtpPort) === 587,
+        tls: {
+          rejectUnauthorized: false,
+          minVersion: "TLSv1.2",
+        },
+      });
 
       const fromEmail = account.smtpUser || account.email;
 
-
+      // 🔥 Send emails continuously within the 1-hour window
       for (const recipient of group) {
         try {
           const signature = buildSignature(account);
@@ -288,12 +306,13 @@ export async function sendBulkCampaign(campaignId) {
             }
           });
 
-          // ✅ ADD throttling here also
-          const limit = getLimit(account.provider);
-          const delay = (2 * 60 * 60 * 1000) / limit;
-          await sleep(delay);
+          console.log(`✅ Sent to ${recipient.email} (Account: ${account.email})`);
+
+          // 🔥 Throttle based on the calculated delay
+          await sleep(delayPerEmail);
 
         } catch (err) {
+          console.error(`❌ Failed to send to ${recipient.email}:`, err.message);
 
           // mark recipient failed
           await prisma.campaignRecipient.update({
@@ -311,7 +330,6 @@ export async function sendBulkCampaign(campaignId) {
 
           return; // stop sending safely
         }
-
       }
     }
   }
@@ -337,6 +355,10 @@ export async function sendBulkCampaign(campaignId) {
       ? distribute(pitchBodies, recipients.length)
       : null;
 
+    // 🔥 NEW: Track sending progress per account to handle limits
+    const accountSendCount = {};
+    const accountLastSendTime = {};
+
     for (let i = 0; i < recipients.length; i++) {
       const recipient = recipients[i];
       const rawSubject = subjectPlan[i];
@@ -351,36 +373,57 @@ export async function sendBulkCampaign(campaignId) {
         });
         if (!account) continue;
 
+        // 🔥 Get the limit for this account
+        const limit = getLimit(account.provider, account.id, customLimits);
+        const delayPerEmail = (60 * 60 * 1000) / limit; // 1 hour window
 
+        // 🔥 Check if we need to wait for the next hour window
+        if (!accountSendCount[accountId]) {
+          accountSendCount[accountId] = 0;
+          accountLastSendTime[accountId] = Date.now();
+        }
 
-          let smtpPassword = account.encryptedPass;
-
-          if (typeof smtpPassword === "string" && smtpPassword.includes(":")) {
-            smtpPassword = decrypt(smtpPassword);
+        // If we've hit the limit, check if an hour has passed
+        if (accountSendCount[accountId] >= limit) {
+          const timeSinceFirstSend = Date.now() - accountLastSendTime[accountId];
+          
+          if (timeSinceFirstSend < 60 * 60 * 1000) {
+            // Wait for the remainder of the hour
+            const waitTime = (60 * 60 * 1000) - timeSinceFirstSend;
+            console.log(`⏳ Account ${account.email} reached limit. Waiting ${Math.ceil(waitTime / 1000 / 60)} minutes...`);
+            await sleep(waitTime);
           }
+          
+          // Reset counter for new hour
+          accountSendCount[accountId] = 0;
+          accountLastSendTime[accountId] = Date.now();
+        }
 
-          const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
+        let smtpPassword = account.encryptedPass;
 
-          const transporter = nodemailer.createTransport({
-            host: account.smtpHost,
-            port: Number(account.smtpPort),
-            secure: Number(account.smtpPort) === 465,
+        if (typeof smtpPassword === "string" && smtpPassword.includes(":")) {
+          smtpPassword = decrypt(smtpPassword);
+        }
 
-            // 🔥 THIS FIXES REDIFF HELO ERROR
-            name: domain,  
+        const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
 
-            auth: {
-              user: account.smtpUser || account.email,
-              pass: smtpPassword,
-            },
-            requireTLS: Number(account.smtpPort) === 587,
-            tls: {
-              rejectUnauthorized: false,
-              minVersion: "TLSv1.2",
-            },
-          });
+        const transporter = nodemailer.createTransport({
+          host: account.smtpHost,
+          port: Number(account.smtpPort),
+          secure: Number(account.smtpPort) === 465,
 
+          name: domain,  
 
+          auth: {
+            user: account.smtpUser || account.email,
+            pass: smtpPassword,
+          },
+          requireTLS: Number(account.smtpPort) === 587,
+          tls: {
+            rejectUnauthorized: false,
+            minVersion: "TLSv1.2",
+          },
+        });
 
         const fromEmail = account.smtpUser || account.email;
         const signature = buildSignature(account);
@@ -409,13 +452,17 @@ export async function sendBulkCampaign(campaignId) {
           data: { status: "sent", sentAt: new Date(), accountId: account.id }
         });
 
+        // 🔥 Increment send count
+        accountSendCount[accountId]++;
+
+        console.log(`✅ Sent ${accountSendCount[accountId]}/${limit} to ${recipient.email} (Account: ${account.email})`);
+
         // throttle per account
-        const limit = getLimit(account.provider);
-        const delay = (2 * 60 * 60 * 1000) / limit; // 2 hours window
-        await sleep(delay);
+        await sleep(delayPerEmail);
 
 
       } catch (err) {
+        console.error(`❌ Failed to send to ${recipient.email}:`, err.message);
 
         await prisma.campaignRecipient.update({
           where: { id: recipient.id },
@@ -435,6 +482,14 @@ export async function sendBulkCampaign(campaignId) {
     }
   }
 
+  // 🔥 After sending all emails, update campaign status
+  await updateCampaignStatus(campaignId);
+
+  console.log(`✅ Campaign ${campaignId} completed all pending emails`);
+}
+
+// 🔥 Helper function to update campaign status based on recipients
+async function updateCampaignStatus(campaignId) {
   const stats = await prisma.campaignRecipient.groupBy({
     by: ["status"],
     where: { campaignId },
@@ -468,10 +523,5 @@ export async function sendBulkCampaign(campaignId) {
     data: { status: finalStatus },
   });
 
-  console.log(`Campaign ${campaignId} finished with status:`, finalStatus);
-
-
-  console.log("Campaign completed:", campaignId);
+  console.log(`Campaign ${campaignId} status updated to:`, finalStatus);
 }
-
-

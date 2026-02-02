@@ -58,6 +58,9 @@ const COLORS = [
   "#FF0000", "#FF9900", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#9900FF", "#FF00FF",
 ];
 
+// 🔥 NEW: Email limit options per hour
+const LIMIT_OPTIONS = [20, 30, 40, 50, 70, 80, 100, 150];
+
 export default function CreateCampaign() {
   const [accounts, setAccounts] = useState([]);
   const [recipientMode, setRecipientMode] = useState("manual");
@@ -75,6 +78,7 @@ export default function CreateCampaign() {
   const [showFromDropdown, setShowFromDropdown] = useState(false);
   const [showPitchDropdown, setShowPitchDropdown] = useState(false);
   const [lockedAccounts, setLockedAccounts] = useState([]);
+  const [customLimits, setCustomLimits] = useState({}); // 🔥 NEW: Store custom limits per account
 
   const [campaignType, setCampaignType] = useState("immediate");
   const [subject, setSubject] = useState("");
@@ -288,14 +292,11 @@ const sizeMap = {
         return setErrorMsg("Please select schedule date and time");
       }
 
-      const capacity = getCapacity();
-
-      if (parsedEmails.length > capacity) {
-        return setErrorMsg(
-          `Selected accounts allow ${capacity} emails safely. You added ${parsedEmails.length}. Please remove some emails or add more From accounts.`
-        );
-      }
-
+      // 🔥 REMOVED: Capacity check - now sends continuously
+      // const capacity = getCapacity();
+      // if (parsedEmails.length > capacity) {
+      //   return setErrorMsg(...);
+      // }
 
       setSending(true);
 
@@ -315,6 +316,7 @@ const sizeMap = {
           pitchIds: selectedPitchIds,
           sendType: campaignType,
           scheduledAt: campaignType === "scheduled" ? `${scheduleDate}T${scheduleTime}` : null,
+          customLimits: customLimits // 🔥 NEW: Pass custom limits to backend
         }),
       });
 
@@ -334,7 +336,7 @@ const sizeMap = {
         }
       }
 
-      alert(campaignType === "immediate" ? "Campaign sent successfully!" : "Campaign scheduled successfully!");
+      alert(campaignType === "immediate" ? "Campaign sent successfully! It will continue sending automatically." : "Campaign scheduled successfully!");
 
       setSubject("");
       setManualEmails("");
@@ -342,6 +344,7 @@ const sizeMap = {
       setSelectedFroms([]);
       setSelectedPitchIds([]);
       setCampaignName("");
+      setCustomLimits({});
       if (editorRef.current) editorRef.current.innerHTML = "";
 
     } catch (err) {
@@ -396,6 +399,7 @@ const sizeMap = {
       console.error(err);
     }
   };
+
 const LIMITS = {
   gmail: 50,
   gsuite: 80,
@@ -404,15 +408,27 @@ const LIMITS = {
   custom: 60
 };
 
+// 🔥 UPDATED: Get default limit for an account
+const getDefaultLimit = (provider) => {
+  const key = (provider || "custom").toLowerCase();
+  return LIMITS[key] || LIMITS.custom;
+};
+
+// 🔥 NEW: Get actual limit (custom or default) for an account
+const getActualLimit = (accountId) => {
+  if (customLimits[accountId]) {
+    return customLimits[accountId];
+  }
+  const acc = accounts.find(a => a.id === accountId);
+  if (!acc) return 60;
+  return getDefaultLimit(acc.provider);
+};
+
 const getCapacity = () => {
   let total = 0;
 
   selectedFroms.forEach(id => {
-    const acc = accounts.find(a => a.id === id);
-    if (!acc) return;
-
-    const key = (acc.provider || "custom").toLowerCase();
-    total += LIMITS[key] || LIMITS.custom;
+    total += getActualLimit(id);
   });
 
   return total;
@@ -438,7 +454,7 @@ const lockedAccountsCount = lockedAccountsList.length;
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Create Campaign</h1>
-          <p className="text-sm text-gray-500 mt-1">Send immediate or scheduled email campaigns</p>
+          <p className="text-sm text-gray-500 mt-1">Send immediate or scheduled email campaigns (continuous sending)</p>
         </div>
       </div>
 
@@ -488,7 +504,7 @@ const lockedAccountsCount = lockedAccountsList.length;
                     setNameError("");
                   }
                 }}
-                placeholder="My January Outreach Campaign"
+                placeholder="Association Name Outreach"
                 className="w-full border rounded-lg p-3"
               />
               {nameError && <p className="text-xs text-red-600 mt-1">{nameError}</p>}
@@ -526,13 +542,13 @@ const lockedAccountsCount = lockedAccountsList.length;
               </button>
 
              {showFromDropdown && (
-                <div className="absolute z-50 mt-2 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                <div className="absolute z-50 mt-2 w-full bg-white border rounded-lg shadow-lg max-h-96 overflow-y-auto">
 
                   {/* AVAILABLE ACCOUNTS */}
                   {availableAccounts.length > 0 && (
                     <>
                       <div className="px-3 py-2 text-xs font-semibold text-gray-500 bg-gray-50 border-b">
-                        Available Accounts
+                        Available Accounts (Set Email Limit per Hour)
                       </div>
 
                       {availableAccounts.map(acc => (
@@ -559,6 +575,29 @@ const lockedAccountsCount = lockedAccountsList.length;
                             </div>
                             <div className="text-xs text-gray-500">{acc.email}</div>
                             <div className="text-xs text-gray-400">Provider: {acc.provider}</div>
+                            
+                            {/* 🔥 NEW: Per-domain limit dropdown */}
+                            <div className="mt-2 flex items-center gap-2">
+                              <label className="text-xs text-gray-600">Limit per hour:</label>
+                              <select
+                                value={customLimits[acc.id] || getDefaultLimit(acc.provider)}
+                                onChange={(e) => {
+                                  const newLimit = Number(e.target.value);
+                                  setCustomLimits(prev => ({
+                                    ...prev,
+                                    [acc.id]: newLimit
+                                  }));
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs border rounded px-2 py-1 bg-white"
+                              >
+                                {LIMIT_OPTIONS.map(limit => (
+                                  <option key={limit} value={limit}>
+                                    {limit} emails/hr
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                           </div>
 
                           <CheckCircle2 size={18} className="text-green-500 mt-1" />
@@ -608,7 +647,7 @@ const lockedAccountsCount = lockedAccountsList.length;
 
 
               <p className="text-xs text-gray-500 mt-2">
-                Selected: {selectedFroms.length} account(s)
+                Selected: {selectedFroms.length} account(s) • Total capacity: {getCapacity()} emails/hour
               </p>
             </div>
 
@@ -709,118 +748,88 @@ const lockedAccountsCount = lockedAccountsList.length;
                     className="w-full px-4 py-2.5 border rounded-lg"
                   />
                 </div>
-                {campaignType === "scheduled" && (
-                  <p className="text-xs text-gray-500 mt-1">
-                    ℹ️ Same email account cannot have two campaigns scheduled at the same time.
-                  </p>
-                )}
-
               </div>
             )}
           </div>
 
-          {/* Rich Text Editor */}
+          {/* Email Editor */}
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            {/* Toolbar */}
-            <div className="bg-gray-50 border-b border-gray-200 p-2 flex flex-wrap gap-1 items-center">
-              <select
-                value={currentFont}
-                onChange={(e) => applyFontFamily(e.target.value)}
-                className="px-2 py-1 text-xs border rounded bg-white"
-              >
-                {FONT_FAMILIES.map((font) => (
-                  <option key={font.value} value={font.value}>{font.label}</option>
+            <h3 className="text-sm font-semibold text-gray-700 p-4 border-b bg-gray-50">
+              Email Body
+            </h3>
+
+            {/* Formatting Toolbar */}
+            <div className="flex flex-wrap items-center gap-1 p-3 border-b bg-gray-50">
+              {/* Font Family */}
+              <select value={currentFont} onChange={(e) => applyFontFamily(e.target.value)} className="text-sm border rounded px-2 py-1 bg-white">
+                {FONT_FAMILIES.map(f => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
                 ))}
               </select>
 
-              <select
-            
-                value={currentSize}
-                onChange={(e) => applyFontSize(e.target.value)}
-                className="px-2 py-1 text-xs border rounded bg-white h-8"
-              >
-                {FONT_SIZES.map((size) => (
-                  <option key={size.value} value={size.value}>{size.label}</option>
+              {/* Font Size */}
+              <select value={currentSize} onChange={(e) => applyFontSize(e.target.value)} className="text-sm border rounded px-2 py-1 bg-white w-16">
+                {FONT_SIZES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              <ToolbarButton icon={<Bold size={14} />} onClick={() => formatText("bold")} title="Bold" />
-              <ToolbarButton icon={<Italic size={14} />} onClick={() => formatText("italic")} title="Italic" />
-              <ToolbarButton icon={<Underline size={14} />} onClick={() => formatText("underline")} title="Underline" />
-              <ToolbarButton icon={<Strikethrough size={14} />} onClick={() => formatText("strikeThrough")} title="Strikethrough" />
+              <ToolbarButton icon={<Bold size={16} />} onClick={() => formatText("bold")} title="Bold" />
+              <ToolbarButton icon={<Italic size={16} />} onClick={() => formatText("italic")} title="Italic" />
+              <ToolbarButton icon={<Underline size={16} />} onClick={() => formatText("underline")} title="Underline" />
+              <ToolbarButton icon={<Strikethrough size={16} />} onClick={() => formatText("strikeThrough")} title="Strikethrough" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 mx-1" />
 
+              {/* Text Color */}
               <div className="relative">
-                <button
-                  onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="relative p-2 hover:bg-gray-200 rounded"
-                  title="Text Color"
-                >
-                  <Type className="w-4 h-4" />
-                  <div
-                    className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-4 h-1 rounded"
-                    style={{ backgroundColor: currentColor }}
-                  ></div>
+                <button onClick={() => setShowColorPicker(!showColorPicker)} className="p-2 hover:bg-gray-200 rounded transition" title="Text Color">
+                  <div className="w-4 h-4 rounded" style={{ backgroundColor: currentColor, border: "1px solid #ccc" }} />
                 </button>
 
                 {showColorPicker && (
-                  <div className="absolute top-full left-0 mt-2 bg-white border rounded-lg shadow-xl p-3 z-50">
-                    <div className="mb-2 text-xs font-semibold">Text Color</div>
-                    <div className="grid grid-cols-6 gap-1">
-                      {COLORS.map((color) => (
-                        <button
-                          key={color}
-                          onClick={() => applyColor(color)}
-                          className="w-6 h-6 rounded border-2 hover:scale-110 transition"
-                          style={{
-                            backgroundColor: color,
-                            borderColor: color === currentColor ? "#3B82F6" : "#E5E7EB",
-                          }}
-                        />
+                  <div className="absolute z-10 mt-1 p-2 bg-white border rounded shadow-lg">
+                    <div className="grid grid-cols-7 gap-1">
+                      {COLORS.map(color => (
+                        <button key={color} onClick={() => applyColor(color)} className="w-6 h-6 rounded border hover:scale-110 transition" style={{ backgroundColor: color }} />
                       ))}
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              <ToolbarButton icon={<AlignLeft size={14} />} onClick={() => formatText("justifyLeft")} title="Align Left" />
-              <ToolbarButton icon={<AlignCenter size={14} />} onClick={() => formatText("justifyCenter")} title="Center" />
-              <ToolbarButton icon={<AlignRight size={14} />} onClick={() => formatText("justifyRight")} title="Align Right" />
-              <ToolbarButton icon={<AlignJustify size={14} />} onClick={() => formatText("justifyFull")} title="Justify" />
+              <ToolbarButton icon={<AlignLeft size={16} />} onClick={() => formatText("justifyLeft")} title="Align Left" />
+              <ToolbarButton icon={<AlignCenter size={16} />} onClick={() => formatText("justifyCenter")} title="Align Center" />
+              <ToolbarButton icon={<AlignRight size={16} />} onClick={() => formatText("justifyRight")} title="Align Right" />
+              <ToolbarButton icon={<AlignJustify size={16} />} onClick={() => formatText("justifyFull")} title="Justify" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              <ToolbarButton icon={<List size={14} />} onClick={() => formatText("insertUnorderedList")} title="Bullet List" />
-              <ToolbarButton icon={<ListOrdered size={14} />} onClick={() => formatText("insertOrderedList")} title="Numbered List" />
+              <ToolbarButton icon={<List size={16} />} onClick={() => formatText("insertUnorderedList")} title="Bullet List" />
+              <ToolbarButton icon={<ListOrdered size={16} />} onClick={() => formatText("insertOrderedList")} title="Numbered List" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1"></div>
+              <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              <ToolbarButton icon={<Link size={14} />} onClick={insertLink} title="Insert Link" />
-              <ToolbarButton icon={<Minus size={14} />} onClick={() => formatText("insertHorizontalRule")} title="Horizontal Line" />
+              <ToolbarButton icon={<Link size={16} />} onClick={insertLink} title="Insert Link" />
             </div>
 
-            {/* Editor */}
-           <div
-            ref={editorRef}
-            contentEditable
-            className="min-h-[250px] max-h-[500px] overflow-y-auto p-4 outline-none"
-            style={{
-              fontFamily: currentFont,
-              fontSize: currentSize,
-              lineHeight: "1.6",
-            }}
-
+            {/* Editor Area */}
+            <div
+              ref={editorRef}
+              contentEditable
+              className="min-h-[300px] max-h-[500px] overflow-y-auto p-4 outline-none text-gray-900"
+              style={{ fontFamily: currentFont, fontSize: currentSize }}
               suppressContentEditableWarning
             />
 
             {/* Attachments */}
             {attachments.length > 0 && (
-              <div className="border-t border-gray-200 p-3">
+              <div className="border-t p-3 bg-gray-50">
+                <p className="text-xs text-gray-600 mb-2">Attachments:</p>
                 <div className="flex flex-wrap gap-2">
                   {attachments.map((file, index) => (
                     <div
@@ -983,38 +992,13 @@ const lockedAccountsCount = lockedAccountsList.length;
                 </span>
               </p>
 
-              {selectedFroms.length > 0 && (() => {
-                const capacity = getCapacity();
-
-                if (parsedEmails.length > capacity) {
-                  return (
-                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 p-2 rounded">
-                      ⚠ You selected {selectedFroms.length} account(s) which allow only{" "}
-                      <b>{capacity}</b> emails safely.  
-                      You entered <b>{parsedEmails.length}</b>.  
-                      <br />
-                      ➜ Please remove {parsedEmails.length - capacity} emails  
-                      or add more From Email Accounts.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="text-xs text-green-600 bg-green-50 border border-green-200 p-2 rounded">
-                    ✅ Within safe limit ({parsedEmails.length}/{capacity})
-                  </div>
-                );
-              })()}
-
-              {/*  " Ashok this if not count with aother domins give this top"
-              const normalize = (p) => {
-                const v = (p || "").toLowerCase();
-                if (v.includes("gmail")) return "gmail";
-                if (v.includes("gsuite") || v.includes("workspace")) return "gsuite";
-                if (v.includes("rediff")) return "rediff";
-                if (v.includes("ses") || v.includes("amazon")) return "amazon";
-                return "custom";
-              }; */}
+              {selectedFroms.length > 0 && (
+                <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 p-2 rounded">
+                  ✅ Continuous sending enabled<br/>
+                  📊 Capacity: {getCapacity()} emails/hour<br/>
+                  ⏱️ Est. time: {Math.ceil(parsedEmails.length / getCapacity())} hour(s)
+                </div>
+              )}
 
             </div>
 

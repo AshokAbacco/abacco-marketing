@@ -258,33 +258,68 @@ model Campaign {
   bodyHtml         String
   originalBodyHtml String?
 
-  status   String @default("draft") // draft | sending | completed | scheduled
-  sendType String // immediate | scheduled
+  // 🔹 STATUS & TYPE
+  status String @default("draft")
+  // draft | sending | completed | scheduled | paused
 
-  scheduledAt      DateTime?
-  createdAt        DateTime  @default(now())
+  sendType String
+  // immediate | scheduled
+
+  scheduledAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  // 🔹 Self-relation (parent → child campaigns)
   parentCampaignId Int?
+  parentCampaign   Campaign?  @relation("CampaignHierarchy", fields: [parentCampaignId], references: [id])
+  childCampaigns   Campaign[] @relation("CampaignHierarchy")
 
+  // 🔹 Batch sending fields
+  totalRecipients Int       @default(0)
+  sentCount       Int       @default(0)
+  batchSize       Int? // 50 / 80 / 100
+  batchDelayMins  Int? // 120 mins (2 hr)
+  nextRunAt       DateTime?
+  lastSentAt      DateTime?
+  customLimits    String?
+
+  // 🔹 Relation
   recipients CampaignRecipient[]
 
   @@unique([name, userId])
 }
 
 model CampaignRecipient {
-  id         Int     @id @default(autoincrement())
-  campaignId Int
-  email      String
-  status     String  @default("pending") // pending | sent | failed
-  error      String?
+  id Int @id @default(autoincrement())
 
+  campaignId Int
+
+  // 🔹 Recipient info
+  email String
+
+  // 🔹 Sending status
+  status String @default("pending")
+  // pending | sending | sent | failed
+
+  error String?
+
+  // 🔹 Send metadata
   sentAt        DateTime?
   accountId     Int?
   sentSubject   String?
   sentBodyHtml  String?
   sentFromEmail String?
-  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
+  // 🔹 Retry & batch support
+  retryCount  Int       @default(0)
+  lastTriedAt DateTime?
+
+  // 🔹 Relation (FIXED — ONE LINE)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  // 🔹 Indexes (VERY IMPORTANT for performance)
+  @@index([campaignId])
   @@index([campaignId, status])
+  @@index([status, sentAt])
 }
 
 model PitchTemplate {
