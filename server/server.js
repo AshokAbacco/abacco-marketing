@@ -29,7 +29,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "https://abaccomarketing.onrender.com"
+      "https://abacco-marketing.onrender.com"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     credentials: true,
@@ -71,7 +71,12 @@ app.get("/", (req, res) => {
 // --------------------
 // Start server
 // --------------------
-const PORT = 5000;
+// const PORT = 5000;
+// app.listen(PORT, () => {
+//   console.log(`✅ Server running on http://localhost:${PORT}`);
+// });
+
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
