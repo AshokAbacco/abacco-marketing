@@ -1,3 +1,4 @@
+// server/src/utils/campaignScheduler.js
 import cron from "node-cron";
 import prisma from "../prisma.js";
 import { sendBulkCampaign } from "../services/campaignMailer.service.js";
@@ -18,16 +19,33 @@ export function startCampaignScheduler() {
       });
 
       for (const campaign of dueCampaigns) {
-        console.log("📤 Sending scheduled campaign:", campaign.id);
+        console.log("📤 Sending campaign:", campaign.id);
 
-        // Mark as sending (prevents double send)
+        // Lock campaign (prevents duplicate execution)
         await prisma.campaign.update({
           where: { id: campaign.id },
           data: { status: "sending" },
         });
 
-        // Send emails
-        await sendBulkCampaign(campaign.id);
+        try {
+          // Send emails
+          await sendBulkCampaign(campaign.id);
+
+          // Mark completed
+          await prisma.campaign.update({
+            where: { id: campaign.id },
+            data: { status: "completed" },
+          });
+
+          console.log("✅ Campaign completed:", campaign.id);
+        } catch (sendErr) {
+          console.error("❌ Campaign failed:", campaign.id, sendErr);
+
+          await prisma.campaign.update({
+            where: { id: campaign.id },
+            data: { status: "failed" },
+          });
+        }
       }
     } catch (err) {
       console.error("❌ Campaign scheduler error:", err);

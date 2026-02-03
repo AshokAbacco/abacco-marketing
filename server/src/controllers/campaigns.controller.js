@@ -194,29 +194,35 @@ export const createCampaign = async (req, res) => {
     const fromIds = fromAccountIds.map(Number);
 
     const campaign = await prisma.campaign.create({
-      data: {
-        userId: req.user.id,
-        name: finalName,
-        bodyHtml,
-        sendType,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-        status: sendType === "scheduled" ? "scheduled" : "draft",
+        data: {
+          userId: req.user.id,
+          name: finalName,
+          bodyHtml,
+          sendType,
 
-        subject: JSON.stringify(subjects),
-        fromAccountIds: JSON.stringify(fromAccountIds),
-        pitchIds: JSON.stringify(pitchIds || []),
-        
-        customLimits: customLimits ? JSON.stringify(customLimits) : null,
+          // 🔥 FIXED LINE
+          scheduledAt:
+            sendType === "immediate"
+              ? new Date()
+              : new Date(scheduledAt),
 
-        recipients: {
-          create: recipients.map((email, i) => ({
-            email,
-            status: "pending",
-            accountId: fromIds[i % fromIds.length],
-          })),
+          status: "scheduled",
+
+          subject: JSON.stringify(subjects),
+          fromAccountIds: JSON.stringify(fromAccountIds),
+          pitchIds: JSON.stringify(pitchIds || []),
+          customLimits: customLimits ? JSON.stringify(customLimits) : null,
+
+          recipients: {
+            create: recipients.map((email, i) => ({
+              email,
+              status: "pending",
+              accountId: fromIds[i % fromIds.length],
+            })),
+          },
         },
-      },
     });
+
 
     // 🔥 INVALIDATE CACHE after creating campaign
     invalidateDashboardCache(req.user.id);
