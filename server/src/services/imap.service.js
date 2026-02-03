@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import pLimit from "p-limit";
 import fs from "fs";
 import path from "path";
-import { uploadToR2WithHash, generateHash } from "./r2.js";
+// import { uploadToR2WithHash, generateHash } from "./r2.js";
 import { decrypt } from "../utils/crypto.js";
 
 dotenv.config();
@@ -95,32 +95,34 @@ async function saveEmailToDB(prisma, account, parsed, msg, direction, folder) {
 const ccEmail = parsed.cc?.value?.map(v => v.address).join(", ") || "";
 
 let htmlBody = parsed.html || parsed.text || "";
-const cidMap = {};
-let attachmentsMeta = [];
+const attachmentsMeta = [];
 
-if (parsed.attachments?.length) {
-  for (const att of parsed.attachments) {
-    try {
-      const hash = generateHash(att.content);
-      const key = `${hash}-${accountId}-${Date.now()}`;
-      const url = await uploadToR2WithHash(att.content, att.contentType, key);
+// const cidMap = {};
+// let attachmentsMeta = [];
 
-      if (att.cid) {
-        cidMap[`cid:${att.cid}`] = url;
-      }
+// if (parsed.attachments?.length) {
+//   for (const att of parsed.attachments) {
+//     try {
+//       const hash = generateHash(att.content);
+//       const key = `${hash}-${accountId}-${Date.now()}`;
+//       const url = await uploadToR2WithHash(att.content, att.contentType, key);
 
-      attachmentsMeta.push({
-        filename: att.filename,
-        mimeType: att.contentType,
-        size: att.content.length,
-        storageUrl: url,
-        hash,
-      });
-    } catch (e) {
-      logError(account.email, `Attachment failed: ${e.message}`);
-    }
-  }
-}
+//       if (att.cid) {
+//         cidMap[`cid:${att.cid}`] = url;
+//       }
+
+//       attachmentsMeta.push({
+//         filename: att.filename,
+//         mimeType: att.contentType,
+//         size: att.content.length,
+//         storageUrl: url,
+//         hash,
+//       });
+//     } catch (e) {
+//       logError(account.email, `Attachment failed: ${e.message}`);
+//     }
+//   }
+// }
 
 for (const cid in cidMap) {
   htmlBody = htmlBody.replaceAll(cid, cidMap[cid]);
@@ -157,9 +159,6 @@ await prisma.emailMessage.create({
     direction,
     folder,
     sentAt: parsed.date || new Date(),
-    attachments: attachmentsMeta.length
-      ? { create: attachmentsMeta }
-      : undefined,
   },
 });
 
