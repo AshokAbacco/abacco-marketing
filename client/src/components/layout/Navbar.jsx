@@ -11,11 +11,13 @@ import {
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "../../context/ThemeContext";
+import { useNavigate } from "react-router-dom";
 
 export default function Navbar({ setSidebarOpen }) {
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef(null);
   const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -27,6 +29,18 @@ export default function Navbar({ setSidebarOpen }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const handleSignOut = () => {
+    const confirmLogout = window.confirm("Are you sure you want to sign out?");
+
+    if (!confirmLogout) return;
+
+    // 🔴 Clear auth data
+    localStorage.clear();
+    sessionStorage.clear();
+
+    // 🔁 Redirect to home
+    navigate("/", { replace: true });
+  };
   return (
     <header className="fixed top-16 md:top-0 left-16 md:left-16 group-hover:left-72 right-0 h-16 
       z-40 backdrop-blur-md bg-white/95 dark:bg-slate-900/95 
@@ -139,7 +153,7 @@ export default function Navbar({ setSidebarOpen }) {
 
                 <div className="my-2 border-t border-emerald-100 dark:border-emerald-900/50" />
 
-                <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 text-sm font-medium text-red-600 dark:text-red-400 transition-all duration-200 group">
+                <button onClick={handleSignOut} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 text-sm font-medium text-red-600 dark:text-red-400 transition-all duration-200 group">
                   <div className="p-1.5 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 group-hover:bg-red-200 dark:group-hover:bg-red-900/50 transition-colors">
                     <LogOut size={16} />
                   </div>

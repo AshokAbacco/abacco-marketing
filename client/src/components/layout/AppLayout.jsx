@@ -7,7 +7,7 @@ export default function AppLayout({ children }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="min-h-screen flex bg-slate-100 dark:bg-slate-950">
+    <div className="min-h-screen flex bg-green-50 dark:bg-slate-950">
 
       {/* Overlay for mobile */}
       {sidebarOpen && (

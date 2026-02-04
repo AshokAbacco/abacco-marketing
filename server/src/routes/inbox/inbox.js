@@ -76,7 +76,11 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
       // 🔄 background sync (NON-BLOCKING)
       // 🔄 background sync (NON-BLOCKING)
       runSyncForAccount(prisma, account.email)
-        .catch(err => console.error("Background sync error:", err));
+      .then(() => {
+        cache.del(cacheKey); // ✅ clear cache after new emails
+      })
+      .catch(err => console.error(err));
+
 
 
       return res.json({ success: true, data: cached });

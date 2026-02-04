@@ -1,39 +1,38 @@
 import React, { useEffect, useState } from "react";
-import { Send, Plus, Trash2, Eye } from "lucide-react";
+import { Send, Plus, Trash2, Eye, Mail, Users, Target, Zap, CheckCircle2, Calendar, Sparkles } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 // ------------------------------
-// Local lightweight UI components
-// (no shadcn / @ alias needed)
+// Enhanced UI components with green theme
 // ------------------------------
 const Card = ({ children, className = "" }) => (
-  <div className={`bg-white border border-gray-200 rounded-2xl shadow-sm ${className}`}>{children}</div>
+  <div className={`bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl shadow-lg ${className}`}>{children}</div>
 );
 
 const CardHeader = ({ children }) => (
-  <div className="px-5 py-4 border-b border-gray-100">{children}</div>
+  <div className="px-6 py-5 border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-teal-50">{children}</div>
 );
 
 const CardTitle = ({ children, className = "" }) => (
-  <h2 className={`text-lg font-semibold text-gray-900 ${className}`}>{children}</h2>
+  <h2 className={`text-xl font-bold text-emerald-600 ${className}`}>{children}</h2>
 );
 
 const CardContent = ({ children, className = "" }) => (
-  <div className={`p-5 ${className}`}>{children}</div>
+  <div className={`p-6 ${className}`}>{children}</div>
 );
 
 const Button = ({ children, className = "", variant = "default", size = "md", ...props }) => {
-  const base = "inline-flex items-center justify-center gap-1.5 font-medium rounded-xl transition focus:outline-none";
+  const base = "inline-flex items-center justify-center gap-2 font-bold rounded-xl transition-all focus:outline-none transform hover:scale-105";
   const variants = {
-    default: "bg-black text-white hover:bg-gray-800",
-    outline: "border border-gray-300 text-gray-700 hover:bg-gray-50",
-    ghost: "text-gray-600 hover:bg-gray-100",
+    default: "bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:shadow-lg shadow-emerald-500/30",
+    outline: "border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300",
+    ghost: "text-emerald-600 hover:bg-emerald-50",
   };
   const sizes = {
-    sm: "px-3 py-1.5 text-xs",
-    md: "px-4 py-2 text-sm",
-    icon: "p-2",
+    sm: "px-4 py-2 text-xs",
+    md: "px-6 py-3 text-sm",
+    icon: "p-3",
   };
 
   return (
@@ -194,8 +193,26 @@ const handleSelectCampaign = (id) => {
 };
 
 const createFollowUp = async () => {
-  if (!loadedCampaign) {
-    setModal({ open: true, type: "error", message: "Please select a campaign first." });
+  // 🔴 STRICT VALIDATION: Campaign + Pitch BOTH REQUIRED
+  if (!loadedCampaign || !selectedPitchId) {
+    setModal({
+      open: true,
+      type: "error",
+      message: "Please select Campaign and Pitch to send follow-up.",
+    });
+    return;
+  }
+
+  // Also ensure body is not empty (extra safety)
+  const hasBody =
+    followUpBody && followUpBody.replace(/<[^>]*>/g, "").trim() !== "";
+
+  if (!hasBody) {
+    setModal({
+      open: true,
+      type: "error",
+      message: "Follow-up email body cannot be empty.",
+    });
     return;
   }
 
@@ -244,13 +261,12 @@ const createFollowUp = async () => {
       throw new Error(data.message || "Follow-up failed");
     }
 
-    // ✅ SUCCESS MODAL
+    // ✅ SUCCESS
     setModal({
       open: true,
       type: "success",
       message: "Follow-up campaign started successfully. Emails are now sending.",
     });
-
   } catch (err) {
     setModal({
       open: true,
@@ -261,6 +277,8 @@ const createFollowUp = async () => {
     setSendingFollowup(false);
   }
 };
+
+
 
   const froms = getFromEmails();
 // Save email body
@@ -313,19 +331,33 @@ useEffect(() => {
 }, []);
 
   return (
-    <div className="grid grid-cols-12 gap-6 p-6 bg-white">
+    <div className="grid grid-cols-12 gap-6 p-6 bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 min-h-screen relative overflow-hidden">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 left-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s'}}></div>
+        <div className="absolute bottom-20 right-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '8s', animationDelay: '2s'}}></div>
+      </div>
+
       {/* Left */}
-      <div className="col-span-8 space-y-6">
+      <div className="col-span-8 space-y-6 relative z-10">
         <Card>
           <CardHeader>
-            <CardTitle>Follow-up Campaign</CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl">
+                <Sparkles className="text-emerald-600" size={24} />
+              </div>
+              <CardTitle>Follow-up Campaign</CardTitle>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             {/* Campaign selector */}
             <div>
-              <label className="text-sm font-medium">Select Campaign</label>
+              <label className="text-sm font-bold text-emerald-800 uppercase tracking-wide flex items-center gap-2 mb-3">
+                <Target size={16} />
+                Select Campaign
+              </label>
               <select
-                className="w-full mt-2 border rounded-xl px-3 py-2"
+                className="w-full border-2 border-emerald-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium hover:border-emerald-300 transition-colors bg-white"
                 value={selectedCampaignId}
                 onChange={(e) => handleSelectCampaign(e.target.value)}
               >
@@ -340,41 +372,65 @@ useEffect(() => {
 
             {/* Email header preview */}
             {loadedCampaign && (
-              <div className="bg-gray-50 border rounded-xl p-4 text-xs space-y-1">
+              <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-xl p-5 text-sm space-y-3">
                 
                 {/* From */}
-                <div><b>From:</b> {getFromEmails()[0] || "—"}</div>
-                <p className="text-xs text-gray-400">
-                  Rotates between {getFromEmails().length} accounts
-                </p>
+                <div className="flex items-start gap-2">
+                  <Mail size={16} className="text-emerald-600 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-bold text-emerald-900">From:</span> 
+                    <span className="ml-2 text-slate-700">{getFromEmails()[0] || "—"}</span>
+                    <p className="text-xs text-emerald-600 font-semibold mt-1">
+                      Rotates between {getFromEmails().length} accounts
+                    </p>
+                  </div>
+                </div>
 
                 {/* Sent */}
-                <div><b>Sent:</b> {new Date(loadedCampaign.createdAt).toLocaleString()}</div>
+                <div className="flex items-start gap-2">
+                  <Calendar size={16} className="text-emerald-600 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-emerald-900">Sent:</span> 
+                    <span className="ml-2 text-slate-700">{new Date(loadedCampaign.createdAt).toLocaleString()}</span>
+                  </div>
+                </div>
 
                 {/* To */}
-                <div><b>To:</b> {loadedCampaign.recipients?.[0]?.email || "—"}</div>
-                <p className="text-xs text-gray-400">
-                  Will send to total {loadedCampaign.recipients?.length || 0} recipients (distributed automatically)
-                </p>
+                <div className="flex items-start gap-2">
+                  <Users size={16} className="text-emerald-600 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-bold text-emerald-900">To:</span> 
+                    <span className="ml-2 text-slate-700">{loadedCampaign.recipients?.[0]?.email || "—"}</span>
+                    <p className="text-xs text-emerald-600 font-semibold mt-1">
+                      Will send to total {loadedCampaign.recipients?.length || 0} recipients (distributed automatically)
+                    </p>
+                  </div>
+                </div>
 
                 {/* Subject */}
-                <div><b>Subject:</b> {subjects[0]}</div>
-                <p className="text-xs text-gray-400">
-                  Rotates between {subjects.length} subject lines
-                </p>
+                <div className="flex items-start gap-2">
+                  <Mail size={16} className="text-emerald-600 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-bold text-emerald-900">Subject:</span> 
+                    <span className="ml-2 text-slate-700">{subjects[0]}</span>
+                    <p className="text-xs text-emerald-600 font-semibold mt-1">
+                      Rotates between {subjects.length} subject lines
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 
 
             {/* Subjects */}
               {/* Subjects (Read-only from original campaign) */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold">Subject Lines (from original campaign)</h3>
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-emerald-800 uppercase tracking-wide">Subject Lines (from original campaign)</h3>
 
               {subjects.map((sub, i) => (
                 <div
                   key={i}
-                  className="border rounded-xl px-3 py-2 text-sm bg-gray-50 text-gray-700"
+                  className="border-2 border-emerald-200 rounded-xl px-4 py-3 text-sm bg-white text-slate-800 font-medium hover:border-emerald-300 transition-colors"
                 >
                   {sub}
                 </div>
@@ -384,9 +440,9 @@ useEffect(() => {
 
             {/* Pitch selector */}
             <div>
-              <label className="text-sm font-medium">Select Pitch</label>
+              <label className="text-sm font-bold text-emerald-800 uppercase tracking-wide mb-3 block">Select Pitch</label>
               <select
-                className="w-full mt-2 border rounded-xl px-3 py-2"
+                className="w-full border-2 border-emerald-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium hover:border-emerald-300 transition-colors bg-white"
                 value={selectedPitchId}
                 onChange={(e) => {
                   const id = e.target.value;
@@ -411,10 +467,10 @@ useEffect(() => {
 
             {/* Body */}
             <div>
-              <label className="text-sm font-medium">Email Body</label>
+              <label className="text-sm font-bold text-emerald-800 uppercase tracking-wide mb-3 block">Email Body</label>
 
               <div
-                className="w-full mt-2 border rounded-xl px-4 py-3 text-sm min-h-[200px] bg-white"
+                className="w-full border-2 border-emerald-200 rounded-xl px-5 py-4 text-sm min-h-[200px] bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 hover:border-emerald-300 transition-colors"
                 contentEditable
                 suppressContentEditableWarning
                 onInput={(e) => setFollowUpBody(e.currentTarget.innerHTML)}
@@ -425,21 +481,24 @@ useEffect(() => {
 
 
             {/* Actions */}
-            <div className="flex justify-end gap-3">
+            <div className="flex justify-end gap-3 pt-4">
               <Button variant="outline" onClick={() => setPreview(!preview)}>
-                <Eye className="w-4 h-4 mr-1" /> Preview
+                <Eye className="w-5 h-5" /> Preview
               </Button>
-              <Button onClick={createFollowUp} disabled={sendingFollowup}>
+              <Button
+                onClick={createFollowUp}
+                 disabled={sendingFollowup || !loadedCampaign || !selectedPitchId}
+
+              >
                 {sendingFollowup ? (
-                  <>
-                    <span className="animate-pulse">Sending...</span>
-                  </>
+                  <span className="animate-pulse">Sending...</span>
                 ) : (
                   <>
-                    <Send className="w-4 h-4 mr-1" /> Create Follow-up
+                    <Zap className="w-5 h-5" /> Create Follow-up
                   </>
                 )}
               </Button>
+
 
 
             </div>
@@ -450,39 +509,44 @@ useEffect(() => {
         {preview && loadedCampaign && (
           <Card>
             <CardHeader>
-              <CardTitle>Email Preview</CardTitle>
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl">
+                  <Eye className="text-emerald-600" size={20} />
+                </div>
+                <CardTitle>Email Preview</CardTitle>
+              </div>
             </CardHeader>
 
             <CardContent className="space-y-6 text-base text-black">
 
               {/* 1. FOLLOW-UP (top) */}
-              <div className="border rounded-xl p-4 bg-white">
-                <div className="font-semibold text-gray-700 mb-2">Follow-up</div>
+              <div className="border-2 border-emerald-200 rounded-xl p-5 bg-white shadow-sm">
+                <div className="font-bold text-emerald-800 mb-3 uppercase tracking-wide text-sm">Follow-up</div>
                 <div dangerouslySetInnerHTML={{ __html: buildFollowupWithSignature() }} />
               </div>
 
               {/* 2. THREAD HEADER (like Gmail) */}
-              <div className="border-t pt-4 text-sm space-y-1 bg-white p-3 rounded-lg">
-                <div><b>From:</b> {froms[0] || "—"}</div>
-                <div className="text-xs text-gray-500">
+              <div className="border-t-2 border-emerald-200 pt-5 text-sm space-y-2 bg-gradient-to-br from-emerald-50 to-teal-50 p-5 rounded-xl border-2">
+                <div className="font-bold text-emerald-900">From: <span className="font-normal text-slate-700">{froms[0] || "—"}</span></div>
+                <div className="text-xs text-emerald-600 font-semibold">
                   Sending will rotate between:
-                  <ul className="list-disc ml-5">
+                  <ul className="list-disc ml-5 mt-1">
                     {froms.map(f => <li key={f}>{f}</li>)}
                   </ul>
                 </div>
-                <div><b>Sent:</b> {new Date(loadedCampaign.createdAt).toLocaleString()}</div>
-                <div><b>To:</b> {loadedCampaign.recipients?.[0]?.email || "—"}</div>
-                <div className="text-xs text-gray-500">
+                <div className="font-bold text-emerald-900">Sent: <span className="font-normal text-slate-700">{new Date(loadedCampaign.createdAt).toLocaleString()}</span></div>
+                <div className="font-bold text-emerald-900">To: <span className="font-normal text-slate-700">{loadedCampaign.recipients?.[0]?.email || "—"}</span></div>
+                <div className="text-xs text-emerald-600 font-semibold">
                   Will send to total {loadedCampaign.recipients?.length || 0} recipients (distributed automatically)
                 </div>
                  
-                <div><b>Subject:</b> {subjects[0]}</div>
+                <div className="font-bold text-emerald-900">Subject: <span className="font-normal text-slate-700">{subjects[0]}</span></div>
               </div>
 
 
               {/* 3. ORIGINAL CAMPAIGN (bottom) */}
-              <div className="border rounded-xl p-4 bg-white text-base text-black">
-                <div className="font-semibold mb-2">Previous message</div>
+              <div className="border-2 border-emerald-200 rounded-xl p-5 bg-white text-base text-black shadow-sm">
+                <div className="font-bold text-emerald-800 mb-3 uppercase tracking-wide text-sm">Previous message</div>
                 <div dangerouslySetInnerHTML={{ __html: originalBody }} />
               </div>
 
@@ -495,40 +559,54 @@ useEffect(() => {
       </div>
 
       {/* Right summary */}
-      <div className="col-span-4">
+      <div className="col-span-4 relative z-10">
         <Card className="sticky top-6">
           <CardHeader>
-            <CardTitle className="text-base">Summary</CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl">
+                <Target className="text-emerald-600" size={18} />
+              </div>
+              <CardTitle className="text-base">Summary</CardTitle>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-4 text-sm">
+          <CardContent className="space-y-5 text-sm">
             {/* Campaign Name */}
-            <div>
-              <p className="text-gray-500">Campaign</p>
-              <p className="font-medium">
+            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200">
+              <p className="text-xs text-emerald-700 font-bold uppercase tracking-wide mb-1.5">Campaign</p>
+              <p className="font-bold text-slate-900 text-base">
                 {loadedCampaign?.name || "Not selected"}
               </p>
             </div>
 
             {/* From Mail Accounts Count */}
-            <div>
-              <p className="text-gray-500">From Mail Accounts</p>
-              <p className="font-medium">
+            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200">
+              <p className="text-xs text-emerald-700 font-bold uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <Mail size={12} />
+                From Mail Accounts
+              </p>
+              <p className="font-black text-slate-900 text-2xl">
                 {getFromEmails().length}
               </p>
             </div>
 
             {/* Subjects Count */}
-            <div>
-              <p className="text-gray-500">Subjects</p>
-              <p className="font-medium">
+            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200">
+              <p className="text-xs text-emerald-700 font-bold uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <Target size={12} />
+                Subjects
+              </p>
+              <p className="font-black text-slate-900 text-2xl">
                 {subjects.length}
               </p>
             </div>
 
             {/* Recipients Count */}
-            <div>
-              <p className="text-gray-500">Recipients</p>
-              <p className="font-medium">
+            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200">
+              <p className="text-xs text-emerald-700 font-bold uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <Users size={12} />
+                Recipients
+              </p>
+              <p className="font-black text-slate-900 text-2xl">
                 {loadedCampaign?.recipients?.length || 0}
               </p>
             </div>
@@ -538,23 +616,34 @@ useEffect(() => {
       </div>
 
       {modal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-8 w-full max-w-md shadow-2xl space-y-5 border-2 border-emerald-200 transform scale-100 animate-in">
             
-            <h2 className={`text-lg font-bold ${
-              modal.type === "success" ? "text-green-600" : "text-red-600"
-            }`}>
-              {modal.type === "success" ? "Success" : "Error"}
-            </h2>
+            <div className="flex items-center gap-3">
+              {modal.type === "success" ? (
+                <div className="p-3 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl">
+                  <CheckCircle2 className="text-emerald-600" size={28} />
+                </div>
+              ) : (
+                <div className="p-3 bg-gradient-to-br from-red-100 to-orange-100 rounded-xl">
+                  <X className="text-red-600" size={28} />
+                </div>
+              )}
+              <h2 className={`text-xl font-black ${
+                modal.type === "success" ? "text-emerald-700" : "text-red-600"
+              }`}>
+                {modal.type === "success" ? "Success!" : "Error"}
+              </h2>
+            </div>
 
-            <p className="text-sm text-gray-700">
+            <p className="text-base text-slate-700 font-medium leading-relaxed">
               {modal.message}
             </p>
 
-            <div className="flex justify-end">
+            <div className="flex justify-end pt-2">
               <button
                 onClick={() => setModal({ open: false, type: "", message: "" })}
-                className="px-4 py-2 rounded-xl bg-black text-white text-sm"
+                className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-bold shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/50 transform hover:scale-105 transition-all"
               >
                 OK
               </button>

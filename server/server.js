@@ -12,6 +12,7 @@ import smtpMailerRoutes from "./src/routes/inbox/smtpMailerRoutes.js";
 import campaignsRoutes from "./src/routes/campaigns.routes.js";
 import pitchRoutes from "./src/routes/pitch.routes.js";
 import leadsRoutes from "./src/routes/leads.routes.js";
+import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -57,4 +58,5 @@ app.get("/api/health", (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ API server running on port ${PORT}`);
+  startCampaignScheduler(); // 🔥 Start scheduled campaigns on Render
 });

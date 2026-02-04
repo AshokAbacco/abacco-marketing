@@ -95,6 +95,7 @@ async function saveEmailToDB(prisma, account, parsed, msg, direction, folder) {
 const ccEmail = parsed.cc?.value?.map(v => v.address).join(", ") || "";
 
 let htmlBody = parsed.html || parsed.text || "";
+const cidMap = {};
 const attachmentsMeta = [];
 
 // const cidMap = {};

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ModernSidebar from "./components/LeftSidebar.jsx";
 import InboxHeader from "./components/Inboxheader.jsx";
 import ConversationList from "./components/EmailList.jsx";
@@ -23,12 +23,12 @@ export default function InboxMain() {
   const [selectedFolder, setSelectedFolder] = useState("inbox");
   const [selectedConversation, setSelectedConversation] = useState(null);
 
-  // 🔥 Initialize activeView from localStorage
+  // ✅ Initialize activeView from localStorage
   const [activeView, setActiveView] = useState(() => {
     return localStorage.getItem("activeView") || "inbox";
   });
 
-  // 🔥 CALCULATE DEFAULT DATE (3 MONTHS AGO)
+  // ✅ CALCULATE DEFAULT DATE (3 MONTHS AGO)
   const getDefaultDateFrom = () => {
     const d = new Date();
     d.setMonth(d.getMonth() - 3);
@@ -42,7 +42,7 @@ export default function InboxMain() {
     recipient: "",
     subject: "",
     tags: [],
-    dateFrom: getDefaultDateFrom(), // ✅ DEFAULT: 3 Months
+    dateFrom: getDefaultDateFrom(),
     dateTo: "",
     hasAttachment: false,
     isUnread: false,
@@ -61,25 +61,68 @@ export default function InboxMain() {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // ✅ NEW: Track last fetch time
+  const lastFetchTimeRef = useRef(Date.now());
+  const pollingIntervalRef = useRef(null);
+
   // Fetch accounts on mount
   useEffect(() => {
     fetchAccounts();
   }, []);
 
-    useEffect(() => {
-      if (!selectedAccount?.id) return;
+  // ✅ NEW: Aggressive auto-refresh every 15 seconds
+  useEffect(() => {
+    if (!selectedAccount?.id) return;
 
-      // 1️⃣ Fast load (cached data)
-      fetchConversations(selectedAccount.id, selectedFolder);
+    // Clear existing interval
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
 
-      // 2️⃣ Auto refresh after background IMAP sync
-      const timer = setTimeout(() => {
-        fetchConversations(selectedAccount.id, selectedFolder);
-      }, 2000); // 3–4 seconds
+    // Set up new polling interval
+    pollingIntervalRef.current = setInterval(() => {
+      console.log("🔄 Auto-refresh: Fetching new conversations...");
+      fetchConversations(true); // Pass true to force refresh
+    }, 15000); // 15 seconds
 
-      return () => clearTimeout(timer);
-    }, [selectedAccount?.id, selectedFolder]);
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, [selectedAccount?.id, selectedFolder]);
 
+  // ✅ UPDATED: Initial load with faster refresh
+  useEffect(() => {
+    if (!selectedAccount?.id) return;
+
+    // 1️⃣ Immediate fetch
+    fetchConversations();
+
+    // 2️⃣ Quick second fetch after 3 seconds (to catch any synced emails)
+    const quickRefreshTimer = setTimeout(() => {
+      console.log("⚡ Quick refresh after 3 seconds...");
+      fetchConversations(true);
+    }, 3000);
+
+    return () => clearTimeout(quickRefreshTimer);
+  }, [selectedAccount?.id, selectedFolder]);
+
+  // Auto-load based on activeView
+  useEffect(() => {
+    if (!selectedAccount) return;
+
+    if (activeView === "today") {
+      fetchTodayFollowUps();
+      return;
+    }
+
+    if (searchEmail && searchEmail.trim() !== "") {
+      fetchSearchResults();
+    } else {
+      fetchConversations();
+    }
+  }, [selectedAccount, selectedFolder, activeView, filters, searchEmail]);
 
   const fetchAccounts = async () => {
     try {
@@ -173,12 +216,17 @@ export default function InboxMain() {
     }
   };
 
-  const fetchConversations = async () => {
+  // ✅ UPDATED: Force refresh with cache busting
+  const fetchConversations = async (forceRefresh = false) => {
     if (!selectedAccount) return;
 
     try {
       setLoading(true);
-      const params = { folder: selectedFolder };
+      const params = { 
+        folder: selectedFolder,
+        // ✅ Add timestamp to bust cache
+        _t: forceRefresh ? Date.now() : undefined
+      };
 
       if (filters.leadStatus) params.leadStatus = filters.leadStatus;
       if (filters.country) params.country = filters.country;
@@ -196,7 +244,20 @@ export default function InboxMain() {
         { params }
       );
 
-      setConversations(res.data?.data || []);
+      const newConversations = res.data?.data || [];
+      
+      // ✅ Log conversation count change
+      if (conversations.length !== newConversations.length) {
+        console.log(`📊 Conversation count changed: ${conversations.length} → ${newConversations.length}`);
+      }
+
+      setConversations(newConversations);
+      lastFetchTimeRef.current = Date.now();
+
+      // ✅ Update unread count in sidebar
+      if (forceRefresh) {
+        fetchAccounts();
+      }
     } catch (error) {
       console.error("Failed to fetch conversations:", error);
       setConversations([]);
@@ -243,22 +304,6 @@ export default function InboxMain() {
     }
   };
 
-  // Auto-load based on activeView
-  useEffect(() => {
-    if (!selectedAccount) return;
-
-    if (activeView === "today") {
-      fetchTodayFollowUps();
-      return;
-    }
-
-    if (searchEmail && searchEmail.trim() !== "") {
-      fetchSearchResults();
-    } else {
-      fetchConversations();
-    }
-  }, [selectedAccount, selectedFolder, activeView, filters, searchEmail]);
-
   // Helper to update view and persist it
   const changeView = (view) => {
     setActiveView(view);
@@ -267,22 +312,20 @@ export default function InboxMain() {
 
   const handleAccountSelect = (account) => {
     setSelectedAccount(account);
-    setSelectedFolder("inbox");  // ✅ reset folder
-    setSearchEmail("");          // ✅ reset search
+    setSelectedFolder("inbox");
+    setSearchEmail("");
     setSelectedConversation(null);
     setShowMobileConversations(true);
     changeView("inbox");
   };
-
 
   const handleFolderSelect = (folder) => {
     setSelectedFolder(folder);
-    setSearchEmail("");          // ✅ clear search
+    setSearchEmail("");
     setSelectedConversation(null);
     setShowMobileConversations(true);
     changeView("inbox");
   };
-
 
   const handleConversationSelect = (conversation) => {
     setSelectedConversation(conversation);
@@ -320,10 +363,9 @@ export default function InboxMain() {
 
   const handleSchedule = () => {
     setIsScheduleMode(true);
-    // Do NOT clear selectedConversations here, or the modal will receive an empty array
   };
 
-  // 🔥 Callback when a message is successfully sent
+  // ✅ Callback when a message is successfully sent
   const handleMessageSent = (conversationId) => {
     if (activeView === "today") {
       setConversations((prev) =>
@@ -333,24 +375,31 @@ export default function InboxMain() {
         setSelectedConversation(null);
       }
     } else {
-      fetchConversations();
+      // ✅ Force refresh after sending
+      fetchConversations(true);
+      fetchAccounts(); // Update unread counts
     }
   };
 
-  // 🔥 NEW: Handle when schedule modal closes successfully
+  // ✅ Handle when schedule modal closes successfully
   const handleScheduleSuccess = () => {
     setShowScheduleModal(false);
     setIsScheduleMode(false);
     setSelectedConversations([]);
 
-    // If we're in "today" view, refresh the list
     if (activeView === "today") {
       fetchTodayFollowUps();
     }
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="flex h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 overflow-hidden relative">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4s'}}></div>
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s', animationDelay: '1s'}}></div>
+      </div>
+
       <ModernSidebar
         accounts={accounts}
         selectedAccount={selectedAccount}
@@ -362,7 +411,7 @@ export default function InboxMain() {
         onToggleCollapse={setSidebarCollapsed}
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden relative z-10">
         <InboxHeader
           selectedAccount={selectedAccount}
           selectedFolder={selectedFolder}
@@ -371,20 +420,19 @@ export default function InboxMain() {
           onTodayFollowUpClick={handleTodayFollowUp}
           onScheduleClick={handleSchedule}
           activeView={activeView}
-          // 🔥 PASS ACTIVE FILTERS TO HEADER
           activeFilters={filters}
         />
 
         {isScheduleMode && (
-          <div className="px-4 py-3 border-b bg-blue-50 flex items-center justify-between">
-            <span className="text-sm text-gray-700">
+          <div className="px-4 py-3 border-b bg-gradient-to-r from-emerald-50 to-teal-50 flex items-center justify-between shadow-sm">
+            <span className="text-sm text-emerald-700 font-medium">
               {selectedConversations.length} selected
             </span>
             <div className="flex gap-2">
               <button
                 disabled={selectedConversations.length === 0}
                 onClick={() => setShowScheduleModal(true)}
-                className="px-4 py-1.5 bg-blue-600 text-white rounded disabled:opacity-50"
+                className="px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-lg disabled:opacity-50 font-medium hover:shadow-lg shadow-emerald-500/30 transition-all transform hover:scale-105"
               >
                 Schedule
               </button>
@@ -393,7 +441,7 @@ export default function InboxMain() {
                   setIsScheduleMode(false);
                   setSelectedConversations([]);
                 }}
-                className="px-4 py-1.5 border rounded"
+                className="px-4 py-1.5 border border-emerald-300 rounded-lg text-emerald-700 hover:bg-emerald-50 font-medium transition-all"
               >
                 Cancel
               </button>
@@ -401,26 +449,26 @@ export default function InboxMain() {
           </div>
         )}
 
-        {/* emailList page */}
-
         <div className="flex-1 flex overflow-hidden">
           <div
-              className={`${
-                selectedConversation ? "hidden lg:flex" : "flex"
-              } w-full lg:w-96 flex-col`}
-            >
-              <ConversationList
-                key={`${selectedAccount?.id}-${selectedFolder}`} // ✅ GOOD
-                conversations={conversations}
-                selectedConversation={selectedConversation}
-                onConversationSelect={handleConversationSelect}
-                activeView={activeView}
-                selectedAccount={selectedAccount}
-                selectedFolder={selectedFolder}
-                setConversations={setConversations}
-              />
-            </div>
-
+            className={`${
+              selectedConversation ? "hidden lg:flex" : "flex"
+            } w-full lg:w-96 flex-col`}
+          >
+            <ConversationList
+              key={`${selectedAccount?.id}-${selectedFolder}`}
+              conversations={conversations}
+              selectedConversation={selectedConversation}
+              onConversationSelect={handleConversationSelect}
+              activeView={activeView}
+              selectedAccount={selectedAccount}
+              selectedFolder={selectedFolder}
+              setConversations={setConversations}
+              isScheduleMode={isScheduleMode}
+              selectedConversations={selectedConversations}
+              setSelectedConversations={setSelectedConversations}
+            />
+          </div>
 
           <div
             className={`${
@@ -448,7 +496,6 @@ export default function InboxMain() {
         />
       )}
 
-      {/* 🔥 FIXED: Pass isOpen prop and use handleScheduleSuccess */}
       {showScheduleModal && (
         <ScheduleModal
           isOpen={showScheduleModal}
@@ -460,4 +507,3 @@ export default function InboxMain() {
     </div>
   );
 }
- 

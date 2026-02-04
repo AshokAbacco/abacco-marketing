@@ -231,15 +231,15 @@ const logoutAccount = async () => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="p-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold text-gray-800">
+            <h2 className="text-xl font-bold text-slate-900">
               Add Email Account
             </h2>
             <button
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-gray-500 hover:text-slate-700"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -271,7 +271,7 @@ const logoutAccount = async () => {
                   <div>SMTP Port: {suggestion.smtpPort}</div>
 
                   <button
-                    className="mt-2 px-3 py-1 bg-blue-600 text-white rounded text-sm"
+                    className="mt-2 px-3 py-1 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded text-sm"
                     onClick={() => {
                       setForm({
                         ...form,
@@ -314,7 +314,7 @@ const logoutAccount = async () => {
                   onClick={() => handleAccountSelect(acc)}
                   className={`border p-3 rounded mb-2 cursor-pointer ${
                     selectedAccountId === acc.id
-                      ? "bg-blue-100 border-blue-500"
+                      ? "bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-500"
                       : "bg-gray-50 hover:bg-gray-100"
                   }`}
                 >
@@ -336,7 +336,7 @@ const logoutAccount = async () => {
                                 setTempSenderName(e.target.value)
                               }
                               placeholder="Enter your name"
-                              className="flex-1 px-2 py-1 border border-blue-300 rounded text-sm"
+                              className="flex-1 px-2 py-1 border border-emerald-300 rounded text-sm"
                               onClick={(e) => e.stopPropagation()}
                             />
                             <button
@@ -363,7 +363,7 @@ const logoutAccount = async () => {
                           <div className="flex items-center gap-2">
                             <span className="text-sm text-gray-600">
                               📝 Sender Name:{" "}
-                              <span className="font-semibold text-blue-600">
+                              <span className="font-semibold text-emerald-600">
                                 {acc.senderName || "Not set"}
                               </span>
                             </span>
@@ -373,7 +373,7 @@ const logoutAccount = async () => {
                                 setEditingSenderName(acc.id);
                                 setTempSenderName(acc.senderName || "");
                               }}
-                              className="text-xs text-blue-600 hover:underline"
+                              className="text-xs text-emerald-600 hover:underline"
                             >
                               {acc.senderName ? "Edit" : "Set Name"}
                             </button>
@@ -398,13 +398,13 @@ const logoutAccount = async () => {
 
           <form onSubmit={addAccount} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 Provider
               </label>
               <select
                 value={form.provider}
                 onChange={handleProviderChange}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
               >
                 <option value="gmail">Gmail</option>
                 <option value="gsuite">G Suite</option>
@@ -414,34 +414,34 @@ const logoutAccount = async () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 Authentication
               </label>
               <select
                 value={form.authType}
                 onChange={(e) => setForm({ ...form, authType: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
               >
                 <option value="password">App Password</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 Email Address
               </label>
               <input
                 type="email"
                 value={form.email}
                 onChange={handleEmailChange}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                 required
               />
             </div>
 
             {/* 🔥 NEW: Sender Name Field in Creation Form */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 Sender Name (Optional)
               </label>
               <input
@@ -451,7 +451,7 @@ const logoutAccount = async () => {
                   setForm({ ...form, senderName: e.target.value })
                 }
                 placeholder="Sender Name"
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
               />
               <p className="text-xs text-gray-500 mt-1">
                 This name will appear in email templates and signatures
@@ -460,7 +460,7 @@ const logoutAccount = async () => {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
                   IMAP Host
                 </label>
                 <input
@@ -469,12 +469,12 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, imapHost: e.target.value })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
                   IMAP Port
                 </label>
                 <input
@@ -483,28 +483,28 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, imapPort: parseInt(e.target.value) })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 IMAP Username
               </label>
               <input
                 type="text"
                 value={form.imapUser}
                 onChange={(e) => setForm({ ...form, imapUser: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                 required
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
                   SMTP Host
                 </label>
                 <input
@@ -513,12 +513,12 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, smtpHost: e.target.value })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
                   SMTP Port
                 </label>
                 <input
@@ -527,27 +527,27 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, smtpPort: parseInt(e.target.value) })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 SMTP Username
               </label>
               <input
                 type="text"
                 value={form.smtpUser}
                 onChange={(e) => setForm({ ...form, smtpUser: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
                 App Password
               </label>
               <input
@@ -556,7 +556,7 @@ const logoutAccount = async () => {
                 onChange={(e) =>
                   setForm({ ...form, encryptedPass: e.target.value })
                 }
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                 required
               />
               <p className="text-sm text-gray-500 mt-1">
@@ -587,13 +587,13 @@ const logoutAccount = async () => {
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                className="px-4 py-2 border border-gray-300 rounded-md text-slate-700 hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-md hover:from-emerald-700 hover:to-green-700"
                 disabled={loading}
               >
                 {loading ? "Adding..." : "Add Account"}
@@ -604,7 +604,7 @@ const logoutAccount = async () => {
           {/* Logout confirmation modal */}
           {showLogoutConfirm && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-gray-700 p-6 rounded-lg">
+              <div className="bg-gray-700 p-6 rounded-xl">
                 <h3 className="text-lg font-bold mb-4">Confirm Logout</h3>
                 <p className="mb-6">
                   Are you sure you want to logout this email account?
@@ -632,5 +632,3 @@ const logoutAccount = async () => {
     </div>
   );
 }
-
- 

@@ -288,7 +288,7 @@ Subject: ${form.subject}`;
     (!form.website?.trim() && !form.phone?.trim());
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 mt-20">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl h-[95vh] flex flex-col overflow-hidden">
         {/* ================= HEADER ================= */}
         <div className="border-b px-6 py-4 bg-gray-50 flex justify-between">

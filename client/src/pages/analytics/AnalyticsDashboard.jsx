@@ -1,3 +1,4 @@
+// client/src/pages/analytics/AnalyticsDashboard.jsx
 import { useEffect, useState } from 'react';
 import { api } from '../utils/api';
 import { 
@@ -50,12 +51,14 @@ const AnalyticsDashboard = () => {
   const fetchAnalytics = async () => {
     setLoading(true);
     try {
-      const params = {};
-      if (dateRange === 'custom' && customDate) {
-        params.date = customDate;
-      } else if (dateRange !== 'all') {
-        params.range = dateRange;
-      }
+        const params = {
+          range: dateRange // 🔥 ALWAYS SEND
+        };
+
+        if (dateRange === "custom" && customDate) {
+          params.date = customDate;
+        }
+
 
       const [campaignsRes, leadsRes, pitchesRes, accountsRes, pendingFollowupsRes] = await Promise.all([
         api.get('/api/campaigns/dashboard', { params }),

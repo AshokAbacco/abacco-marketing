@@ -21,7 +21,12 @@ import {
   ChevronDown,
   Clock,
   Lock,
-  CheckCircle2
+  CheckCircle2,
+  Mail,
+  Zap,
+  Users,
+  Target,
+  Sparkles
 } from "lucide-react";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -451,49 +456,72 @@ const lockedAccountsCount = lockedAccountsList.length;
 
 
   return (
-    <div className="space-y-6 p-6 bg-gray-50 min-h-screen">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Create Campaign</h1>
-          <p className="text-sm text-gray-500 mt-1">Send immediate or scheduled email campaigns (continuous sending)</p>
+    <div className="space-y-6 p-6 bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 min-h-screen relative overflow-hidden">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 right-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '5s'}}></div>
+        <div className="absolute bottom-20 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '7s', animationDelay: '2s'}}></div>
+      </div>
+
+      {/* Enhanced Header */}
+      <div className="relative z-10 flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <div className="absolute inset-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-2xl blur opacity-50"></div>
+            <div className="relative w-14 h-14 bg-gradient-to-br from-emerald-600 to-green-600 rounded-2xl flex items-center justify-center shadow-lg ">
+              <Sparkles className="text-white" size={26} />
+            </div>
+          </div>
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent">
+              Create Campaign
+            </h1>
+            <p className="text-sm text-emerald-600 mt-1 font-semibold">Send immediate or scheduled email campaigns (continuous sending)</p>
+          </div>
         </div>
       </div>
 
-      {/* Campaign Type Tabs */}
-      <div className="flex gap-2">
+      {/* Enhanced Campaign Type Tabs */}
+      <div className="relative z-10 flex gap-3">
         <button
           onClick={() => setCampaignType("immediate")}
-          className={`px-6 py-2 rounded-lg font-medium transition ${
+          className={`group relative px-8 py-3.5 rounded-xl font-bold transition-all transform hover:scale-105 ${
             campaignType === "immediate"
-              ? "bg-blue-600 text-white"
-              : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+              ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg "
+              : "bg-white/80 backdrop-blur-sm text-emerald-600 border border-emerald-200 hover:border-emerald-300"
           }`}
         >
-          <Send className="inline mr-2" size={16} />
-          Immediate Campaign
+          <div className="flex items-center gap-2">
+            <Zap className={`${campaignType === "immediate" ? "animate-pulse" : ""}`} size={18} />
+            Immediate Campaign
+          </div>
         </button>
         <button
           onClick={() => setCampaignType("scheduled")}
-          className={`px-6 py-2 rounded-lg font-medium transition ${
+          className={`group relative px-8 py-3.5 rounded-xl font-bold transition-all transform hover:scale-105 ${
             campaignType === "scheduled"
-              ? "bg-green-600 text-white"
-              : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+              ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg "
+              : "bg-white/80 backdrop-blur-sm text-emerald-600 border border-emerald-200 hover:border-emerald-300"
           }`}
         >
-          <Calendar className="inline mr-2" size={16} />
-          Scheduled Campaign
+          <div className="flex items-center gap-2">
+            <Calendar size={18} />
+            Scheduled Campaign
+          </div>
         </button>
       </div>
 
       {/* Main Grid */}
-      <div className="grid grid-cols-12 gap-6">
+      <div className="relative z-10 grid grid-cols-12 gap-6">
         {/* Left Side */}
-        <div className="col-span-8 space-y-4">
-          {/* Campaign Details */}
-          <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
+        <div className="col-span-8 space-y-5">
+          {/* Campaign Details Card */}
+          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 space-y-5 shadow-lg">
             <div>
-              <label className="block text-sm font-medium mb-2">Campaign Name</label>
+              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide flex items-center gap-2">
+                <Target size={16} />
+                Campaign Name
+              </label>
               <input
                 type="text"
                 value={campaignName}
@@ -507,23 +535,26 @@ const lockedAccountsCount = lockedAccountsList.length;
                   }
                 }}
                 placeholder="Association Name Outreach"
-                className="w-full border rounded-lg p-3"
+                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium hover:border-emerald-300 transition-colors"
               />
-              {nameError && <p className="text-xs text-red-600 mt-1">{nameError}</p>}
+              {nameError && <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded-lg border border-red-200 font-semibold">{nameError}</p>}
             </div>
 
             {/* From Email Accounts - ENHANCED */}
             <div className="relative">
-              <label className="block text-sm font-medium mb-2">From Email Accounts</label>
+              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide flex items-center gap-2">
+                <Mail size={16} />
+                From Email Accounts
+              </label>
 
               {/* Status Summary */}
-              <div className="flex items-center gap-4 mb-2 text-xs">
-                <span className="flex items-center gap-1 text-green-600">
+              <div className="flex items-center gap-4 mb-3 text-xs">
+                <span className="flex items-center gap-1.5 text-emerald-600 font-bold bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
                   <CheckCircle2 size={14} />
                   {availableAccounts.length} Available
                 </span>
                 {lockedAccountsCount > 0 && (
-                  <span className="flex items-center gap-1 text-red-600">
+                  <span className="flex items-center gap-1.5 text-red-600 font-bold bg-red-50 px-3 py-1.5 rounded-lg border border-red-200">
                     <Lock size={14} />
                     {lockedAccountsCount} In Use
                   </span>
@@ -533,288 +564,259 @@ const lockedAccountsCount = lockedAccountsList.length;
               <button
                 type="button"
                 onClick={() => setShowFromDropdown(!showFromDropdown)}
-                className="w-full border rounded-lg p-3 text-left flex justify-between items-center bg-white hover:bg-gray-50 transition"
+                className="w-full border border-emerald-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-emerald-300 transition-all font-medium"
               >
-                <span className="text-gray-700">
+                <span className="text-slate-700">
                   {selectedFroms.length > 0 
                     ? `${selectedFroms.length} account(s) selected` 
                     : "Select From Emails"}
                 </span>
-                <ChevronDown size={16} className={`transition-transform ${showFromDropdown ? 'rotate-180' : ''}`} />
+                <ChevronDown size={18} className={`text-emerald-600 transition-transform ${showFromDropdown ? 'rotate-180' : ''}`} />
               </button>
 
              {showFromDropdown && (
-                <div className="absolute z-50 mt-2 w-full bg-white border rounded-lg shadow-lg max-h-96 overflow-y-auto">
+                <div className="absolute z-50 mt-2 w-full bg-white/95 backdrop-blur-sm border border-emerald-200 rounded-xl shadow-2xl max-h-96 overflow-y-auto">
 
                   {/* AVAILABLE ACCOUNTS */}
                   {availableAccounts.length > 0 && (
-                    <>
-                      <div className="px-3 py-2 text-xs font-semibold text-gray-500 bg-gray-50 border-b">
-                        Available Accounts (Set Email Limit per Hour)
-                      </div>
-
+                    <div className="p-3">
+                      <h4 className="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-2 px-2">Available Accounts</h4>
                       {availableAccounts.map(acc => (
                         <label
                           key={acc.id}
-                          className="flex items-start gap-3 px-4 py-3 hover:bg-blue-50 cursor-pointer border-b"
+                          className="flex items-center gap-3 p-3 hover:bg-emerald-50 rounded-lg cursor-pointer transition group"
                         >
                           <input
                             type="checkbox"
                             checked={selectedFroms.includes(acc.id)}
-                            onChange={() => {
-                              setSelectedFroms(prev =>
-                                prev.includes(acc.id)
-                                  ? prev.filter(id => id !== acc.id)
-                                  : [...prev, acc.id]
-                              );
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedFroms([...selectedFroms, acc.id]);
+                              } else {
+                                setSelectedFroms(selectedFroms.filter(id => id !== acc.id));
+                              }
                             }}
-                            className="mt-1"
+                            className="w-4 h-4 text-emerald-600 border-emerald-300 rounded focus:ring-emerald-500"
                           />
-
                           <div className="flex-1">
-                            <div className="font-medium text-sm text-gray-800">
-                              {acc.senderName || acc.email}
-                            </div>
-                            <div className="text-xs text-gray-500">{acc.email}</div>
-                            <div className="text-xs text-gray-400">Provider: {acc.provider}</div>
-                            
-                            {/* 🔥 NEW: Per-domain limit dropdown */}
-                            <div className="mt-2 flex items-center gap-2">
-                              <label className="text-xs text-gray-600">Limit per hour:</label>
-                              <select
-                                value={customLimits[acc.id] || getDefaultLimit(acc.provider)}
-                                onChange={(e) => {
-                                  const newLimit = Number(e.target.value);
-                                  setCustomLimits(prev => ({
-                                    ...prev,
-                                    [acc.id]: newLimit
-                                  }));
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs border rounded px-2 py-1 bg-white"
-                              >
-                                {LIMIT_OPTIONS.map(limit => (
-                                  <option key={limit} value={limit}>
-                                    {limit} emails/hr
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                            <p className="text-sm font-semibold text-slate-900">{acc.email}</p>
+                            <p className="text-xs text-emerald-600 font-medium">
+                              {acc.provider?.toUpperCase()} • Limit: {getActualLimit(acc.id)}/hr
+                            </p>
                           </div>
-
-                          <CheckCircle2 size={18} className="text-green-500 mt-1" />
+                          
+                          {/* Custom Limit Selector */}
+                          <select
+                            value={customLimits[acc.id] || ""}
+                            onChange={(e) => {
+                              const newLimits = {...customLimits};
+                              if (e.target.value) {
+                                newLimits[acc.id] = parseInt(e.target.value);
+                              } else {
+                                delete newLimits[acc.id];
+                              }
+                              setCustomLimits(newLimits);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-emerald-50 font-semibold"
+                          >
+                            <option value="">Default ({getDefaultLimit(acc.provider)})</option>
+                            {LIMIT_OPTIONS.map(opt => (
+                              <option key={opt} value={opt}>{opt}/hr</option>
+                            ))}
+                          </select>
                         </label>
                       ))}
-                    </>
+                    </div>
                   )}
 
                   {/* LOCKED ACCOUNTS */}
                   {lockedAccountsList.length > 0 && (
-                    <>
-                      <div className="px-3 py-2 text-xs font-semibold text-gray-500 bg-gray-50 border-b">
-                        Locked (Campaign Sending)
-                      </div>
-
+                    <div className="border-t border-emerald-200 p-3">
+                      <h4 className="text-xs font-bold text-red-700 uppercase tracking-wide mb-2 px-2 flex items-center gap-1.5">
+                        <Lock size={12} />
+                        Currently In Use (Unavailable)
+                      </h4>
                       {lockedAccountsList.map(acc => (
                         <div
                           key={acc.id}
-                          className="flex items-start gap-3 px-4 py-3 border-b bg-gray-50 opacity-70 cursor-not-allowed"
+                          className="flex items-center gap-3 p-3 bg-red-50/50 rounded-lg opacity-60 mb-2"
                         >
-                          <input
-                            type="checkbox"
-                            disabled
-                            className="mt-1 cursor-not-allowed"
-                          />
-
+                          <Lock size={14} className="text-red-500" />
                           <div className="flex-1">
-                            <div className="font-medium text-sm text-gray-700">
-                              {acc.senderName || acc.email}
-                            </div>
-                            <div className="text-xs text-gray-500">{acc.email}</div>
-                            <div className="text-xs text-gray-400">Provider: {acc.provider}</div>
-                            <div className="flex items-center gap-1 text-xs text-red-600 mt-1">
-                              <Lock size={12} />
-                              Campaign in progress
-                            </div>
+                            <p className="text-sm font-semibold text-slate-700">{acc.email}</p>
+                            <p className="text-xs text-red-600 font-medium">Busy sending another campaign</p>
                           </div>
-
-                          <Lock size={18} className="text-red-500 mt-1" />
                         </div>
                       ))}
-                    </>
+                    </div>
                   )}
 
                 </div>
               )}
-
-
-              <p className="text-xs text-gray-500 mt-2">
-                Selected: {selectedFroms.length} account(s) • Total capacity: {getCapacity()} emails/hour
-              </p>
             </div>
 
-            {/* Subjects */}
-            <div>
-              <label className="block text-sm font-medium mb-2">Subjects (one per line)</label>
-              <textarea
-                rows={4}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Subject 1&#10;Subject 2&#10;Subject 3"
-                className="w-full border rounded-lg p-3"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Total Subjects: {subject.split("\n").filter(s => s.trim()).length}
-              </p>
-            </div>
-
-            {/* Pitch Templates */}
-            <div className="relative">
-              <label className="block text-sm font-medium mb-2">Pitch Templates (optional)</label>
-              <button
-                type="button"
-                onClick={() => setShowPitchDropdown(!showPitchDropdown)}
-                className="w-full border rounded-lg p-3 text-left flex justify-between items-center bg-white hover:bg-gray-50 transition"
-              >
-                <span className="text-gray-700">
-                  {selectedPitchIds.length > 0 
-                    ? `${selectedPitchIds.length} pitch(es) selected` 
-                    : "Select Pitch Templates"}
-                </span>
-                <ChevronDown size={16} />
-              </button>
-
-              {showPitchDropdown && (
-                <div className="absolute z-50 mt-2 w-full bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {pitches.map((pitch) => (
-                    <label
-                      key={pitch.id}
-                      className="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-50 px-3 py-2 border-b"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedPitchIds.includes(pitch.id)}
-                        onChange={() => {
-                          setSelectedPitchIds(prev => {
-                            let updated;
-                            if (prev.includes(pitch.id)) {
-                              updated = prev.filter(id => id !== pitch.id);
-                            } else {
-                              updated = [...prev, pitch.id];
-                            }
-                            const last = updated[updated.length - 1];
-                            const selectedPitch = pitches.find(p => p.id === last);
-                            if (selectedPitch && editorRef.current) {
-                              
-                              editorRef.current.innerHTML = selectedPitch.bodyHtml || "";
-                            }
-                            return updated;
-                          });
-                        }}
-                      />
-                      {pitch.name}
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              <p className="text-xs text-gray-500 mt-2">
-                Selected: {selectedPitchIds.length} pitch(es)
-              </p>
-            </div>
-
-            {/* Schedule Date/Time */}
+            {/* Schedule Section */}
             {campaignType === "scheduled" && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl border border-emerald-200">
                 <div>
-                  <label className="block text-sm font-medium mb-2">
-                    <Clock className="inline mr-1" size={14} />
-                    Schedule Date
-                  </label>
+                  <label className="block text-sm font-bold text-emerald-600 mb-2">Schedule Date</label>
                   <input
                     type="date"
                     value={scheduleDate}
                     onChange={(e) => setScheduleDate(e.target.value)}
-                    className="w-full px-4 py-2.5 border rounded-lg"
+                    className="w-full border border-emerald-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-2">
-                    <Clock className="inline mr-1" size={14} />
-                    Schedule Time
-                  </label>
+                  <label className="block text-sm font-bold text-emerald-600 mb-2">Schedule Time</label>
                   <input
                     type="time"
                     value={scheduleTime}
                     onChange={(e) => setScheduleTime(e.target.value)}
-                    className="w-full px-4 py-2.5 border rounded-lg"
+                    className="w-full border border-emerald-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
                   />
                 </div>
               </div>
             )}
+
+            {/* Pitch Templates */}
+            <div className="relative">
+              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Pitch Templates (Optional)</label>
+              <button
+                type="button"
+                onClick={() => setShowPitchDropdown(!showPitchDropdown)}
+                className="w-full border border-emerald-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-emerald-300 transition-all font-medium"
+              >
+                <span className="text-slate-700">
+                  {selectedPitchIds.length > 0 
+                    ? `${selectedPitchIds.length} template(s) selected` 
+                    : "Select Pitch Templates"}
+                </span>
+                <ChevronDown size={18} className={`text-emerald-600 transition-transform ${showPitchDropdown ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showPitchDropdown && (
+                <div className="absolute z-50 mt-2 w-full bg-white/95 backdrop-blur-sm border border-emerald-200 rounded-xl shadow-2xl max-h-72 overflow-y-auto">
+                  <div className="p-3 space-y-1">
+                    {pitches.map(pitch => (
+                      <label
+                        key={pitch.id}
+                        className="flex items-center gap-3 p-3 hover:bg-emerald-50 rounded-lg cursor-pointer transition"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedPitchIds.includes(pitch.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedPitchIds([...selectedPitchIds, pitch.id]);
+                              if (editorRef.current) {
+                                editorRef.current.innerHTML = pitch.bodyHtml || "";
+                              }
+                            } else {
+                              setSelectedPitchIds(selectedPitchIds.filter(id => id !== pitch.id));
+                            }
+                          }}
+                          className="w-4 h-4 text-emerald-600 border-emerald-300 rounded focus:ring-emerald-500"
+                        />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{pitch.name}</p>
+                          <p className="text-xs text-emerald-600">Click to load template</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Subject Lines */}
+            <div>
+              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Subject Lines (one per line)</label>
+              <textarea
+                rows={3}
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Enter multiple subject lines...&#10;One per line&#10;Random selection"
+                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
+              />
+            </div>
           </div>
 
-          {/* Email Editor */}
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <h3 className="text-sm font-semibold text-gray-700 p-4 border-b bg-gray-50">
-              Email Body
-            </h3>
+          {/* Email Editor Card */}
+          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl overflow-hidden shadow-lg">
+            <div className="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-3">
+              <h3 className="text-sm font-bold text-emerald-600 uppercase tracking-wide">Email Content Editor</h3>
+            </div>
 
-            {/* Formatting Toolbar */}
-            <div className="flex flex-wrap items-center gap-1 p-3 border-b bg-gray-50">
-              {/* Font Family */}
-              <select value={currentFont} onChange={(e) => applyFontFamily(e.target.value)} className="text-sm border rounded px-2 py-1 bg-white">
+            {/* Toolbar */}
+            <div className="flex flex-wrap gap-2 p-3 border-b border-emerald-100 bg-white/50">
+              <select
+                value={currentFont}
+                onChange={(e) => applyFontFamily(e.target.value)}
+                className="px-3 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium"
+              >
                 {FONT_FAMILIES.map(f => (
                   <option key={f.value} value={f.value}>{f.label}</option>
                 ))}
               </select>
 
-              {/* Font Size */}
-              <select value={currentSize} onChange={(e) => applyFontSize(e.target.value)} className="text-sm border rounded px-2 py-1 bg-white w-16">
+              <select
+                value={currentSize}
+                onChange={(e) => applyFontSize(e.target.value)}
+                className="px-3 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium"
+              >
                 {FONT_SIZES.map(s => (
                   <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
 
-              <div className="w-px h-6 bg-gray-300 mx-1" />
+              <div className="w-px h-7 bg-emerald-300 mx-1" />
 
               <ToolbarButton icon={<Bold size={16} />} onClick={() => formatText("bold")} title="Bold" />
               <ToolbarButton icon={<Italic size={16} />} onClick={() => formatText("italic")} title="Italic" />
               <ToolbarButton icon={<Underline size={16} />} onClick={() => formatText("underline")} title="Underline" />
               <ToolbarButton icon={<Strikethrough size={16} />} onClick={() => formatText("strikeThrough")} title="Strikethrough" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1" />
+              <div className="w-px h-7 bg-emerald-300 mx-1" />
 
-              {/* Text Color */}
               <div className="relative">
-                <button onClick={() => setShowColorPicker(!showColorPicker)} className="p-2 hover:bg-gray-200 rounded transition" title="Text Color">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: currentColor, border: "1px solid #ccc" }} />
+                <button
+                  onClick={() => setShowColorPicker(!showColorPicker)}
+                  className="p-2 hover:bg-emerald-100 rounded-lg transition border border-emerald-200"
+                  title="Text Color"
+                >
+                  <div className="w-5 h-5 rounded" style={{ backgroundColor: currentColor }} />
                 </button>
-
                 {showColorPicker && (
-                  <div className="absolute z-10 mt-1 p-2 bg-white border rounded shadow-lg">
-                    <div className="grid grid-cols-7 gap-1">
+                  <div className="absolute z-50 mt-2 p-3 bg-white border border-emerald-200 rounded-xl shadow-xl">
+                    <div className="grid grid-cols-7 gap-2">
                       {COLORS.map(color => (
-                        <button key={color} onClick={() => applyColor(color)} className="w-6 h-6 rounded border hover:scale-110 transition" style={{ backgroundColor: color }} />
+                        <button
+                          key={color}
+                          onClick={() => applyColor(color)}
+                          className="w-6 h-6 rounded border-2 border-emerald-200 hover:scale-110 transition-transform"
+                          style={{ backgroundColor: color }}
+                        />
                       ))}
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="w-px h-6 bg-gray-300 mx-1" />
+              <div className="w-px h-7 bg-emerald-300 mx-1" />
 
               <ToolbarButton icon={<AlignLeft size={16} />} onClick={() => formatText("justifyLeft")} title="Align Left" />
-              <ToolbarButton icon={<AlignCenter size={16} />} onClick={() => formatText("justifyCenter")} title="Align Center" />
+              <ToolbarButton icon={<AlignCenter size={16} />} onClick={() => formatText("justifyCenter")} title="Center" />
               <ToolbarButton icon={<AlignRight size={16} />} onClick={() => formatText("justifyRight")} title="Align Right" />
               <ToolbarButton icon={<AlignJustify size={16} />} onClick={() => formatText("justifyFull")} title="Justify" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1" />
+              <div className="w-px h-7 bg-emerald-300 mx-1" />
 
               <ToolbarButton icon={<List size={16} />} onClick={() => formatText("insertUnorderedList")} title="Bullet List" />
               <ToolbarButton icon={<ListOrdered size={16} />} onClick={() => formatText("insertOrderedList")} title="Numbered List" />
 
-              <div className="w-px h-6 bg-gray-300 mx-1" />
+              <div className="w-px h-7 bg-emerald-300 mx-1" />
 
               <ToolbarButton icon={<Link size={16} />} onClick={insertLink} title="Insert Link" />
             </div>
@@ -823,25 +825,25 @@ const lockedAccountsCount = lockedAccountsList.length;
             <div
               ref={editorRef}
               contentEditable
-              className="min-h-[300px] max-h-[500px] overflow-y-auto p-4 outline-none text-gray-900"
+              className="min-h-[300px] max-h-[500px] overflow-y-auto p-5 outline-none text-gray-900 bg-white"
               style={{ fontFamily: currentFont, fontSize: currentSize }}
               suppressContentEditableWarning
             />
 
             {/* Attachments */}
             {attachments.length > 0 && (
-              <div className="border-t p-3 bg-gray-50">
-                <p className="text-xs text-gray-600 mb-2">Attachments:</p>
+              <div className="border-t border-emerald-100 p-4 bg-emerald-50/50">
+                <p className="text-xs text-emerald-600 font-bold mb-3 uppercase tracking-wide">Attachments:</p>
                 <div className="flex flex-wrap gap-2">
                   {attachments.map((file, index) => (
                     <div
                       key={index}
-                      className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200"
+                      className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 shadow-sm"
                     >
-                      <Paperclip size={14} className="text-gray-500" />
-                      <span className="text-xs text-gray-700">{file.name}</span>
-                      <button onClick={() => removeAttachment(index)} className="p-0.5 hover:bg-gray-200 rounded-full">
-                        <X size={12} className="text-gray-500" />
+                      <Paperclip size={14} className="text-emerald-600" />
+                      <span className="text-xs text-slate-700 font-medium">{file.name}</span>
+                      <button onClick={() => removeAttachment(index)} className="p-1 hover:bg-red-100 rounded-full transition">
+                        <X size={12} className="text-red-500" />
                       </button>
                     </div>
                   ))}
@@ -850,12 +852,12 @@ const lockedAccountsCount = lockedAccountsList.length;
             )}
 
             {/* Footer */}
-            <div className="border-t border-gray-200 p-3 flex justify-between items-center bg-gray-50">
+            <div className="border-t border-emerald-200 p-4 flex justify-between items-center bg-gradient-to-r from-emerald-50/50 to-teal-50/50">
               <div>
                 <input ref={fileInputRef} type="file" multiple onChange={handleAttachmentUpload} className="hidden" />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-lg"
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-100 rounded-lg transition font-semibold border border-emerald-200"
                 >
                   <Paperclip size={16} />
                   Attach files
@@ -865,7 +867,7 @@ const lockedAccountsCount = lockedAccountsList.length;
               {selectedPitchIds.length > 0 && (
                 <button
                   onClick={savePitchTemplate}
-                  className="flex items-center gap-2 px-4 py-2 text-sm bg-green-600 text-white hover:bg-green-700 rounded-lg"
+                  className="flex items-center gap-2 px-5 py-2 text-sm bg-gradient-to-r from-emerald-600 to-green-600 text-white hover:shadow-lg  rounded-lg transition font-bold"
                 >
                   Save
                 </button>
@@ -873,7 +875,7 @@ const lockedAccountsCount = lockedAccountsList.length;
 
               <button
                 onClick={() => setShowPreview(!showPreview)}
-                className="flex items-center gap-2 px-4 py-2 text-sm bg-gray-200 text-gray-700 hover:bg-gray-300 rounded-lg transition"
+                className="flex items-center gap-2 px-5 py-2 text-sm bg-white text-emerald-600 hover:bg-emerald-50 rounded-lg transition font-bold border border-emerald-200"
               >
                 <Eye size={16} />
                 {showPreview ? "Hide" : "Show"} Preview
@@ -883,15 +885,15 @@ const lockedAccountsCount = lockedAccountsList.length;
 
           {/* Preview Section */}
           {showPreview && (
-            <div className="bg-white border border-gray-200 rounded-lg p-6">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Email Preview</h3>
-              <div className="border border-gray-200 rounded-lg p-4 min-h-32 max-h-96 overflow-y-auto bg-gray-50">
-                <div className="mb-4 pb-4 border-b border-gray-200">
-                  <p className="text-xs text-gray-500">From: {selectedFroms.length} account(s) selected</p>
-                  <p className="text-xs text-gray-500">To: {parsedEmails.length} recipient(s)</p>
-                  <p className="text-sm font-medium text-gray-800 mt-2">{subject || "No subject"}</p>
+            <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 shadow-lg">
+              <h3 className="text-sm font-bold text-emerald-600 mb-4 uppercase tracking-wide">Email Preview</h3>
+              <div className="border border-emerald-200 rounded-xl p-5 min-h-32 max-h-96 overflow-y-auto bg-white">
+                <div className="mb-4 pb-4 border-b border-emerald-200">
+                  <p className="text-xs text-emerald-600 font-semibold">From: {selectedFroms.length} account(s) selected</p>
+                  <p className="text-xs text-emerald-600 font-semibold">To: {parsedEmails.length} recipient(s)</p>
+                  <p className="text-base font-bold text-slate-900 mt-3">{subject || "No subject"}</p>
                   {campaignType === "scheduled" && scheduleDate && (
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-emerald-600 font-semibold mt-2">
                       Scheduled: {scheduleDate} at {scheduleTime}
                     </p>
                   )}
@@ -907,15 +909,16 @@ const lockedAccountsCount = lockedAccountsList.length;
         </div>
 
         {/* Right Side - Client Mails */}
-        <div className="col-span-4 space-y-4">
-          <div className="bg-white border border-gray-200 rounded-lg p-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">
+        <div className="col-span-4 space-y-5">
+          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 shadow-lg">
+            <h3 className="text-sm font-bold text-emerald-600 mb-4 uppercase tracking-wide flex items-center gap-2">
+              <Users size={16} />
               Client Mails
             </h3>
 
             {/* Mode Selector */}
-            <div className="flex gap-6 mb-4">
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <div className="flex gap-6 mb-5">
+              <label className="flex items-center gap-2 text-sm cursor-pointer font-semibold text-slate-700">
                 <input
                   type="radio"
                   checked={recipientMode === "manual"}
@@ -923,11 +926,12 @@ const lockedAccountsCount = lockedAccountsList.length;
                     setRecipientMode("manual");
                     setCsvFile(null);
                   }}
+                  className="w-4 h-4 text-emerald-600 border-emerald-300 focus:ring-emerald-500"
                 />
                 Manual Entry
               </label>
 
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <label className="flex items-center gap-2 text-sm cursor-pointer font-semibold text-slate-700">
                 <input
                   type="radio"
                   checked={recipientMode === "file"}
@@ -935,6 +939,7 @@ const lockedAccountsCount = lockedAccountsList.length;
                     setRecipientMode("file");
                     setManualEmails("");
                   }}
+                  className="w-4 h-4 text-emerald-600 border-emerald-300 focus:ring-emerald-500"
                 />
                 Upload CSV
               </label>
@@ -943,7 +948,7 @@ const lockedAccountsCount = lockedAccountsList.length;
             {/* Manual Entry */}
             {recipientMode === "manual" && (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-[14px] text-emerald-600 mb-2 font-bold tracking-wide">
                   Paste emails (comma or new line separated)
                 </label>
 
@@ -955,7 +960,7 @@ const lockedAccountsCount = lockedAccountsList.length;
                     extractEmails(e.target.value);
                   }}
                   placeholder="client1@gmail.com&#10;client2@gmail.com, client3@gmail.com"
-                  className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-emerald-200 rounded-xl p-3.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
                 />
               </div>
             )}
@@ -963,7 +968,7 @@ const lockedAccountsCount = lockedAccountsList.length;
             {/* CSV Upload */}
             {recipientMode === "file" && (
               <div>
-                <label className="block text-xs text-gray-500 mb-2">
+                <label className="block text-[14px] text-emerald-600 mb-3 font-bold tracking-wide">
                   Upload CSV file containing emails
                 </label>
 
@@ -974,11 +979,11 @@ const lockedAccountsCount = lockedAccountsList.length;
                     setCsvFile(e.target.files[0]);
                     handleCsvUpload(e.target.files[0]);
                   }}
-                  className="w-full text-sm"
+                  className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-600 hover:file:bg-emerald-100"
                 />
 
                 {csvFile && (
-                  <p className="text-xs text-green-600 mt-2">
+                  <p className="text-xs text-emerald-600 font-semibold mt-3 bg-emerald-50 p-2 rounded-lg border border-emerald-200">
                     File selected: {csvFile.name}
                   </p>
                 )}
@@ -986,19 +991,28 @@ const lockedAccountsCount = lockedAccountsList.length;
             )}
 
             {/* Email Count */}
-            <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
-              <p className="text-sm font-medium text-gray-700">
+            <div className="mt-5 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-bold text-slate-900">
                 Total Emails:
-                <span className="ml-2 text-blue-600 font-bold">
+                <span className="ml-2 text-emerald-600 text-lg">
                   {parsedEmails.length}
                 </span>
               </p>
 
               {selectedFroms.length > 0 && (
-                <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 p-2 rounded">
-                  ✅ Continuous sending enabled<br/>
-                  📊 Capacity: {getCapacity()} emails/hour<br/>
-                  ⏱️ Est. time: {Math.ceil(parsedEmails.length / getCapacity())} hour(s)
+                <div className="text-xs text-emerald-600 bg-white border border-emerald-200 p-3 rounded-lg font-semibold space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    Continuous sending enabled
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Zap size={14} className="text-emerald-600" />
+                    Capacity: {getCapacity()} emails/hour
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Clock size={14} className="text-emerald-600" />
+                    Est. time: {Math.ceil(parsedEmails.length / getCapacity())} hour(s)
+                  </div>
                 </div>
               )}
 
@@ -1010,23 +1024,26 @@ const lockedAccountsCount = lockedAccountsList.length;
           <button
             onClick={handleSend}
             disabled={sending}
-            className={`w-full px-6 py-3 text-white rounded-lg font-medium transition flex items-center justify-center gap-2
-              ${sending ? "opacity-60 cursor-not-allowed" : ""}
-              ${campaignType === "immediate" ? "bg-blue-600 hover:bg-blue-700" : "bg-green-600 hover:bg-green-700"}
-            `}
+            className={`w-full px-6 py-4 text-white rounded-xl font-black text-base transition-all flex items-center justify-center gap-3 shadow-lg transform hover:scale-105 ${
+              sending ? "opacity-60 cursor-not-allowed" : ""
+            } ${
+              campaignType === "immediate" 
+                ? "bg-gradient-to-r from-emerald-600 to-green-600  hover:shadow-emerald-500/50" 
+                : "bg-gradient-to-r from-emerald-600 to-green-600  hover:shadow-emerald-500/50"
+            }`}
           >
             {sending ? (
               "Processing..."
             ) : (
               <>
-                {campaignType === "immediate" ? <Send size={18} /> : <Calendar size={18} />}
+                {campaignType === "immediate" ? <Zap size={20} /> : <Calendar size={20} />}
                 {campaignType === "immediate" ? "Send Campaign Now" : "Schedule Campaign"}
               </>
             )}
           </button>
 
           {errorMsg && (
-            <p className="text-sm text-red-600 mt-2 bg-red-50 p-3 rounded-lg border border-red-200">{errorMsg}</p>
+            <p className="text-sm text-red-600 font-semibold mt-2 bg-red-50 p-4 rounded-xl border border-red-200">{errorMsg}</p>
           )}
         </div>
       </div>
@@ -1035,7 +1052,11 @@ const lockedAccountsCount = lockedAccountsList.length;
 }
 
 const ToolbarButton = ({ icon, onClick, title }) => (
-  <button onClick={onClick} className="p-2 hover:bg-gray-200 rounded transition" title={title}>
+  <button 
+    onClick={onClick} 
+    className="p-2 hover:bg-emerald-100 rounded-lg transition border border-transparent hover:border-emerald-200" 
+    title={title}
+  >
     {icon}
   </button>
-)
+);
