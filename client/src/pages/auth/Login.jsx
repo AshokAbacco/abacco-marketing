@@ -41,8 +41,16 @@ export default function LoginPage() {
       setShowSuccess(true);
       
       // Navigate to dashboard after showing success message
+      // Navigate based on user role after showing success message
       setTimeout(() => {
-        window.location.href = "/dashboard";
+        // ✅ Check user role and redirect accordingly
+        const userRole = res.data.jobRole;
+        
+        if (userRole === "Admin" || userRole === "ADMIN") {
+          window.location.href = "/admin"; // Admin users → Admin panel
+        } else {
+          window.location.href = "/dashboard"; // Regular users → Dashboard
+        }
       }, 2000);
     } catch (err) {
       console.error("Login error:", err); // Debug log
