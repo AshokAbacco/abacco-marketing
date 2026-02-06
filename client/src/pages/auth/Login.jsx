@@ -19,8 +19,22 @@ export default function LoginPage() {
 
     try {
       const res = await api.post("/api/users/login", { email, password });
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data));
+      
+      console.log("Login response:", res.data); // Debug log
+      
+      // ✅ Store token
+      if (res.data.token) {
+        localStorage.setItem("token", res.data.token);
+      }
+      
+      // ✅ Store user data
+      const userData = {
+        id: res.data.id,
+        email: res.data.email,
+        name: res.data.name,
+        jobRole: res.data.jobRole,
+      };
+      localStorage.setItem("user", JSON.stringify(userData));
       
       // Extract user name for welcome message
       setUserName(res.data.name || res.data.email.split('@')[0]);
@@ -31,7 +45,8 @@ export default function LoginPage() {
         window.location.href = "/dashboard";
       }, 2000);
     } catch (err) {
-      setError(err.response?.data?.error || "Login failed");
+      console.error("Login error:", err); // Debug log
+      setError(err.response?.data?.error || "Login failed. Please check your credentials.");
       setLoading(false);
     }
   };
@@ -59,7 +74,6 @@ export default function LoginPage() {
 
           {/* Welcome message */}
           <h1 className="text-5xl md:text-6xl font-bold text-white mb-4 animate-fade-in-up">
-            {/* Welcome {userName && `, ${userName}`}! 🎉 */}
             Welcome to Abacco Marketing
           </h1>
           <p className="text-xl md:text-2xl text-emerald-200 animate-fade-in-up animation-delay-200">
@@ -158,8 +172,7 @@ export default function LoginPage() {
             <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-green-600 to-emerald-600 rounded-2xl mb-4 shadow-lg shadow-green-500/30">
               <Zap className="w-8 h-8 text-white" strokeWidth={2.5} />
             </div>
-            <h2 className="text-3xl font-bold text-slate-800 mb-2">Welcome to Abacco Marketing </h2>
-            {/* <p className="text-slate-600">Sign in to continue to your account</p> */}
+            <h2 className="text-3xl font-bold text-slate-800 mb-2">Welcome to Abacco Marketing</h2>
           </div>
 
           {/* Error Message */}
@@ -234,7 +247,6 @@ export default function LoginPage() {
                 />
                 <span className="ml-2 text-slate-600 group-hover:text-slate-800 transition-colors">Remember me</span>
               </label>
-            
             </div>
 
             {/* Submit Button */}
@@ -256,8 +268,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
- 
-          
         </div>
 
         {/* Footer Text */}

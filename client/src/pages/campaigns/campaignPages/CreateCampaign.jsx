@@ -680,6 +680,18 @@ const lockedAccountsCount = lockedAccountsList.length;
               </div>
             )}
 
+            {/* Subject Lines */}
+            <div>
+              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Subject Lines (one per line)</label>
+              <textarea
+                rows={3}
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Enter multiple subject lines...&#10;One per line&#10;Random selection"
+                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
+              />
+            </div>
+
             {/* Pitch Templates */}
             <div className="relative">
               <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Pitch Templates (Optional)</label>
@@ -730,17 +742,7 @@ const lockedAccountsCount = lockedAccountsList.length;
               )}
             </div>
 
-            {/* Subject Lines */}
-            <div>
-              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Subject Lines (one per line)</label>
-              <textarea
-                rows={3}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Enter multiple subject lines...&#10;One per line&#10;Random selection"
-                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
-              />
-            </div>
+            
           </div>
 
           {/* Email Editor Card */}

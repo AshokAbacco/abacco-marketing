@@ -442,7 +442,7 @@ const logoutAccount = async () => {
             {/* 🔥 NEW: Sender Name Field in Creation Form */}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Sender Name (Optional)
+                Sender Name
               </label>
               <input
                 type="text"
@@ -452,6 +452,7 @@ const logoutAccount = async () => {
                 }
                 placeholder="Sender Name"
                 className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                required
               />
               <p className="text-xs text-gray-500 mt-1">
                 This name will appear in email templates and signatures

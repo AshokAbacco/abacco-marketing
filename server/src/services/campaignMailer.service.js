@@ -1,3 +1,4 @@
+// server/src/services/campaignMailer.service.js
 import nodemailer from "nodemailer";
 import prisma from "../prismaClient.js";
 import { decrypt } from "../utils/crypto.js";

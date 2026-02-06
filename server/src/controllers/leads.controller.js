@@ -33,6 +33,7 @@ export const createLeadFromInbox = async (req, res) => {
     const existingLead = await prisma.lead.findFirst({
       where: {
         fromEmail: fromEmail,
+        userId: req.user.id,
       },
     });
 
@@ -43,16 +44,25 @@ export const createLeadFromInbox = async (req, res) => {
       });
     }
 
-    console.log("REQ BODY:", req.body); // 🔍 keep for now
+    // 🔍 Clean logging (exclude massive HTML content)
+    console.log("📥 Creating lead:", {
+      fromEmail,
+      toEmail,
+      subject,
+      leadType,
+      attendeesCount: req.body.attendeesCount,
+      conversationId,
+    });
 
     // ✅ ONLY CREATE
 
     const lead = await prisma.lead.create({
       data: {
+        userId: req.user.id,
         email,
         name,
         subject,
-
+        attendeesCount: req.body.attendeesCount,
         fromName,
         fromEmail,
         toEmail,
@@ -99,6 +109,9 @@ export const createLeadFromInbox = async (req, res) => {
 export const getAllLeads = async (req, res) => {
   try {
     const leads = await prisma.lead.findMany({
+      where: {
+        userId: req.user.id, // ✅ Add this
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -121,7 +134,11 @@ export const getLeadById = async (req, res) => {
     const id = Number(req.params.id);
 
     const lead = await prisma.lead.findUnique({
-      where: { id },
+      where: { 
+        id: id,
+        userId: req.user.id,
+      },
+
     });
 
     if (!lead) {
@@ -162,11 +179,15 @@ export const updateLead = async (req, res) => {
     } = req.body;
 
     const updated = await prisma.lead.update({
-      where: { id },
+      where: {
+        id: id,
+        userId: req.user.id, // ✅ Add this
+      },
       data: {
         name,
         email,
         subject,
+        attendeesCount: req.body.attendeesCount,
 
         fromName,
         fromEmail,
@@ -208,7 +229,10 @@ export const deleteLead = async (req, res) => {
     const id = Number(req.params.id);
 
     await prisma.lead.delete({
-      where: { id },
+      where: { 
+        id: id,
+        userId: req.user.id, // ✅ Add this
+      },
     });
 
     res.json({ success: true, message: "Lead deleted" });

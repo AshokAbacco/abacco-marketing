@@ -70,16 +70,21 @@ model EmailAccount {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  empId     String?  @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id       String  @id @default(uuid())
+  email    String  @unique
+  password String
+  empId    String? @unique
+  name     String?
+  jobRole  String  @default("EMP")
+  isActive Boolean @default(true) // ✅ Active/Inactive status
 
   emailAccounts    EmailAccount[]
   ScheduledMessage ScheduledMessage[]
   Tag              Tag[]
+  Lead             Lead[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Conversation {
@@ -341,7 +346,8 @@ model Lead {
   subject String?
 
   // ===== Lead Classification =====
-  leadType LeadType?
+  leadType       LeadType?
+  attendeesCount Int?      @default(0)
 
   // ===== Contact Info =====
   fromName  String?
@@ -363,6 +369,9 @@ model Lead {
   conversationId String?
   totalMessages  Int     @default(0)
   thread         Json?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   // ===== System =====
   sentAt     DateTime?

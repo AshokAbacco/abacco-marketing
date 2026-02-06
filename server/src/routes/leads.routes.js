@@ -1,3 +1,4 @@
+// server/src/routes/leads.routes.js
 import express from "express";
 import {
   createLeadFromInbox,
@@ -7,12 +8,15 @@ import {
   updateLead,
 } from "../controllers/leads.controller.js";
 
+import { protect } from "../middlewares/authMiddleware.js";
+
 const router = express.Router();
 
-router.post("/create-from-inbox", createLeadFromInbox);
-router.get("/", getAllLeads);
-router.get("/:id", getLeadById);
-router.delete("/:id", deleteLead);
-router.put("/:id", updateLead);
+// ✅ Protected Routes
+router.post("/create-from-inbox", protect, createLeadFromInbox);
+router.get("/", protect, getAllLeads);
+router.get("/:id", protect, getLeadById);
+router.delete("/:id", protect, deleteLead);
+router.put("/:id", protect, updateLead);
 
 export default router;

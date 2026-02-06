@@ -1,4 +1,6 @@
+// Sidebar.jsx - Responsive and Interactive Sidebar Component
 import { NavLink } from "react-router-dom";
+import { useState, useEffect } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -18,10 +20,32 @@ const navigationItems = [
   { name: "Inbox", path: "/inbox", icon: Megaphone },
   { name: "Campaigns", path: "/campaigns", icon: Repeat },
   { name: "Analytics", path: "/analytics", icon: LineChart },
-  // { name: "Admin", path: "/admin", icon: Shield },
+  { name: "Admin", path: "/admin", icon: Shield },
 ];
 
 export default function Sidebar({ sidebarOpen, setSidebarOpen, setExpanded }) {
+  const [userData, setUserData] = useState(null);
+
+  // ✅ Fetch user data from localStorage on component mount
+  useEffect(() => {
+    const user = localStorage.getItem("user");
+    if (user) {
+      try {
+        setUserData(JSON.parse(user));
+      } catch (error) {
+        console.error("Error parsing user data:", error);
+      }
+    }
+  }, []);
+
+  // ✅ Get user's initials for avatar
+  const getInitials = (name) => {
+    if (!name) return "U";
+    const names = name.trim().split(" ");
+    if (names.length === 1) return names[0].charAt(0).toUpperCase();
+    return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
+  };
+
   return (
     <>
       {/* Mobile overlay */}
@@ -71,9 +95,19 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, setExpanded }) {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 overflow-y-auto">
-            <div className="space-y-1.5">
-              {navigationItems.map((item) => (
+          {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto">
+          <div className="space-y-1.5">
+            {/* ✅ Filter menu items based on role */}
+            {navigationItems
+              .filter((item) => {
+                // If user is NOT admin, hide Admin tab
+                if (item.name === "Admin" && userData?.jobRole !== "Admin") {
+                  return false;
+                }
+                return true;
+              })
+              .map((item) => (
                 <NavLink
                   key={item.name}
                   to={item.path}
@@ -84,20 +118,20 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, setExpanded }) {
                     px-3 py-3 rounded-xl text-sm font-medium 
                     transition-all duration-200
                     relative overflow-hidden
-                    ${isActive
-                      ? "bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-lg shadow-emerald-500/40 scale-100"
-                      : "text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-600 dark:hover:text-emerald-400 hover:scale-105"
+                    ${
+                      isActive
+                        ? "bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-lg shadow-emerald-500/40 scale-100"
+                        : "text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-600 dark:hover:text-emerald-400 hover:scale-105"
                     }
                   `
                   }
                 >
-                  {/* Active indicator */}
                   {({ isActive }) => (
                     <>
                       {isActive && (
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-white rounded-r-full" />
                       )}
-                      
+
                       {/* Icon */}
                       <div className="min-w-[20px] flex justify-center">
                         <item.icon size={20} strokeWidth={isActive ? 2.5 : 2} />
@@ -118,18 +152,25 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen, setExpanded }) {
                   )}
                 </NavLink>
               ))}
-            </div>
-          </nav>
+          </div>
+        </nav>
+
 
           {/* Footer - user section */}
           <div className="pt-4 mt-4 border-t border-emerald-200 dark:border-emerald-900/50">
             <div className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-all duration-200 cursor-pointer">
-              <div className="min-w-[20px] h-9 w-9 rounded-full bg-gradient-to-br from-emerald-400 to-green-500 flex items-center justify-center shadow-md">
-                <span className="text-sm font-bold text-white">U</span>
+              <div className="min-w-[30px] h-9 w-9 rounded-full bg-gradient-to-br from-emerald-400 to-green-500 flex items-center justify-center shadow-md">
+                <span className="text-sm font-bold text-white">
+                  {userData ? getInitials(userData.name) : "U"}
+                </span>
               </div>
               <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">User</p>
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">user@abacco.com</p>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  {userData?.name || "User"}
+                </p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                  {userData?.email || "user@abacco.com"}
+                </p>
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ import AnalyticsDashboard from "./pages/analytics/AnalyticsDashboard";
 import FollowUpRules from "./pages/followup/FollowUpRules";
 import MainInbox from "./pages/campaigns/MainInbox.jsx";
 import Login from "./pages/auth/Login.jsx";
+import Users from "./pages/admin/Users.jsx";
 export default function App() {
   return (
     <Routes>
@@ -21,6 +22,7 @@ export default function App() {
 
       <Route path="/campaigns" element={<AppLayout><CampaignList /></AppLayout>} />
       <Route path="/inbox" element={<AppLayout><MainInbox /></AppLayout>} />
+      <Route path="/admin" element={<AppLayout><Users /></AppLayout>} />
 
 
       <Route path="/analytics" element={<AppLayout><AnalyticsDashboard /></AppLayout>} />

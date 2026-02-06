@@ -13,6 +13,7 @@ import campaignsRoutes from "./src/routes/campaigns.routes.js";
 import pitchRoutes from "./src/routes/pitch.routes.js";
 import leadsRoutes from "./src/routes/leads.routes.js";
 import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
+import analyticsRoutes from "./src/routes/analytics.routes.js";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -44,7 +45,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/pitches", pitchRoutes);
 app.use("/api/leads", leadsRoutes);
 app.use("/api/campaigns", campaignsRoutes);
-
+app.use("/api/analytics", analyticsRoutes);
 // --------------------
 // Health check (IMPORTANT)
 // --------------------
