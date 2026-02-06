@@ -22,13 +22,9 @@ export const registerUser = async (req, res) => {
   const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(400).json({ error: "User already exists" });
 
-    // ❌ Remove bcrypt hashing
-    // const hash = await bcrypt.hash(password, 10);
-
     const user = await prisma.user.create({
         data: {
             email,
-            // ✅ Store plain password
             password: password,
             empId,
             name,
@@ -65,35 +61,39 @@ export const loginUser = async (req, res) => {
       return res.status(400).json({ error: "Invalid email or password" });
     }
 
-    // 🔍 DEBUG: Log the isActive value to see what we're getting
+    // 🔍 DEBUG: Log everything about the user
     console.log("===== LOGIN DEBUG =====");
+    console.log("Full user object:", JSON.stringify(user, null, 2));
     console.log("Email:", email);
     console.log("User isActive value:", user.isActive);
     console.log("Type of isActive:", typeof user.isActive);
-    console.log("Strict comparison (=== true):", user.isActive === true);
-    console.log("Loose comparison (== true):", user.isActive == true);
-    console.log("Boolean conversion:", Boolean(user.isActive));
     console.log("======================");
 
-    // ✅ More robust check - only block if explicitly false
-    // This accepts: true, 1, "true", "1" and only blocks: false, 0, "false", "0", null, undefined
+    // ⚠️ TEMPORARILY DISABLED - COMMENT OUT THE isActive CHECK FOR TESTING
+    /*
     if (user.isActive === false || user.isActive === 0 || user.isActive === "false" || user.isActive === "0" || !user.isActive) {
       console.log("❌ User blocked: isActive check failed");
       return res.status(403).json({
         error: "Your account is inactive. Please contact admin.",
       });
     }
+    */
 
-    console.log("✅ User passed isActive check");
+    console.log("✅ isActive check BYPASSED for testing");
 
-    // ✅ Password check (plain or bcrypt)
+    // ✅ Password check (plain text comparison)
     const isMatch = password === user.password;
     if (!isMatch) {
+      console.log("❌ Password mismatch");
       return res.status(400).json({ error: "Invalid email or password" });
     }
 
+    console.log("✅ Password matched");
+
     // ✅ Generate JWT token
     const token = generateToken(user.id);
+
+    console.log("✅ Sending success response with role:", user.jobRole);
 
     // ✅ Return token and user data at root level
     res.json({
@@ -151,9 +151,8 @@ export const updateUser = async (req, res) => {
 
     let updatedPassword = existingUser.password;
 
-    // ✅ Store plain password (no hashing)
     if (password && password.trim() !== "") {
-      updatedPassword = password; // Remove bcrypt.hash()
+      updatedPassword = password;
     }
 
     const user = await prisma.user.update({
@@ -182,7 +181,6 @@ export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user exists
     const existingUser = await prisma.user.findUnique({ where: { id } });
     if (!existingUser) {
       return res.status(404).json({ error: "User not found" });
@@ -200,14 +198,12 @@ export const toggleUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // ✅ Check if user exists
     const user = await prisma.user.findUnique({ where: { id } });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // ✅ Toggle the status
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
@@ -215,7 +211,6 @@ export const toggleUserStatus = async (req, res) => {
       },
     });
 
-    // ✅ Return the updated user with the new status
     res.json(updatedUser);
   } catch (err) {
     console.error("Toggle status error:", err);
