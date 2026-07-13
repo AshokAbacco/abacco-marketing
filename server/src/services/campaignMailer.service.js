@@ -170,7 +170,7 @@ function buildSignature(account, senderRole, baseStyles = {}) {
   const role     = senderRole?.trim() || "Marketing Analyst";
   const sigColor = baseStyles.color      || "#000000";
   const sigFont  = baseStyles.fontFamily || "Calibri, sans-serif";
-  const sigSize  = baseStyles.fontSize   || "15px";
+  const sigSize  = baseStyles.fontSize   || "16px";
 
   return `
     <div style="margin-top:16px; font-family:${sigFont}; font-size:${sigSize}; line-height:1.6; color:${sigColor};">
@@ -346,6 +346,7 @@ function extractBaseStyles(html) {
 
 const BATCH_SIZE  = 10;
 const CONCURRENCY = 2; // FIX: defined at module level, not inside a loop
+const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function createTransporter(account, smtpPassword) {
   const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
@@ -444,35 +445,102 @@ function buildNormalEmailHtml(body, signature, baseStyles) {
    SECTION 3 — RETRY / ERROR HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
 
-async function sendWithRetry(sendFn, retries = 1) {
+// Max number of times a single recipient may be bounced back to "pending"
+// after a temporary/unclassified error before we give up and mark it failed.
+// Exported so server.js's stuck-email recovery job uses the same budget
+// instead of a separate, inconsistent cap on the same retryCount field.
+export const MAX_TRANSIENT_RETRIES = 5;
+
+/**
+ * Permanent (non-retryable) failures: invalid/nonexistent recipients, hard
+ * bounces, and auth/config problems. These should be marked "failed"
+ * immediately — retrying them just wastes time and SMTP connections.
+ */
+function isPermanentError(err) {
+  const msg  = (err.message  || "").toLowerCase();
+  const code = err.responseCode || err.code;
+
+  // Any SMTP 5xx reply is a hard bounce / permanent rejection by definition.
+  if (typeof code === "number" && code >= 500 && code < 600) return true;
+
+  return (
+    /\b55[0-9]\b/.test(msg)                ||   // 550, 551, 553, 554...
+    msg.includes("no such user")           ||
+    msg.includes("user unknown")           ||
+    msg.includes("user not found")         ||
+    msg.includes("mailbox not found")      ||
+    msg.includes("mailbox unavailable")    ||
+    msg.includes("recipient address rejected") ||
+    msg.includes("address rejected")       ||
+    msg.includes("recipient rejected")     ||
+    msg.includes("does not exist")         ||
+    msg.includes("invalid recipient")      ||
+    msg.includes("invalid mailbox")        ||
+    msg.includes("no mailbox")             ||
+    msg.includes("relay access denied")    ||
+    msg.includes("authentication failed")  ||
+    msg.includes("invalid login")          ||
+    msg.includes("invalid credentials")    ||
+    msg.includes("bad credentials")        ||
+    msg.includes("eauth")                  ||
+    msg.includes("invalid address")        ||
+    msg.includes("daily user sending limit exceeded")
+  );
+}
+
+/**
+ * Temporary / transient failures: worth retrying (timeouts, rate limiting,
+ * dropped connections, SMTP 4xx soft bounces). Anything that is neither
+ * clearly permanent nor clearly temporary is treated as temporary by default
+ * — an unrecognized error is far more likely to be a transient blip than an
+ * invalid address, and MAX_TRANSIENT_RETRIES keeps it from retrying forever.
+ */
+function isTemporaryError(err) {
+  if (isPermanentError(err)) return false;
+
+  const msg  = (err.message || "").toLowerCase();
+  const code = err.responseCode || err.code;
+
+  if (typeof code === "number" && code >= 400 && code < 500) return true;
+
+  // Recognized transient patterns (kept mainly for logging/clarity — see
+  // the docstring above: anything NOT matched by isPermanentError already
+  // falls through to `true` below, since an unrecognized error is far more
+  // likely to be a transient blip than a bad address).
+  void msg; // msg still useful if extending the pattern list below
+  return true;
+}
+
+/**
+ * Sends via sendFn, retrying transient failures with exponential backoff.
+ * Each attempt gets its own timeout (rather than one timeout wrapped around
+ * every retry), so a slow attempt doesn't eat the whole retry budget.
+ * Permanent errors (bad recipient, auth failure, etc.) fail fast — no point
+ * retrying those.
+ */
+async function sendWithRetry(sendFn, { retries = 3, attemptTimeoutMs = 20000 } = {}) {
   let lastError;
   for (let i = 1; i <= retries; i++) {
     try {
-      return await sendFn();
+      return await Promise.race([
+        sendFn(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("SMTP attempt timed out")), attemptTimeoutMs)
+        ),
+      ]);
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️ Retry ${i} failed:`, err.message);
-      await sleep(2000 * i);
+      console.warn(`⚠️ SMTP attempt ${i}/${retries} failed:`, err.message);
+
+      if (isPermanentError(err)) throw err; // fail fast, don't burn retries
+
+      if (i < retries) {
+        const backoff = Math.min(2000 * 2 ** (i - 1), 15000);
+        await sleep(backoff);
+      }
     }
   }
   throw lastError;
-}
-
-function isTemporaryError(err) {
-  const msg = (err.message || "").toLowerCase();
-  if (msg.includes("daily user sending limit exceeded")) return false;
-  return (
-    msg.includes("timeout")    ||
-    msg.includes("connection") ||
-    msg.includes("rate")       ||
-    msg.includes("421")        ||
-    msg.includes("450")        ||
-    msg.includes("too many")   ||
-    msg.includes("econnreset") ||
-    msg.includes("etimedout")  ||
-    msg.includes("socket")     ||
-    msg.includes("network")
-  );
 }
 
 
@@ -519,6 +587,16 @@ async function runBatch(batch, ctx) {
     continue;
   }
 
+  // Fail fast on obviously malformed addresses — genuinely permanent, no
+  // point spending an SMTP connection or a retry slot on these.
+  if (!EMAIL_FORMAT_RE.test(recipient.email || "")) {
+    await prisma.campaignRecipient.update({
+      where: { id: recipient.id },
+      data: { status: "failed", error: "Invalid email address format" },
+    }).catch(() => {});
+    continue;
+  }
+
   try {
     if (campaign.sendType === "followup") {
       await sendOneFollowup({
@@ -550,11 +628,42 @@ async function runBatch(batch, ctx) {
   } catch (err) {
     console.error(`❌ Failed → ${recipient.email}:`, err.message);
 
+    const permanent       = isPermanentError(err);
+    const currentRetries  = recipient.retryCount || 0;
+    const nextRetryCount  = currentRetries + 1;
+    const errMsg          = err.message?.slice(0, 500) || "Unknown error";
+
+    if (!permanent && nextRetryCount <= MAX_TRANSIENT_RETRIES) {
+      // Temporary failure (timeout, rate limit, dropped connection, etc.) —
+      // requeue as "pending" so the batch loop above picks it up again on a
+      // later pass, instead of permanently marking a good address as failed.
+      await prisma.campaignRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status:      "pending",
+          retryCount:  nextRetryCount,
+          lastTriedAt: new Date(),
+          error:       `Retry ${nextRetryCount}/${MAX_TRANSIENT_RETRIES} scheduled: ${errMsg}`,
+        },
+      }).catch(() => {});
+
+      // Back off briefly before the next send so we don't immediately
+      // hammer a server that just rate-limited or dropped us.
+      await sleep(Math.min(2000 * nextRetryCount, 10000));
+      continue;
+    }
+
+    // Genuine permanent failure, or a temporary one that has exhausted its
+    // retry budget — mark failed for good.
     await prisma.campaignRecipient.update({
       where: { id: recipient.id },
       data: {
-        status: "failed",
-        error: err.message?.slice(0, 500) || "Unknown error",
+        status:      "failed",
+        retryCount:  nextRetryCount,
+        lastTriedAt: new Date(),
+        error: permanent
+          ? errMsg
+          : `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded: ${errMsg}`,
       },
     }).catch(() => {});
   }
@@ -792,8 +901,8 @@ async function processAccountBatched({
 
     const html = buildNormalEmailHtml(body, signature, baseStyles);
 
-    await Promise.race([
-      sendWithRetry(() =>
+    await sendWithRetry(
+      () =>
         transporter.sendMail({
           from: account.senderName
             ? `"${account.senderName}" <${fromEmail}>`
@@ -801,12 +910,9 @@ async function processAccountBatched({
           to:      recipient.email,
           subject,
           html,
-        })
-      ),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Hard Timeout")), 20000)
-      ),
-    ]);
+        }),
+      { retries: 3, attemptTimeoutMs: 20000 }
+    );
 
     await prisma.conversation.upsert({
       where:  { id: `${account.id}_sent_${recipient.email}` },
@@ -945,11 +1051,11 @@ async function processAccountBatched({
         .trim();
     }
 
-    console.log(
-      `📨 originalBody for ${recipient.email}: ${
-        originalBody ? originalBody.length + " chars extracted" : "EMPTY"
-      }`
-    );
+    // console.log(
+    //   `📨 originalBody for ${recipient.email}: ${
+    //     originalBody ? originalBody.length + " chars extracted" : "EMPTY"
+    //   }`
+    // );
 
     const originalSubject = prevEmail.sentSubject  || fallbackSubject || "";
     const originalFrom    = prevEmail.sentFromEmail || fromEmail;
@@ -1013,16 +1119,18 @@ async function processAccountBatched({
       : {};
 
     try {
-      await sendWithRetry(() =>
-        actualTransporter.sendMail({
-          from: actualAccount.senderName
-            ? `"${actualAccount.senderName}" <${actualFromEmail}>`
-            : actualFromEmail,
-          to:      recipient.email,
-          subject,
-          html,
-          headers: threadingHeaders,
-        })
+      await sendWithRetry(
+        () =>
+          actualTransporter.sendMail({
+            from: actualAccount.senderName
+              ? `"${actualAccount.senderName}" <${actualFromEmail}>`
+              : actualFromEmail,
+            to:      recipient.email,
+            subject,
+            html,
+            headers: threadingHeaders,
+          }),
+        { retries: 3, attemptTimeoutMs: 20000 }
       );
     } catch (err) {
       console.error("❌ FOLLOW-UP SEND ERROR:", {

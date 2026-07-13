@@ -534,7 +534,11 @@ router.delete("/:id", protect, async (req, res) => {
    ============================================================ */
 router.get("/", protect, async (req, res) => {
   try {
-    const cacheKey = `accounts:${req.user.id}`;
+  const groupId = req.query.groupId;
+
+  const cacheKey = groupId
+    ? `accounts:${req.user.id}:group:${groupId}`
+    : `accounts:${req.user.id}:all`;
     const cached = cache.get(cacheKey);
 
     if (cached) {
@@ -543,7 +547,14 @@ router.get("/", protect, async (req, res) => {
     }
 
     const accounts = await prisma.emailAccount.findMany({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+
+        ...(groupId
+          ? { groupId: Number(groupId) }
+          : {}),
+      },
+
       select: {
         id: true,
         email: true,
@@ -551,9 +562,12 @@ router.get("/", protect, async (req, res) => {
         senderName: true,
         verified: true,
         createdAt: true,
-        groupId: true, // ✅ Required for sidebar group grouping
+        groupId: true,
       },
-      orderBy: { createdAt: "desc" },
+
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
     cache.set(cacheKey, accounts, 60); // 60 seconds
@@ -581,16 +595,14 @@ router.get("/sync/:email", async (req, res) => {
 
     await runSyncForAccount(prisma, email);
 
-    const messages = await prisma.emailMessage.findMany({
-      where: { emailAccountId: account.id },
-      orderBy: { sentAt: "desc" },
-      include: { attachments: true },
-    });
-
-    res.json({
-      success: true,
-      messages,
-    });
+    // NOTE: This route only triggers an IMAP sync — the caller (Refresh
+    // button) re-fetches the paginated conversation list separately via
+    // GET /api/inbox/conversations/:accountId. Previously this endpoint
+    // also loaded every message (with attachments) for the account and
+    // returned them, even though nothing consumed that payload — on an
+    // account with a large mailbox that alone could take seconds and
+    // move a lot of data for no reason.
+    res.json({ success: true });
   } catch (err) {
     console.error("SYNC ERROR:", err);
     res.status(500).json({ error: err.message });

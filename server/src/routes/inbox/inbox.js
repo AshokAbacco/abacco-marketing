@@ -170,25 +170,40 @@ function formatMessages(messages) {
 }
 
 /* =========================================================
-   GET CONVERSATIONS
+   GET CONVERSATIONS  (PAGINATED)
    GET /api/inbox/conversations/:accountId
        ?folder=inbox
        &monthFilter=current|last|three   ← NEW
+       &limit=10                          ← NEW (default 10, max 100)
+       &page=0                            ← NEW (0-indexed page number)
 
    monthFilter defaults to "current" when omitted.
+   limit defaults to 10 so the initial load per account is cheap —
+   this is the fix for the "fetches everything from every account
+   at once" slowdown. The frontend calls again with page+1 (same
+   limit) to implement "Load More" for that one account only.
 
-   Results are capped at 200, sorted by sentAt DESC.
-   Cache key now includes monthFilter so each bucket is
-   stored and invalidated independently.
+   Cache key includes monthFilter (not limit/page) and is only
+   used for the very first page (page=0, limit=10) — the common
+   case on folder open. Subsequent "Load More" pages always hit
+   the DB directly since they're one-off requests and caching
+   every page would make invalidation (clearAllFolderCaches)
+   unreliable.
 ========================================================= */
 router.get("/conversations/:accountId", protect, async (req, res) => {
   try {
     const accountId = Number(req.params.accountId);
     const { folder = "inbox", monthFilter = "current", bust } = req.query;
 
+    // ── Pagination params ────────────────────────────────────
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
+    const offset = page * limit;
+
     const safeFilter = MONTH_FILTERS.includes(monthFilter) ? monthFilter : "current";
     const cacheKey = `inbox:${req.user.id}:${accountId}:${folder}:${safeFilter}`;
-    const cached = !bust ? cache.get(cacheKey) : null; // skip cache when bust param present
+    const isCacheablePage = page === 0 && limit === 10;
+    const cached = !bust && isCacheablePage ? cache.get(cacheKey) : null; // skip cache when bust param present
 
     // ── Return cache instantly — NO sync triggered here ──────
     // Sync is triggered only by explicit Refresh button or the
@@ -196,7 +211,13 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
     // a full IMAP sync on every inbox load was the main cause of
     // 5-10 minute wait times.
     if (cached) {
-      return res.json({ success: true, data: cached, fromCache: true });
+      return res.json({
+        success: true,
+        data: cached.data,
+        hasMore: cached.hasMore,
+        page,
+        fromCache: true,
+      });
     }
 
     // ── Cache miss: query DB directly, fast ──────────────────
@@ -219,12 +240,17 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
     }
 
     // Get one latest message per conversation using a subquery approach:
-    // Fetch latest 500 messages then deduplicate — much faster than
-    // fetching all messages and joining conversations.
+    // fetch just enough of the latest messages to cover the requested
+    // page once deduplicated to one-row-per-conversation, instead of
+    // pulling the whole mailbox. The multiplier accounts for multiple
+    // messages per conversation; capped so a single request can never
+    // scan more than ~2000 rows regardless of how deep "Load More" goes.
+    const fetchTake = Math.min((offset + limit) * 5 + 20, 2000);
+
     const messages = await prisma.emailMessage.findMany({
       where: msgWhere,
       orderBy: { sentAt: "desc" },
-      take: 500,
+      take: fetchTake,
       select: {
         id: true,
         conversationId: true,
@@ -251,13 +277,18 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
       return true;
     });
 
-    // Cap at 200 conversations
-    const result = deduplicated.slice(0, 200);
+    // Slice out just the requested page of conversations
+    const pageItems = deduplicated.slice(offset, offset + limit);
+    // hasMore is a best-effort signal: true if we already know of more
+    // deduplicated conversations beyond this page within what we fetched.
+    const hasMore = deduplicated.length > offset + limit;
 
-    // Cache for 30 seconds
-    cache.set(cacheKey, result, 30);
+    if (isCacheablePage) {
+      // Cache for 30 seconds (first-page only)
+      cache.set(cacheKey, { data: pageItems, hasMore }, 30);
+    }
 
-    return res.json({ success: true, data: result, fromCache: false });
+    return res.json({ success: true, data: pageItems, hasMore, page, fromCache: false });
   } catch (err) {
     console.error("Conversations error:", err);
     res.status(500).json({ success: false, error: err.message });

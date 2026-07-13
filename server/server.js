@@ -17,7 +17,7 @@ import analyticsRoutes from "./src/routes/analytics.routes.js";
 import accountGroupsRoutes from "./src/routes/inbox/accountGroups.js";
 
 import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
-import { sendBulkCampaign } from "./src/services/campaignMailer.service.js";
+import { sendBulkCampaign, MAX_TRANSIENT_RETRIES } from "./src/services/campaignMailer.service.js";
 import { startFollowupCleanupJob } from "./src/controllers/campaigns.controller.js";
 
 const app = express();
@@ -77,14 +77,22 @@ app.get("/api/health", (req, res) => {
  */
 async function recoverStuckEmails() {
   try {
-    const STUCK_THRESHOLD_MS = 30 * 1000; // 30 seconds
+    // Each send attempt now gets up to ~20s, retried up to 3x with backoff
+    // inside campaignMailer.service.js (worst case ~75-80s per recipient)
+    // before the row's status is updated. This threshold must stay safely
+    // above that, or this job can race an in-flight retry, reset the row to
+    // "pending" while it's still being processed, and let it get picked up
+    // and sent a second time. 3 minutes gives a comfortable margin.
+    const STUCK_THRESHOLD_MS = 3 * 60 * 1000;
 
-    // Reset emails stuck in processing (under retry limit)
+    // Reset emails stuck in processing (under retry limit) — this only
+    // fires for rows whose worker genuinely died (e.g. server restart),
+    // not ones actively being retried within the normal flow above.
     const recovered = await prisma.campaignRecipient.updateMany({
       where: {
         status:    "processing",
         updatedAt: { lt: new Date(Date.now() - STUCK_THRESHOLD_MS) },
-        retryCount: { lt: 2 },
+        retryCount: { lt: MAX_TRANSIENT_RETRIES },
       },
       data: {
         status:     "pending",
@@ -99,11 +107,11 @@ async function recoverStuckEmails() {
       where: {
         status:     "processing",
         updatedAt:  { lt: new Date(Date.now() - STUCK_THRESHOLD_MS) },
-        retryCount: { gte: 2 },
+        retryCount: { gte: MAX_TRANSIENT_RETRIES },
       },
       data: {
         status:    "failed",
-        error:     "Max retries exceeded",
+        error:     `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded after being stuck`,
         updatedAt: new Date(),
       },
     });
@@ -112,7 +120,7 @@ async function recoverStuckEmails() {
       console.log(`♻️ Recovered ${recovered.count} stuck emails → pending`);
     }
     if (failed.count > 0) {
-      console.log(`❌ Marked ${failed.count} emails as failed (max 2 retries)`);
+      console.log(`❌ Marked ${failed.count} emails as failed (max ${MAX_TRANSIENT_RETRIES} retries)`);
     }
 
   } catch (err) {

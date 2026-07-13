@@ -33,6 +33,7 @@ export default function InboxMain() {
 
   // ── Accounts ─────────────────────────────────────────────
   const [accounts, setAccounts] = useState([]);
+  const [unreadCounts, setUnreadCounts] = useState({});
   const [loadingAccounts, setLoadingAccounts] = useState(true);
 
   // ── Selection ────────────────────────────────────────────
@@ -76,10 +77,6 @@ export default function InboxMain() {
   // ── Conversations ─────────────────────────────────────────
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  // ── Polling ───────────────────────────────────────────────
-  const lastFetchTimeRef = useRef(Date.now());
-  const pollingIntervalRef = useRef(null);
 
   // ──────────────────────────────────────────────────────────
   // SYNC GROUP FROM URL — fires whenever ?groupId changes
@@ -139,7 +136,12 @@ export default function InboxMain() {
   const fetchAccounts = async () => {
     try {
       setLoadingAccounts(true);
-      const response = await api.get(`${API_BASE_URL}/api/accounts`);
+      const groupId = searchParams.get("groupId");
+      const url = groupId
+        ? `${API_BASE_URL}/api/accounts?groupId=${groupId}`
+        : `${API_BASE_URL}/api/accounts`;
+
+      const response = await api.get(url);
       const accountsData = Array.isArray(response.data?.data)
         ? response.data.data
         : [];
@@ -190,60 +192,17 @@ export default function InboxMain() {
     }
   };
 
-// ──────────────────────────────────────────────────────────
-// POLLING
-// ──────────────────────────────────────────────────────────
-useEffect(() => {
-  if (!selectedAccount?.id) return;
-
-  if (pollingIntervalRef.current) {
-    clearInterval(pollingIntervalRef.current);
-  }
-
-  pollingIntervalRef.current = setInterval(() => {
-    fetchConversations(true);
-  }, 15000);
-
-  return () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-    }
-  };
-}, [selectedAccount?.id]); // ✅ CLOSE properly
-
-// ── Polling: refresh conversations every 30s ─────────────
-useEffect(() => {
-  if (!selectedAccount?.id) return;
-
-  if (pollingIntervalRef.current) {
-    clearInterval(pollingIntervalRef.current);
-  }
-
-  pollingIntervalRef.current = setInterval(() => {
-    fetchConversations(true);
-  }, 30000);
-
-  return () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-    }
-  };
-}, [selectedAccount?.id, selectedFolder, monthFilter]);
-
-  // ── Fetch when account/folder/monthFilter changes ────────
-  useEffect(() => {
-    if (!selectedAccount?.id) return;
-    fetchConversations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAccount?.id, selectedFolder, monthFilter]);
-
   // ── Fetch when view/filters/search changes ───────────────
+  // NOTE: the plain "inbox" case is intentionally NOT handled here anymore —
+  // ConversationList (EmailList.jsx) fetches (and paginates + polls + caches)
+  // conversations for the active account/folder/monthFilter on its own.
+  // Bumping refreshKey tells it to do a cache-bypassing refresh instead of
+  // this component fetching an un-paginated copy in parallel.
   useEffect(() => {
     if (!selectedAccount) return;
     if (activeView === "today") { fetchTodayFollowUps(); return; }
     if (searchEmail?.trim()) fetchSearchResults();
-    // Only re-fetch inbox when filters or search change — not on every render
-    else if (activeView === "inbox") fetchConversations();
+    else if (activeView === "inbox") setRefreshKey((prev) => prev + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, filters, searchEmail]);
 
@@ -289,28 +248,6 @@ useEffect(() => {
   // ──────────────────────────────────────────────────────────
   // FETCH CONVERSATIONS
   // ──────────────────────────────────────────────────────────
-  const fetchConversations = async (forceRefresh = false) => {
-    if (!selectedAccount) return;
-    try {
-      setLoading(true);
-      const params = {
-        folder: selectedFolder,
-        monthFilter: monthFilter,
-        ...(forceRefresh ? { bust: Date.now() } : {}), // breaks cache key server-side
-      };
-      const res = await api.get(
-        `${API_BASE_URL}/api/inbox/conversations/${selectedAccount.id}`,
-        { params }
-      );
-      setConversations(res.data?.data || []);
-    } catch (err) {
-      console.error("Failed to fetch conversations:", err);
-      setConversations([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // ──────────────────────────────────────────────────────────
   // FETCH TODAY FOLLOW-UPS
   // ──────────────────────────────────────────────────────────
@@ -436,7 +373,7 @@ useEffect(() => {
       conversationId((prev) => prev.filter((c) => c.conversationId !== conversationId));
       if (selectedConversation?.conversationId === conversationId) setSelectedConversation(null);
     } else {
-      fetchConversations(true);
+      setRefreshKey((prev) => prev + 1);
       fetchAccounts();
     }
   };
@@ -459,7 +396,6 @@ useEffect(() => {
       }
     }
     setRefreshKey((prev) => prev + 1);
-    fetchConversations(true);
   };
 
   // ──────────────────────────────────────────────────────────

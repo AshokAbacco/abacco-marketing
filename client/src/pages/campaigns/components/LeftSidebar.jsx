@@ -54,26 +54,32 @@ export default function ModernSidebar({
   // ── Unread fetch ──────────────────────────────────────────────────────
   const fetchUnreadCounts = async (baseAccounts) => {
     const source = baseAccounts || accounts;
+
     if (!source.length) return;
+
     try {
-      const updated = await Promise.all(
-        source.map(async (account) => {
-          try {
-            const res = await api.get(
-              `${API_BASE_URL}/api/inbox/accounts/${account.id}/unread`
-            );
-            const count = res.data?.data?.inboxUnread || 0;
-            unreadMapRef.current[account.id] = count;
-            return { ...account, unreadCount: count };
-          } catch {
-            unreadMapRef.current[account.id] = 0;
-            return { ...account, unreadCount: 0 };
-          }
-        })
+      // ✅ ONE BULK REQUEST INSTEAD OF MANY
+      const res = await api.post(
+        `${API_BASE_URL}/api/inbox/accounts/unread-bulk`,
+        {
+          accountIds: source.map((a) => a.id),
+        }
       );
-      setAccountsWithUnread(updated);
+
+      const unreadData = res.data?.data || {};
+
+      const updatedMap = {};
+
+      source.forEach((account) => {
+        updatedMap[account.id] = unreadData[account.id] || 0;
+      });
+
+      unreadMapRef.current = updatedMap;
+
+      setUnreadCounts(updatedMap);
+
     } catch (err) {
-      console.error("Failed to fetch unread counts:", err);
+      console.error("Unread fetch failed:", err);
     }
   };
 

@@ -27,11 +27,32 @@ export default function ConversationList({
   // no emails arrived this month yet, the list looks empty even though emails exist.
   monthFilter = "current",
 }) {
+  // How many conversations each "page" contains. Initial load and each
+  // "Load More" click fetch exactly this many for the CURRENT account only —
+  // other accounts / other open tabs are completely unaffected.
+  const PAGE_SIZE = 10;
+
   const [sortBy, setSortBy] = useState("sender");
   const [sortOrder, setSortOrder] = useState("desc");
 
   const [loading, setLoading]       = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Next page index to fetch when "Load More" is clicked (0-indexed).
+  const [page, setPage] = useState(0);
+  // Whether the current account/folder/monthFilter still has more
+  // conversations beyond what's currently loaded.
+  const [hasMore, setHasMore] = useState(false);
+
+  // In-memory cache keyed by `${accountId}:${folder}:${monthFilter}` so
+  // reopening a folder you've already viewed this session is instant and
+  // doesn't refetch — matches "cache already fetched emails" requirement.
+  const cacheRef = useRef(new Map());
+  // Tracks how many conversations are currently loaded, so a background
+  // refresh can re-request "what's already showing" instead of resetting
+  // back down to just the first page.
+  const loadedCountRef = useRef(0);
 
   const [showMoreMenu, setShowMoreMenu]           = useState(false);
   const [selectAll, setSelectAll]                 = useState(false);
@@ -63,52 +84,97 @@ export default function ConversationList({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const fetchEmails = async (isBackground = false) => {
+  useEffect(() => {
+    loadedCountRef.current = conversations.length;
+  }, [conversations]);
+
+  const cacheKeyFor = (accountId, folder, mf) => `${accountId}:${folder}:${mf}`;
+
+  /**
+   * fetchEmails — single entry point for all conversation fetching for THIS
+   * account's list. Modes:
+   *   - default (no flags):     initial load for a newly selected account/folder
+   *   - background: true        silent refresh (polling) or auto-retry-on-empty;
+   *                             re-requests only as many items as are already
+   *                             showing, so it never shrinks a "Load More"'d list
+   *   - loadMore: true          fetch the NEXT page (PAGE_SIZE more) and append
+   *   - forceRefresh: true      bypass server cache (Refresh button)
+   */
+  const fetchEmails = async ({ background = false, loadMore = false, forceRefresh = false } = {}) => {
     if (!selectedAccount?.id) return;
 
-    // Only show the full-page loading spinner on a TRUE first load
-    // (i.e. no conversations are showing yet). Background polls and
-    // refreshKey-triggered re-fetches must NEVER blank the list.
-    if (!isBackground && conversations.length === 0) setLoading(true);
+    const key = cacheKeyFor(selectedAccount.id, selectedFolder, monthFilter);
+
+    if (loadMore) setLoadingMore(true);
+    else if (!background && conversations.length === 0) setLoading(true);
     else setRefreshing(true);
 
     try {
+      const targetPage = loadMore ? page : 0;
+      // Background refreshes re-request "everything already on screen" (at
+      // least one page) instead of always PAGE_SIZE, so a poll never
+      // discards conversations the user already loaded with "Load More".
+      const effectiveLimit = loadMore
+        ? PAGE_SIZE
+        : Math.max(loadedCountRef.current, PAGE_SIZE);
+
       const res = await api.get(
         `${API_BASE_URL}/api/inbox/conversations/${selectedAccount.id}`,
         {
           params: {
             folder: selectedFolder,
-            monthFilter,   // ← always send the active filter
+            monthFilter,
+            limit: effectiveLimit,
+            page: targetPage,
+            ...(forceRefresh ? { bust: Date.now() } : {}),
           },
         }
       );
 
-      const incoming = res.data.data;
+      const incoming = Array.isArray(res.data?.data) ? res.data.data : [];
+      const more = !!res.data?.hasMore;
 
-      if (isBackground) {
-        // ── BACKGROUND POLL ──────────────────────────────────────────────────
+      if (loadMore) {
+        // ── LOAD MORE (this account only) ──────────────────────────────
+        setConversations((prev) => {
+          const merged = [...prev, ...incoming];
+          cacheRef.current.set(key, { conversations: merged, hasMore: more, page: targetPage + 1 });
+          return merged;
+        });
+        setPage(targetPage + 1);
+        setHasMore(more);
+        return;
+      }
+
+      if (background) {
+        // ── BACKGROUND POLL / RETRY ─────────────────────────────────────
         // Never replace a non-empty list with an empty response.
         // The server may return [] while an IMAP sync is still running —
         // keeping the existing list avoids the blank-screen flash.
-        if (Array.isArray(incoming) && incoming.length > 0) {
-          // Detect genuinely new conversations (not in current list)
-          const currentIds = new Set(conversations.map(c => c.conversationId));
-          const newOnes = incoming.filter(c => !currentIds.has(c.conversationId));
+        if (incoming.length > 0) {
+          const currentIds = new Set(conversations.map((c) => c.conversationId));
+          const newOnes = incoming.filter((c) => !currentIds.has(c.conversationId));
           if (newOnes.length > 0) {
             setNewMailCount(newOnes.length);
-            // Auto-dismiss toast after 4s
             setTimeout(() => setNewMailCount(0), 4000);
           }
           setConversations(incoming);
+          setHasMore(more);
+          const loadedPages = Math.max(1, Math.ceil(incoming.length / PAGE_SIZE));
+          setPage(loadedPages);
+          cacheRef.current.set(key, { conversations: incoming, hasMore: more, page: loadedPages });
           retryCountRef.current = 0; // reset retry counter once we have data
         }
         // If empty on background → silently keep whatever is already showing
-
       } else {
         // ── INITIAL / MANUAL FETCH ───────────────────────────────────────────
-        if (Array.isArray(incoming) && incoming.length > 0) {
+        if (incoming.length > 0) {
           // Got real data — show it and cancel any pending retry
           setConversations(incoming);
+          setHasMore(more);
+          const loadedPages = Math.max(1, Math.ceil(incoming.length / PAGE_SIZE));
+          setPage(loadedPages);
+          cacheRef.current.set(key, { conversations: incoming, hasMore: more, page: loadedPages });
           retryCountRef.current = 0;
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
         } else {
@@ -117,41 +183,79 @@ export default function ConversationList({
           // (at 4 s, 8 s, 14 s) so emails appear automatically without the
           // user having to click Refresh.
           setConversations([]);
+          setHasMore(false);
+          setPage(0);
+          cacheRef.current.set(key, { conversations: [], hasMore: false, page: 0 });
 
           if (retryCountRef.current < 3) {
             const delay = [4000, 8000, 14000][retryCountRef.current];
             retryCountRef.current += 1;
             console.log(`📭 Empty inbox — auto-retry #${retryCountRef.current} in ${delay / 1000}s`);
             if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-            retryTimerRef.current = setTimeout(() => fetchEmails(true), delay);
+            retryTimerRef.current = setTimeout(() => fetchEmails({ background: true }), delay);
           }
         }
       }
     } catch (err) {
       console.error("Failed to fetch emails", err);
-      if (!isBackground) setConversations([]);
+      if (!background && !loadMore) setConversations([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
   };
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    fetchEmails({ loadMore: true });
+  };
+
+  // Remembers the last refreshKey we've seen, so we can tell "refreshKey
+  // changed while staying on the same account/folder" (= explicit Refresh
+  // click) apart from "refreshKey happens to differ because this is a new
+  // account/folder context".
+  const lastRefreshKeyRef = useRef(refreshKey);
 
   // Re-fetch whenever account, folder, refreshKey, or monthFilter changes
   useEffect(() => {
     if (!selectedAccount?.id || !selectedFolder) return;
 
+    const key = cacheKeyFor(selectedAccount.id, selectedFolder, monthFilter);
+    const isNewContext = lastFetchKey.current !== key;
+    const isManualRefresh = !isNewContext && lastRefreshKeyRef.current !== refreshKey;
+    lastFetchKey.current = key;
+    lastRefreshKeyRef.current = refreshKey;
+
     // Cancel any pending retry from a previous account/folder
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     retryCountRef.current = 0;
 
-    const isInitial = lastFetchKey.current !== `${selectedAccount.id}:${selectedFolder}`;
-    lastFetchKey.current = `${selectedAccount.id}:${selectedFolder}`;
+    if (isNewContext) {
+      // ── Switching to an account/folder/month combo ──
+      // Serve from cache instantly if we've already loaded it this
+      // session — "reopening the same folder does not fetch them again".
+      const cached = cacheRef.current.get(key);
+      if (cached) {
+        setConversations(cached.conversations);
+        setHasMore(cached.hasMore);
+        setPage(cached.page);
+        setLoading(false);
+      } else {
+        setConversations([]);
+        setPage(0);
+        setHasMore(false);
+        fetchEmails({ background: false });
+      }
+    } else if (isManualRefresh) {
+      // ── Explicit Refresh button ── bypass cache, re-fetch what's shown
+      fetchEmails({ background: true, forceRefresh: true });
+    }
 
-    fetchEmails(!isInitial); // spinner on account/folder change; silent on refreshKey/filter
-
-    // Background poll every 20 s
+    // Background poll every 20 s — detects new mail without discarding
+    // any conversations already loaded via "Load More".
     const interval = setInterval(() => {
-      fetchEmails(true);
+      fetchEmails({ background: true });
     }, 20000);
 
     return () => {
@@ -160,9 +264,9 @@ export default function ConversationList({
     };
   }, [refreshKey, selectedAccount?.id, selectedFolder, monthFilter]);
 
-  useEffect(() => {
-    console.log(`📊 EmailList rendered with ${conversations.length} conversations`);
-  }, [conversations]);
+  // useEffect(() => {
+  //   console.log(`📊 EmailList rendered with ${conversations.length} conversations`);
+  // }, [conversations]);
 
   // Only block render on a TRUE initial load (list is empty AND we're loading)
   // Background polls must never blank the existing conversation list.
@@ -622,7 +726,8 @@ export default function ConversationList({
             )}
           </div>
         ) : (
-          groupedConversations.map(({ group, conversations: groupConvs }) => (
+          <>
+          {groupedConversations.map(({ group, conversations: groupConvs }) => (
             <div key={group}>
               {/* Date Section Header - Collapsible */}
               <div 
@@ -780,7 +885,21 @@ export default function ConversationList({
                 );
               })}
             </div>
-          ))
+          ))}
+
+          {/* ── Load More (this account only) ── */}
+          {hasMore && (
+            <div className="p-3 flex justify-center">
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="px-4 py-2 text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {loadingMore ? "Loading…" : "Load More"}
+              </button>
+            </div>
+          )}
+          </>
         )}
       </div>
     </div>
