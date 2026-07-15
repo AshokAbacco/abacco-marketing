@@ -10,6 +10,18 @@ import cache from "../../utils/cache.js"; // add at top
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Postgres prepared statements support at most 32767 bind params.
+// Any deleteMany({ where: { xId: { in: [...] } } }) with a large id list
+// must be chunked, or the query will fail once a mailbox gets big enough.
+const CHUNK_SIZE = 5000;
+function chunkArray(arr, size = CHUNK_SIZE) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) {
+    out.push(arr.slice(i, i + size));
+  }
+  return out;
+}
+
 /**
  * Suggest IMAP/SMTP hosts (prioritize provider param, then MX records, then provider map)
  * Returns array of suggestions (best-first).
@@ -436,49 +448,22 @@ router.delete("/:id", protect, async (req, res) => {
       return res.json({ success: true, message: "Account already deleted" });
     }
 
-    // 2️⃣ Cleanup related data WITHOUT transaction (avoids timeout on large inboxes)
-
-    // ---- Messages ----
-    const messages = await prisma.emailMessage.findMany({
-      where: { emailAccountId: id },
-      select: { id: true },
-    });
-    const messageIds = messages.map((m) => m.id);
-
-    if (messageIds.length > 0) {
-      await prisma.attachment.deleteMany({
-        where: { emailMessageId: { in: messageIds } },
-      });
-      await prisma.messageTag.deleteMany({
-        where: { messageId: { in: messageIds } },
-      });
-    }
-
-    await prisma.emailMessage.deleteMany({ where: { emailAccountId: id } });
-
-    // ---- Conversations ----
-    const conversations = await prisma.conversation.findMany({
-      where: { emailAccountId: id },
-      select: { id: true },
-    });
-    const conversationIds = conversations.map((c) => c.id);
-
-    if (conversationIds.length > 0) {
-      await prisma.conversationTag.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      });
-      await prisma.scheduledMessage.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      });
-    }
-
-    await prisma.conversation.deleteMany({ where: { emailAccountId: id } });
-
-    // ---- Other account data ----
-    await prisma.emailFolder.deleteMany({ where: { accountId: id } });
-    await prisma.syncState.deleteMany({ where: { accountId: id } });
-
-    // ---- Final delete ----
+    // 2️⃣ Cleanup related data
+    //
+    // Previously this manually walked every message/conversation ID in JS,
+    // chunked into groups of 5000, and ran a deleteMany per chunk. On an
+    // account with a large mailbox this meant dozens of round-trips, and
+    // — because Attachment.emailMessageId (and EmailFolder/SyncState's
+    // accountId) had no index — each deleteMany was a full table scan
+    // across ALL accounts' data, not just this one. That's what made
+    // deletion take 10-15 minutes.
+    //
+    // Fix: the schema now has onDelete: Cascade on every child relation
+    // (EmailMessage → Attachment, Conversation → ConversationTag, account →
+    // EmailFolder/SyncState/ScheduledMessage, etc.) plus indexes on the
+    // relevant foreign keys. Deleting the EmailAccount row now lets
+    // Postgres cascade the delete itself in one indexed, DB-side operation
+    // instead of many chunked Node round-trips.
     await prisma.emailAccount.delete({ where: { id } });
 
     // ✅ CRITICAL: Clear cache so next GET /accounts reflects the deletion

@@ -76,7 +76,13 @@ export default function ModernSidebar({
 
       unreadMapRef.current = updatedMap;
 
-      setUnreadCounts(updatedMap);
+      // Merge fresh counts into the accounts we're actually rendering.
+      setAccountsWithUnread((prev) =>
+        prev.map((a) => ({
+          ...a,
+          unreadCount: updatedMap[a.id] !== undefined ? updatedMap[a.id] : a.unreadCount || 0,
+        }))
+      );
 
     } catch (err) {
       console.error("Unread fetch failed:", err);

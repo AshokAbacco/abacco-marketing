@@ -174,7 +174,9 @@ model Attachment {
   size           Int?
   storageUrl     String?
   hash           String?
-  message        EmailMessage @relation(fields: [emailMessageId], references: [id])
+  message        EmailMessage @relation(fields: [emailMessageId], references: [id], onDelete: Cascade)
+
+  @@index([emailMessageId])
 }
 
 model ScheduledMessage {
@@ -198,9 +200,12 @@ model ScheduledMessage {
 
   userId         String
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  EmailAccount   EmailAccount? @relation(fields: [emailAccountId], references: [id])
+  EmailAccount   EmailAccount? @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
   emailAccountId Int?
-  Conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  Conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([emailAccountId])
 }
 
 model SyncState {
@@ -210,7 +215,9 @@ model SyncState {
   lastUid   Int?
   updatedAt DateTime @updatedAt
 
-  account EmailAccount @relation(fields: [accountId], references: [id])
+  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
 }
 
 model EmailFolder {
@@ -218,7 +225,9 @@ model EmailFolder {
   accountId Int
   name      String
 
-  account EmailAccount @relation(fields: [accountId], references: [id])
+  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
 }
 
 model CustomStatus {
