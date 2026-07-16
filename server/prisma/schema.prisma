@@ -67,6 +67,17 @@ model EmailAccount {
   groupId           Int?
   group             EmailAccountGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
+  // ── Soft-delete + background permanent-delete tracking ──
+  deleted                   Boolean   @default(false)
+  deleteStatus              String? // "DELETING" | "FAILED" | null
+  deleteStartedAt           DateTime?
+  deleteCompletedAt         DateTime?
+  totalEmails               Int?      @default(0)
+  deletedEmails             Int?      @default(0)
+  deleteProgress            Int?      @default(0)
+  estimatedDeleteAt         DateTime?
+  estimatedSecondsRemaining Int?
+
   @@index([userId])
   @@index([email])
 }

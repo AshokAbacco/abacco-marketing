@@ -6,9 +6,38 @@ import { protect } from "../../middlewares/authMiddleware.js";
 import { runSyncForAccount } from "../../services/imap.service.js";
 import { ImapFlow } from "imapflow";
 import cache from "../../utils/cache.js"; // add at top
+import {
+  startAccountDeletion,
+  resumeAccountDeletions,
+} from "../../services/accountDeletionWorker.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Background delete tuning — kept in one place so the ETA shown to the
+// user (on delete) and the ETA recalculated by the worker (during delete)
+// agree with each other.
+const DELETE_SPEED_PER_MIN = 1200;
+
+// accounts:{userId}:all and accounts:{userId}:group:{groupId} are both used
+// as cache keys (see GET / below). A plain `cache.del(`accounts:${userId}`)`
+// never actually matched either of those keys, so the accounts cache wasn't
+// really being cleared on delete/app-password update. This clears every
+// cache entry for a user regardless of the group suffix.
+function clearAccountsCache(userId) {
+  const prefix = `accounts:${userId}`;
+  cache.keys().forEach((key) => {
+    if (key.startsWith(prefix)) cache.del(key);
+  });
+}
+
+function formatRemaining(seconds) {
+  if (seconds == null) return "calculating…";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m <= 0) return `${s} sec`;
+  return `${m} min ${s} sec`;
+}
 
 // Postgres prepared statements support at most 32767 bind params.
 // Any deleteMany({ where: { xId: { in: [...] } } }) with a large id list
@@ -255,8 +284,27 @@ router.post("/", protect, async (req, res) => {
     }
 
     const exists = await prisma.emailAccount.findUnique({ where: { email } });
-    if (exists)
+    if (exists) {
+      if (exists.deleted) {
+        // Still being permanently deleted in the background — block re-add
+        // until the worker finishes and removes the row.
+        const remainingEmails = Math.max(
+          (exists.totalEmails || 0) - (exists.deletedEmails || 0),
+          0
+        );
+        return res.status(409).json({
+          success: false,
+          deleting: true,
+          message: "This email account is currently being permanently deleted.",
+          progress: exists.deleteProgress || 0,
+          totalEmails: exists.totalEmails || 0,
+          deletedEmails: exists.deletedEmails || 0,
+          remainingEmails,
+          remainingTime: formatRemaining(exists.estimatedSecondsRemaining),
+        });
+      }
       return res.status(400).json({ error: "Account already exists" });
+    }
 
     // ✅ Enforce 80-account limit per user
     const accountCount = await prisma.emailAccount.count({
@@ -431,11 +479,29 @@ router.put("/:id", protect, async (req, res) => {
 });
 
 
+/* ============================================================
+   🗑️ DELETE /accounts/:id → INSTANT SOFT DELETE
+   ============================================================
+   For accounts with thousands of emails, permanently cascading a
+   delete synchronously took 10-15 minutes with the user stuck on a
+   "Logging out..." screen. This route now does almost nothing itself:
+
+     1. Mark the row deleted (status=DELETING) so it instantly
+        disappears from GET /accounts and blocks re-adding the same
+        email address.
+     2. Kick off the background worker WITHOUT awaiting it.
+     3. Respond immediately (~1s).
+
+   The actual permanent deletion (emails, attachments, conversations,
+   and finally the EmailAccount row itself) happens in
+   accountDeletionWorker.js, in batches, and survives server restarts
+   via resumeAccountDeletions().
+   ============================================================ */
 router.delete("/:id", protect, async (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ success: false, error: "Invalid ID" });
 
-  console.log(`🟡 Starting delete for account ${id}`);
+  console.log(`🟡 Marking account ${id} for background deletion`);
 
   try {
     // 1️⃣ Check account exists and belongs to this user
@@ -448,38 +514,101 @@ router.delete("/:id", protect, async (req, res) => {
       return res.json({ success: true, message: "Account already deleted" });
     }
 
-    // 2️⃣ Cleanup related data
-    //
-    // Previously this manually walked every message/conversation ID in JS,
-    // chunked into groups of 5000, and ran a deleteMany per chunk. On an
-    // account with a large mailbox this meant dozens of round-trips, and
-    // — because Attachment.emailMessageId (and EmailFolder/SyncState's
-    // accountId) had no index — each deleteMany was a full table scan
-    // across ALL accounts' data, not just this one. That's what made
-    // deletion take 10-15 minutes.
-    //
-    // Fix: the schema now has onDelete: Cascade on every child relation
-    // (EmailMessage → Attachment, Conversation → ConversationTag, account →
-    // EmailFolder/SyncState/ScheduledMessage, etc.) plus indexes on the
-    // relevant foreign keys. Deleting the EmailAccount row now lets
-    // Postgres cascade the delete itself in one indexed, DB-side operation
-    // instead of many chunked Node round-trips.
-    await prisma.emailAccount.delete({ where: { id } });
+    if (existing.deleted) {
+      // Already mid-deletion (e.g. double click) — don't restart the clock.
+      return res.json({
+        success: true,
+        deleting: true,
+        message: "Background cleanup is already in progress for this account.",
+        progress: existing.deleteProgress || 0,
+      });
+    }
 
-    // ✅ CRITICAL: Clear cache so next GET /accounts reflects the deletion
-    cache.del(`accounts:${req.user.id}`);
+    // 2️⃣ Compute a one-time ETA for the delete-status endpoint to show
+    // before the worker's first progress update lands.
+    const totalEmails = await prisma.emailMessage.count({
+      where: { emailAccountId: id },
+    });
+    const estimatedSecondsRemaining = Math.max(
+      Math.ceil((totalEmails / DELETE_SPEED_PER_MIN) * 60),
+      0
+    );
 
-    console.log("🟢 Account deleted successfully");
-    res.json({ success: true, message: "Account deleted" });
+    // 3️⃣ Soft-delete: this alone is what makes the account disappear from
+    // the UI and blocks re-adding the same email — nothing has actually
+    // been deleted from the database yet.
+    await prisma.emailAccount.update({
+      where: { id },
+      data: {
+        deleted: true,
+        deleteStatus: "DELETING",
+        deleteStartedAt: new Date(),
+        deleteCompletedAt: null,
+        totalEmails,
+        deletedEmails: 0,
+        deleteProgress: totalEmails === 0 ? 100 : 0,
+        estimatedSecondsRemaining,
+        estimatedDeleteAt: new Date(Date.now() + estimatedSecondsRemaining * 1000),
+      },
+    });
+
+    // ✅ Clear cache so next GET /accounts reflects the deletion immediately
+    clearAccountsCache(req.user.id);
+
+    // 4️⃣ Fire-and-forget the actual permanent deletion — NOT awaited.
+    startAccountDeletion(prisma, id);
+
+    console.log(`🟢 Account ${id} hidden from UI — background delete started (${totalEmails} emails)`);
+    res.json({
+      success: true,
+      deleting: true,
+      message: "Account removed successfully. Background cleanup has started.",
+    });
   } catch (err) {
     console.error("❌ Delete error:", err);
 
     if (err.code === "P2025") {
       // Record already gone — treat as success and clear cache
-      cache.del(`accounts:${req.user.id}`);
+      clearAccountsCache(req.user.id);
       return res.json({ success: true, message: "Account already deleted" });
     }
 
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ============================================================
+   📊 GET /accounts/delete-status/:email → BACKGROUND DELETE PROGRESS
+   ============================================================ */
+router.get("/delete-status/:email", protect, async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const account = await prisma.emailAccount.findUnique({ where: { email } });
+
+    if (!account || !account.deleted) {
+      // Nothing deleting under this email — safe to (re)create.
+      return res.json({ success: true, deleting: false });
+    }
+
+    const totalEmails = account.totalEmails || 0;
+    const deletedEmails = account.deletedEmails || 0;
+    const remainingEmails = Math.max(totalEmails - deletedEmails, 0);
+
+    return res.json({
+      success: true,
+      deleting: true,
+      status: account.deleteStatus,
+      progress: account.deleteProgress || 0,
+      totalEmails,
+      deletedEmails,
+      remainingEmails,
+      estimatedSecondsRemaining: account.estimatedSecondsRemaining,
+      estimatedFinishTime: account.estimatedDeleteAt,
+      remainingTime: formatRemaining(account.estimatedSecondsRemaining),
+    });
+  } catch (err) {
+    console.error("❌ delete-status error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -534,6 +663,7 @@ router.get("/", protect, async (req, res) => {
     const accounts = await prisma.emailAccount.findMany({
       where: {
         userId: req.user.id,
+        deleted: false, // hide accounts mid-permanent-delete from the UI immediately
 
         ...(groupId
           ? { groupId: Number(groupId) }
@@ -762,7 +892,7 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     });
 
     // Clear cache
-    cache.del(`accounts:${req.user.id}`);
+    clearAccountsCache(req.user.id);
 
     return res.json({ success: true, message: "App password updated successfully." });
   } catch (err) {
@@ -770,5 +900,9 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     return res.status(500).json({ success: false, error: "Failed to update password." });
   }
 });
+
+// Re-exported so server.js can resume any deletions interrupted by a
+// restart, the same way it resumes in-flight campaigns.
+export { resumeAccountDeletions };
 
 export default router;

@@ -183,6 +183,16 @@ export default function InboxMain() {
         setSelectedAccount(groupAccs[0] ?? normalizedAccounts[0] ?? null);
       } else if (!selectedAccount && normalizedAccounts.length > 0) {
         setSelectedAccount(normalizedAccounts[0]);
+      } else if (
+        selectedAccount &&
+        !normalizedAccounts.some((a) => a.id === selectedAccount.id)
+      ) {
+        // The previously-selected account is gone from the list — most
+        // commonly because it was just deleted (soft-deleted accounts are
+        // excluded from GET /accounts immediately). Fall back to the next
+        // available account instead of leaving EmailList pointed at a
+        // deleted account's id.
+        setSelectedAccount(normalizedAccounts[0] ?? null);
       }
     } catch (error) {
       console.error("Error fetching accounts:", error);

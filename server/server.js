@@ -5,7 +5,7 @@ import prisma from "./src/prismaClient.js";
 import { runSync } from "./src/services/imap.service.js";
 
 // Routes
-import accountRoutes from "./src/routes/inbox/accounts.js";
+import accountRoutes, { resumeAccountDeletions } from "./src/routes/inbox/accounts.js";
 import inboxRoutes from "./src/routes/inbox/inbox.js";
 import customStatusRoutes from "./src/routes/inbox/customStatusRoutes.js";
 import userRoutes from "./src/routes/user.js";
@@ -192,6 +192,7 @@ async function startWorker() {
   console.log("⚙️ Running initial recovery and resume...");
   await recoverStuckEmails();
   await resumeSendingCampaignsSafe();
+  await resumeAccountDeletions(prisma);
 
   // Recover stuck emails every 60 seconds
   setInterval(recoverStuckEmails, 60_000);
@@ -199,6 +200,14 @@ async function startWorker() {
   // Resume any in-progress campaigns every 2 minutes
   // (safe: sendBulkCampaign's global lock prevents duplicate workers)
   setInterval(resumeSendingCampaignsSafe, 120_000);
+
+  // Resume any account deletions interrupted by a restart, every 2 minutes
+  // (safe: accountDeletionWorker's activeDeletions lock prevents duplicate runs)
+  setInterval(() => {
+    resumeAccountDeletions(prisma).catch((err) =>
+      console.error("🗑️ Account deletion resume error:", err.message)
+    );
+  }, 120_000);
 
   // IMAP sync every 2 minutes
   setInterval(() => {

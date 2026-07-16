@@ -27,6 +27,11 @@ export default function AddAccountManager({ onClose, onAccountAdded, pendingGrou
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [accountToLogout, setAccountToLogout] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // 🗑️ NEW: Tracks a same-email account that's still being permanently
+  // deleted in the background, so we can show progress instead of a
+  // generic "Account already exists" error.
+  const [deletingInfo, setDeletingInfo] = useState(null); // { email, progress, remainingTime, ... } | null
   const [showSuccessMessage, setShowSuccessMessage] = useState("");
   const [error, setError] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
@@ -47,6 +52,44 @@ export default function AddAccountManager({ onClose, onAccountAdded, pendingGrou
   useEffect(() => {
     fetchAccounts();
   }, []);
+
+  // 🗑️ NEW: While an account with this email is still being permanently
+  // deleted in the background, poll for progress every 3s. Once it
+  // finishes, deleting:false comes back and we clear the block so the
+  // user can submit the form again.
+  useEffect(() => {
+    if (!deletingInfo?.email) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get(
+          `${API_BASE_URL}/api/accounts/delete-status/${encodeURIComponent(deletingInfo.email)}`
+        );
+        const data = res.data;
+
+        if (!data?.deleting) {
+          clearInterval(interval);
+          setDeletingInfo(null);
+          setShowSuccessMessage("✅ That email address is free — you can add it again now.");
+          setTimeout(() => setShowSuccessMessage(""), 4000);
+          return;
+        }
+
+        setDeletingInfo((prev) => ({
+          ...prev,
+          progress: data.progress ?? prev.progress,
+          remainingTime: data.remainingTime ?? prev.remainingTime,
+          totalEmails: data.totalEmails ?? prev.totalEmails,
+          deletedEmails: data.deletedEmails ?? prev.deletedEmails,
+        }));
+      } catch (err) {
+        // Transient poll failure — just try again on the next tick.
+        console.warn("delete-status poll failed:", err.message);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [deletingInfo?.email]);
 
 const fetchAccounts = async () => {
   setLoadingAccounts(true);
@@ -99,6 +142,7 @@ const fetchAccounts = async () => {
 const addAccount = async (e) => {
   e.preventDefault();
   setError(null);
+  setDeletingInfo(null);
   setLoading(true);
 
   try {
@@ -118,7 +162,22 @@ const addAccount = async (e) => {
     onClose();
   } catch (err) {
     console.error("❌ Full error:", err.response?.data || err.message);
-    setError(err.response?.data?.error || "Failed to add account");
+
+    // 🗑️ NEW: Same email is still being permanently deleted in the
+    // background — show progress instead of a plain error, and start
+    // polling for completion.
+    if (err.response?.status === 409 && err.response?.data?.deleting) {
+      const d = err.response.data;
+      setDeletingInfo({
+        email: formData.email,
+        progress: d.progress || 0,
+        remainingTime: d.remainingTime,
+        totalEmails: d.totalEmails || 0,
+        deletedEmails: d.deletedEmails || 0,
+      });
+    } else {
+      setError(err.response?.data?.error || "Failed to add account");
+    }
   } finally {
     setLoading(false);
   }
@@ -225,12 +284,16 @@ const logoutAccount = async () => {
 
     setShowLogoutConfirm(false);
     setAccountToLogout(null);
-    setShowSuccessMessage("✅ Account deleted successfully!");
+    // The DELETE call above now returns almost instantly — the account row
+    // was just soft-deleted (hidden from the UI immediately). Permanent
+    // deletion of its emails/attachments/conversations continues in the
+    // background on the server, even if this tab is closed.
+    setShowSuccessMessage("✅ Account removed successfully. Background cleanup has started.");
 
     setTimeout(async () => {
       await fetchAccounts();
       setShowSuccessMessage("");
-    }, 1500);
+    }, 2000);
   } catch (err) {
     console.error("Delete error:", err.response?.data || err.message);
     setError(err.response?.data?.error || "❌ Failed to delete account");
@@ -405,6 +468,39 @@ const logoutAccount = async () => {
           {showSuccessMessage && (
             <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
               {showSuccessMessage}
+            </div>
+          )}
+
+          {/* 🗑️ NEW: Background deletion in progress for this email */}
+          {deletingInfo && (
+            <div className="mb-4 p-4 bg-amber-50 border border-amber-300 rounded-xl">
+              <p className="text-sm font-semibold text-amber-800 mb-1">
+                This email account is currently being permanently deleted.
+              </p>
+              <p className="text-xs text-amber-700 mb-3">
+                Please wait until deletion finishes before adding{" "}
+                <strong>{deletingInfo.email}</strong> again.
+              </p>
+
+              <div className="w-full h-3 bg-amber-100 rounded-full overflow-hidden mb-1">
+                <div
+                  className="h-full bg-amber-500 transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.max(0, deletingInfo.progress))}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-amber-700">
+                <span>{deletingInfo.progress}%</span>
+                {deletingInfo.remainingTime && (
+                  <span>Remaining time: {deletingInfo.remainingTime}</span>
+                )}
+              </div>
+
+              {deletingInfo.totalEmails > 0 && (
+                <p className="text-[11px] text-amber-600 mt-1">
+                  {deletingInfo.deletedEmails} / {deletingInfo.totalEmails} emails cleaned up
+                </p>
+              )}
             </div>
           )}
 
