@@ -105,6 +105,8 @@ export default function CreateCampaign() {
   const [lockedLoading, setLockedLoading] = useState(true);         // true until first fetch completes
   const fetchLockedRef = useRef(null);                               // stable ref so dropdown can trigger it
   const [customLimits, setCustomLimits] = useState({});
+  const [customLimitEditing, setCustomLimitEditing] = useState({}); // accountId -> boolean, shows manual number input
+  const [customLimitDraft, setCustomLimitDraft] = useState({});     // accountId -> string, raw text while typing
 
   const [campaignType, setCampaignType] = useState("immediate");
   const [subject, setSubject] = useState("");
@@ -745,25 +747,80 @@ export default function CreateCampaign() {
                             {acc.provider?.toUpperCase()} • Limit: {getActualLimit(acc.id)}/hr
                           </p>
                         </div>
-                        <select
-                          value={customLimits[acc.id] || ""}
-                          onChange={(e) => {
-                            const newLimits = {...customLimits};
-                            if (e.target.value) {
-                              newLimits[acc.id] = parseInt(e.target.value);
-                            } else {
+                        {(() => {
+                          const currentVal = customLimits[acc.id];
+                          const isPreset = currentVal != null && LIMIT_OPTIONS.includes(currentVal);
+                          const isCustomActive = !!customLimitEditing[acc.id] || (currentVal != null && !isPreset);
+                          const selectValue = isCustomActive ? "custom" : (currentVal || "");
+
+                          const commitCustomValue = () => {
+                            const raw = customLimitDraft[acc.id];
+                            const parsed = parseInt(raw, 10);
+                            const newLimits = { ...customLimits };
+                            if (raw === "" || raw === undefined || isNaN(parsed) || parsed <= 0) {
+                              // nothing valid typed — drop back to default
                               delete newLimits[acc.id];
+                              setCustomLimitEditing({ ...customLimitEditing, [acc.id]: false });
+                            } else {
+                              // clamp to a sane range so no one fat-fingers 99999/hr
+                              newLimits[acc.id] = Math.min(parsed, 999);
                             }
                             setCustomLimits(newLimits);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-emerald-50 font-semibold"
-                        >
-                          <option value="">Default ({getDefaultLimit(acc.provider)})</option>
-                          {LIMIT_OPTIONS.map(opt => (
-                            <option key={opt} value={opt}>{opt}/hr</option>
-                          ))}
-                        </select>
+                          };
+
+                          return (
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={selectValue}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === "custom") {
+                                    setCustomLimitDraft({ ...customLimitDraft, [acc.id]: currentVal ? String(currentVal) : "" });
+                                    setCustomLimitEditing({ ...customLimitEditing, [acc.id]: true });
+                                    return;
+                                  }
+                                  setCustomLimitEditing({ ...customLimitEditing, [acc.id]: false });
+                                  const newLimits = { ...customLimits };
+                                  if (val) {
+                                    newLimits[acc.id] = parseInt(val);
+                                  } else {
+                                    delete newLimits[acc.id];
+                                  }
+                                  setCustomLimits(newLimits);
+                                }}
+                                className="text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-emerald-50 font-semibold"
+                              >
+                                <option value="">Default ({getDefaultLimit(acc.provider)})</option>
+                                {LIMIT_OPTIONS.map(opt => (
+                                  <option key={opt} value={opt}>{opt}/hr</option>
+                                ))}
+                                <option value="custom">Custom…</option>
+                              </select>
+
+                              {isCustomActive && (
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={999}
+                                  autoFocus
+                                  placeholder="e.g. 25"
+                                  value={customLimitDraft[acc.id] ?? (currentVal || "")}
+                                  onChange={(e) =>
+                                    setCustomLimitDraft({ ...customLimitDraft, [acc.id]: e.target.value })
+                                  }
+                                  onBlur={commitCustomValue}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      commitCustomValue();
+                                    }
+                                  }}
+                                  className="w-14 text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-semibold"
+                                />
+                              )}
+                            </div>
+                          );
+                        })()}
                       </label>
                     );
 
