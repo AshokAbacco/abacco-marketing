@@ -1021,19 +1021,24 @@ export const updateFollowupRecipients = async (req, res) => {
     });
     if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found or access denied" });
 
-    await prisma.campaignRecipient.deleteMany({ where: { campaignId: Number(campaignId) } });
-
-    await prisma.campaignRecipient.createMany({
-      data: recipients.map(r => ({
-        campaignId:    Number(campaignId),
-        email:         r.email,
-        status:        r.status || "pending",
-        accountId:     r.accountId ? Number(r.accountId) : null,
-        sentBodyHtml:  r.sentBodyHtml  || "",
-        sentSubject:   r.sentSubject   || "",
-        sentFromEmail: r.sentFromEmail || "",
-      })),
-    });
+    // Only touch rows that were actually editable in the modal (sent/completed),
+    // so pending/failed recipients are never wiped out.
+    await prisma.$transaction([
+      prisma.campaignRecipient.deleteMany({
+        where: { campaignId: Number(campaignId), status: { in: ["sent", "completed"] } },
+      }),
+      prisma.campaignRecipient.createMany({
+        data: recipients.map(r => ({
+          campaignId:    Number(campaignId),
+          email:         r.email,
+          status:        r.status || "pending",
+          accountId:     r.accountId ? Number(r.accountId) : null,
+          sentBodyHtml:  r.sentBodyHtml  || "",
+          sentSubject:   r.sentSubject   || "",
+          sentFromEmail: r.sentFromEmail || "",
+        })),
+      }),
+    ]);
 
     return res.json({ success: true, message: `Successfully updated ${recipients.length} recipients` });
 

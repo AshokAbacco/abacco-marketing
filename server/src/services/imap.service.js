@@ -221,7 +221,7 @@ async function syncImap(prisma, account) {
       return;
     }
 
-    console.log("📂 Folders:", folders.map(f => f.type).join(", "));
+    // console.log("📂 Folders:", folders.map(f => f.type).join(", "));
 
     for (const { path: folderPath, type } of folders) {
       const lock = await client.getMailboxLock(folderPath);
@@ -280,7 +280,7 @@ async function syncImap(prisma, account) {
 
         if (maxUidSeen > lastUid) {
           await saveLastUid(prisma, account.id, type, maxUidSeen);
-          console.log(`💾 [${type}] lastUid=${maxUidSeen} | ${newCount} new emails saved`);
+          // console.log(`💾 [${type}] lastUid=${maxUidSeen} | ${newCount} new emails saved`);
         }
 
       } finally {
