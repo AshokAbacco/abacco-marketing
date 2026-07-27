@@ -11,6 +11,7 @@ export default function ShowsRecipients({ campaignId, onClose, onUpdated }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteMessage, setDeleteMessage] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [deletedIds, setDeletedIds] = useState(new Set());
 
   // ✅ Fetch recipients — only sent/completed (as per backend campaign completed sent mails)
   useEffect(() => {
@@ -99,80 +100,70 @@ export default function ShowsRecipients({ campaignId, onClose, onUpdated }) {
     }
   };
 
-  // Bulk delete selected
-  const handleDeleteSelected = () => {
-    if (selectedIds.size === 0) return;
-    const count = selectedIds.size;
-    setRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
-    setFilteredRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
-    setSelectedIds(new Set());
-    setDeleteMessage(`Deleted ${count} recipient${count > 1 ? "s" : ""}`);
-    setTimeout(() => setDeleteMessage(""), 3000);
-  };
 
-  // Delete single
-  const handleDelete = (recipientId) => {
-    const recipient = recipients.find((r) => r.id === recipientId);
-    setRecipients((prev) => prev.filter((r) => r.id !== recipientId));
-    setFilteredRecipients((prev) => prev.filter((r) => r.id !== recipientId));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(recipientId);
-      return next;
+// Bulk delete selected
+const handleDeleteSelected = () => {
+  if (selectedIds.size === 0) return;
+  const count = selectedIds.size;
+  setDeletedIds((prev) => new Set([...prev, ...selectedIds]));
+  setRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
+  setFilteredRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
+  setSelectedIds(new Set());
+  setDeleteMessage(`Deleted ${count} recipient${count > 1 ? "s" : ""}`);
+  setTimeout(() => setDeleteMessage(""), 3000);
+};
+
+// Delete single
+const handleDelete = (recipientId) => {
+  const recipient = recipients.find((r) => r.id === recipientId);
+  setDeletedIds((prev) => new Set(prev).add(recipientId));
+  setRecipients((prev) => prev.filter((r) => r.id !== recipientId));
+  setFilteredRecipients((prev) => prev.filter((r) => r.id !== recipientId));
+  setSelectedIds((prev) => {
+    const next = new Set(prev);
+    next.delete(recipientId);
+    return next;
+  });
+  setDeleteMessage(`Deleted: ${recipient?.email || "Recipient"}`);
+  setTimeout(() => setDeleteMessage(""), 3000);
+};
+
+// Save = commit the deletions
+const handleSave = async () => {
+  if (deletedIds.size === 0) {
+    onUpdated();
+    return;
+  }
+  try {
+    setSaving(true);
+    const token = localStorage.getItem("token");
+
+    const payload = {
+      campaignId: Number(campaignId),
+      deletedRecipientIds: Array.from(deletedIds),
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/campaigns/followup/update-recipients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
     });
-    setDeleteMessage(`Deleted: ${recipient?.email || "Recipient"}`);
-    setTimeout(() => setDeleteMessage(""), 3000);
-  };
 
-  // Save remaining recipients
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      const token = localStorage.getItem("token");
+    const data = await response.json();
 
-      const payload = {
-        campaignId: Number(campaignId),
-        recipients: recipients.map((r) => ({
-          id: r.id,
-          email: r.email,
-          status: r.status || "sent",
-          accountId: r.accountId,
-          sentBodyHtml: r.sentBodyHtml || "",
-          sentSubject: r.sentSubject || "",
-          sentFromEmail: r.sentFromEmail || "",
-        })),
-      };
-
-      console.log("Saving recipients payload:", payload);
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/campaigns/followup/update-recipients`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      const data = await response.json();
-      console.log("Save response:", data);
-
-      if (data.success) {
-        onUpdated();
-      } else {
-        console.error("Save failed:", data);
-        alert(`Failed to save recipients: ${data.message || "Please try again."}`);
-      }
-    } catch (err) {
-      console.error("Save error:", err);
-      alert("An error occurred while saving recipients. Check console for details.");
-    } finally {
-      setSaving(false);
+    if (data.success) {
+      setDeletedIds(new Set());
+      onUpdated();
+    } else {
+      alert(`Failed to save recipients: ${data.message || "Please try again."}`);
     }
-  };
+  } catch (err) {
+    console.error("Save error:", err);
+    alert("An error occurred while saving recipients. Check console for details.");
+  } finally {
+    setSaving(false);
+  }
+};
 
   return (
     /* ── Backdrop ── */

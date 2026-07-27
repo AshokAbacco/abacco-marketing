@@ -1007,13 +1007,10 @@ export const stopCampaign = async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 export const updateFollowupRecipients = async (req, res) => {
   try {
-    const { campaignId, recipients } = req.body;
+    const { campaignId, deletedRecipientIds } = req.body;
 
-    if (!campaignId || !Array.isArray(recipients)) {
-      return res.status(400).json({ success: false, message: "Invalid payload: campaignId and recipients array required" });
-    }
-    if (recipients.length === 0) {
-      return res.status(400).json({ success: false, message: "Cannot save empty recipient list" });
+    if (!campaignId || !Array.isArray(deletedRecipientIds)) {
+      return res.status(400).json({ success: false, message: "Invalid payload: campaignId and deletedRecipientIds array required" });
     }
 
     const campaign = await prisma.campaign.findFirst({
@@ -1021,26 +1018,26 @@ export const updateFollowupRecipients = async (req, res) => {
     });
     if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found or access denied" });
 
-    // Only touch rows that were actually editable in the modal (sent/completed),
-    // so pending/failed recipients are never wiped out.
-    await prisma.$transaction([
-      prisma.campaignRecipient.deleteMany({
-        where: { campaignId: Number(campaignId), status: { in: ["sent", "completed"] } },
-      }),
-      prisma.campaignRecipient.createMany({
-        data: recipients.map(r => ({
-          campaignId:    Number(campaignId),
-          email:         r.email,
-          status:        r.status || "pending",
-          accountId:     r.accountId ? Number(r.accountId) : null,
-          sentBodyHtml:  r.sentBodyHtml  || "",
-          sentSubject:   r.sentSubject   || "",
-          sentFromEmail: r.sentFromEmail || "",
-        })),
-      }),
-    ]);
+    if (deletedRecipientIds.length === 0) {
+      return res.json({ success: true, message: "No changes to save" });
+    }
 
-    return res.json({ success: true, message: `Successfully updated ${recipients.length} recipients` });
+    const ids = deletedRecipientIds.map(Number).filter(Number.isFinite);
+
+    // Only ever delete the specific rows the user removed in the modal.
+    // Scoped to this campaign + sent/completed status, so pending/failed
+    // recipients (and anything belonging to another campaign) can never
+    // be touched. Nothing is recreated, so there's no way for this to
+    // wipe out recipients that weren't explicitly deleted.
+    const result = await prisma.campaignRecipient.deleteMany({
+      where: {
+        id: { in: ids },
+        campaignId: Number(campaignId),
+        status: { in: ["sent", "completed"] },
+      },
+    });
+
+    return res.json({ success: true, message: `Removed ${result.count} recipient(s)` });
 
   } catch (err) {
     console.error("Update followup recipients error:", err);
