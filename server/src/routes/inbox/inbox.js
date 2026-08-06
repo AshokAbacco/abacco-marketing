@@ -485,6 +485,45 @@ router.patch("/batch-hide-conversations", protect, async (req, res) => {
 });
 
 /* =========================================================
+   BATCH MOVE TO INBOX (e.g. from Spam)
+   POST /api/inbox/move-to-inbox
+========================================================= */
+router.post("/move-to-inbox", protect, async (req, res) => {
+  try {
+    const { conversationIds, accountId } = req.body;
+
+    if (
+      !conversationIds ||
+      !Array.isArray(conversationIds) ||
+      conversationIds.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "conversationIds array is required" });
+    }
+
+    const result = await prisma.emailMessage.updateMany({
+      where: {
+        conversationId: { in: conversationIds },
+        emailAccountId: Number(accountId),
+      },
+      data: { folder: "inbox" },
+    });
+
+    try {
+      clearAllFolderCaches(req.user.id, accountId);
+    } catch (e) {
+      console.warn("Cache clear failed:", e.message);
+    }
+
+    res.json({ success: true, moved: result.count });
+  } catch (err) {
+    console.error("❌ Move to inbox error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* =========================================================
    SAVE MESSAGE TO DRAFT
    POST /api/inbox/save-draft
 ========================================================= */
