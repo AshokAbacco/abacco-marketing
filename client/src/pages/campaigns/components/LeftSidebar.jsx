@@ -173,40 +173,54 @@ export default function ModernSidebar({
   const getGroupUnread = (groupId) =>
     getGroupAccounts(groupId).reduce((sum, a) => sum + (a.unreadCount || 0), 0);
 
-  // ── Group CRUD ────────────────────────────────────────────────────────
-  const handleDeleteGroup = async (groupId) => {
-    const group = accountGroups.find((g) => g.id === groupId);
-    const groupAccounts = accounts.filter((a) => String(a.groupId) === String(groupId));
-    const accountCount = groupAccounts.length;
+const renameInFlightRef = React.useRef(false);
 
-    const confirmMsg = accountCount > 0
-      ? `Delete "${group?.name}"?\n\nThis will permanently delete the group AND all ${accountCount} account(s) inside it, along with all their emails and data.\n\nThis cannot be undone.`
-      : `Delete "${group?.name}"? This group is empty and will be permanently removed.`;
+const handleDeleteGroup = async (groupId) => {
+  const group = accountGroups.find((g) => String(g.id) === String(groupId));
+  const groupAccounts = accounts.filter((a) => String(a.groupId) === String(groupId));
+  const accountCount = groupAccounts.length;
 
-    if (!window.confirm(confirmMsg)) return;
-    try {
-      await api.delete(`${API_BASE_URL}/api/account-groups/${groupId}`);
-      if (onGroupsChange) onGroupsChange();
-    } catch (err) {
-      console.error("Failed to delete group:", err);
-      alert("Failed to delete group. Please try again.");
-    }
-    setShowGroupMenu(null);
-  };
+  const confirmMsg = accountCount > 0
+    ? `Delete "${group?.name}"?\n\nThis will permanently delete the group AND all ${accountCount} account(s) inside it, along with all their emails and data.\n\nThis cannot be undone.`
+    : `Delete "${group?.name}"? This group is empty and will be permanently removed.`;
 
-  const handleRenameGroup = async (groupId) => {
-    if (!editGroupName.trim()) return;
-    try {
-      await api.patch(`${API_BASE_URL}/api/account-groups/${groupId}`, {
-        name: editGroupName.trim(),
-      });
-      if (onGroupsChange) onGroupsChange();
-    } catch (err) {
-      console.error("Failed to rename group:", err);
-    }
+  if (!window.confirm(confirmMsg)) return;
+
+  try {
+    await api.delete(`${API_BASE_URL}/api/account-groups/${groupId}`);
+    if (onGroupsChange) onGroupsChange();
+  } catch (err) {
+    console.error("Failed to delete group:", err);
+    const serverMsg = err?.response?.data?.error;
+    alert(serverMsg ? `Failed to delete group: ${serverMsg}` : "Failed to delete group. Please try again.");
+  }
+  setShowGroupMenu(null);
+};
+
+const handleRenameGroup = async (groupId) => {
+  const trimmed = editGroupName.trim();
+  if (!trimmed || renameInFlightRef.current) {
     setEditingGroup(null);
     setEditGroupName("");
-  };
+    return;
+  }
+
+  renameInFlightRef.current = true;
+  try {
+    await api.patch(`${API_BASE_URL}/api/account-groups/${groupId}`, {
+      name: trimmed,
+    });
+    if (onGroupsChange) onGroupsChange();
+  } catch (err) {
+    console.error("Failed to rename group:", err);
+    const serverMsg = err?.response?.data?.error;
+    alert(serverMsg ? `Failed to rename group: ${serverMsg}` : "Failed to rename group. Please try again.");
+  } finally {
+    renameInFlightRef.current = false;
+    setEditingGroup(null);
+    setEditGroupName("");
+  }
+};
 
   // ── Render helpers ────────────────────────────────────────────────────
   const AccountRow = ({ account }) => {
@@ -303,24 +317,33 @@ export default function ModernSidebar({
               }
             </div>
 
-            {isEditing ? (
-              <input
-                autoFocus
-                value={editGroupName}
-                onChange={(e) => setEditGroupName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleRenameGroup(group.id);
-                  if (e.key === "Escape") { setEditingGroup(null); setEditGroupName(""); }
-                }}
-                onBlur={() => handleRenameGroup(group.id)}
-                onClick={(e) => e.stopPropagation()}
-                className="flex-1 text-sm font-semibold text-slate-800 bg-transparent border-b border-emerald-400 outline-none"
-              />
-            ) : (
-              <span className="flex-1 text-sm font-semibold text-slate-800 text-left truncate">
-                {group.name}
-              </span>
-            )}
+           {isEditing ? (
+            <input
+              autoFocus
+              value={editGroupName}
+              onChange={(e) => setEditGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.currentTarget.blur(); // funnel through onBlur so there's only one save path
+                }
+                if (e.key === "Escape") {
+                  e.currentTarget.dataset.cancelled = "true";
+                  setEditingGroup(null);
+                  setEditGroupName("");
+                }
+              }}
+              onBlur={(e) => {
+                if (e.currentTarget.dataset.cancelled === "true") return;
+                handleRenameGroup(group.id);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 text-sm font-semibold text-slate-800 bg-transparent border-b border-emerald-400 outline-none"
+            />
+          ) : (
+            <span className="flex-1 text-sm font-semibold text-slate-800 text-left truncate">
+              {group.name}
+            </span>
+          )}
 
             <div className="flex items-center gap-1.5">
               {totalUnread > 0 && (
@@ -518,11 +541,7 @@ export default function ModernSidebar({
                 title={group.name}
               >
                 <Folder className="w-4 h-4 text-white" />
-                {unread > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-white text-[9px] font-bold flex items-center justify-center">
-                    {unread > 9 ? "9+" : unread}
-                  </span>
-                )}
+                 
               </button>
             );
           })}

@@ -63,7 +63,15 @@ router.post("/", protect, async (req, res) => {
 router.patch("/:id", protect, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ success: false, error: "Invalid group id" });
+    }
+
     const { name, color } = req.body;
+
+    if (name !== undefined && !name?.trim()) {
+      return res.status(400).json({ success: false, error: "Group name cannot be empty" });
+    }
 
     // Ensure ownership
     const existing = await prisma.emailAccountGroup.findFirst({
@@ -76,8 +84,8 @@ router.patch("/:id", protect, async (req, res) => {
     const updated = await prisma.emailAccountGroup.update({
       where: { id },
       data: {
-        ...(name?.trim()  ? { name: name.trim() } : {}),
-        ...(color         ? { color }              : {}),
+        ...(name?.trim() ? { name: name.trim() } : {}),
+        ...(color        ? { color }              : {}),
       },
     });
 
@@ -87,7 +95,6 @@ router.patch("/:id", protect, async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
 /* ─────────────────────────────────────────────────────────────
    DELETE /api/account-groups/:id
    Deletes the group AND all accounts inside it, along with
@@ -97,6 +104,9 @@ router.patch("/:id", protect, async (req, res) => {
 router.delete("/:id", protect, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ success: false, error: "Invalid group id" });
+    }
 
     const existing = await prisma.emailAccountGroup.findFirst({
       where: { id, userId: req.user.id },
@@ -105,76 +115,86 @@ router.delete("/:id", protect, async (req, res) => {
       return res.status(404).json({ success: false, error: "Group not found" });
     }
 
-    // 1️⃣ Find all accounts in this group
-    const accountsInGroup = await prisma.emailAccount.findMany({
-      where: { groupId: id },
-      select: { id: true },
+    // Run the whole cascade in one transaction: if any step fails,
+    // everything rolls back instead of leaving partially-deleted data.
+    const deletedAccountCount = await prisma.$transaction(async (tx) => {
+      const accountsInGroup = await tx.emailAccount.findMany({
+        where: { groupId: id },
+        select: { id: true },
+      });
+      const accountIds = accountsInGroup.map((a) => a.id);
+
+      if (accountIds.length > 0) {
+        // ── Messages + their children ──────────────────────────────
+        const messages = await tx.emailMessage.findMany({
+          where: { emailAccountId: { in: accountIds } },
+          select: { id: true },
+        });
+        const messageIds = messages.map((m) => m.id);
+
+        if (messageIds.length > 0) {
+          await tx.attachment.deleteMany({
+            where: { emailMessageId: { in: messageIds } },
+          });
+          await tx.messageTag.deleteMany({
+            where: { messageId: { in: messageIds } },
+          });
+        }
+
+        await tx.emailMessage.deleteMany({
+          where: { emailAccountId: { in: accountIds } },
+        });
+
+        // ── Conversations + their children ───────────────────────────
+        const conversations = await tx.conversation.findMany({
+          where: { emailAccountId: { in: accountIds } },
+          select: { id: true },
+        });
+        const conversationIds = conversations.map((c) => c.id);
+
+        if (conversationIds.length > 0) {
+          await tx.conversationTag.deleteMany({
+            where: { conversationId: { in: conversationIds } },
+          });
+          await tx.scheduledMessage.deleteMany({
+            where: { conversationId: { in: conversationIds } },
+          });
+        }
+
+        await tx.conversation.deleteMany({
+          where: { emailAccountId: { in: accountIds } },
+        });
+
+        // ── ScheduledMessages tied directly to the account ───────────
+        // (not just the ones tied to a conversation, cleaned up above)
+        await tx.scheduledMessage.deleteMany({
+          where: { emailAccountId: { in: accountIds } },
+        });
+
+        // ── Other per-account data ────────────────────────────────────
+        await tx.emailFolder.deleteMany({
+          where: { accountId: { in: accountIds } },
+        });
+        await tx.syncState.deleteMany({
+          where: { accountId: { in: accountIds } },
+        });
+
+        // ── Accounts themselves ───────────────────────────────────────
+        await tx.emailAccount.deleteMany({
+          where: { id: { in: accountIds } },
+        });
+      }
+
+      // ── The group ─────────────────────────────────────────────────
+      await tx.emailAccountGroup.delete({ where: { id } });
+
+      return accountIds.length;
     });
-    const accountIds = accountsInGroup.map((a) => a.id);
-
-    // 2️⃣ For each account, delete all related data (same order as DELETE /accounts/:id)
-    if (accountIds.length > 0) {
-      // ── Messages + their children ──────────────────────────────────
-      const messages = await prisma.emailMessage.findMany({
-        where: { emailAccountId: { in: accountIds } },
-        select: { id: true },
-      });
-      const messageIds = messages.map((m) => m.id);
-
-      if (messageIds.length > 0) {
-        await prisma.attachment.deleteMany({
-          where: { emailMessageId: { in: messageIds } },
-        });
-        await prisma.messageTag.deleteMany({
-          where: { messageId: { in: messageIds } },
-        });
-      }
-
-      await prisma.emailMessage.deleteMany({
-        where: { emailAccountId: { in: accountIds } },
-      });
-
-      // ── Conversations + their children ─────────────────────────────
-      const conversations = await prisma.conversation.findMany({
-        where: { emailAccountId: { in: accountIds } },
-        select: { id: true },
-      });
-      const conversationIds = conversations.map((c) => c.id);
-
-      if (conversationIds.length > 0) {
-        await prisma.conversationTag.deleteMany({
-          where: { conversationId: { in: conversationIds } },
-        });
-        await prisma.scheduledMessage.deleteMany({
-          where: { conversationId: { in: conversationIds } },
-        });
-      }
-
-      await prisma.conversation.deleteMany({
-        where: { emailAccountId: { in: accountIds } },
-      });
-
-      // ── Other per-account data ─────────────────────────────────────
-      await prisma.emailFolder.deleteMany({
-        where: { accountId: { in: accountIds } },
-      });
-      await prisma.syncState.deleteMany({
-        where: { accountId: { in: accountIds } },
-      });
-
-      // 3️⃣ Delete the accounts themselves
-      await prisma.emailAccount.deleteMany({
-        where: { id: { in: accountIds } },
-      });
-    }
-
-    // 4️⃣ Delete the group
-    await prisma.emailAccountGroup.delete({ where: { id } });
 
     res.json({
       success: true,
-      message: `Group deleted along with ${accountIds.length} account(s) and all their data.`,
-      deletedAccountCount: accountIds.length,
+      message: `Group deleted along with ${deletedAccountCount} account(s) and all their data.`,
+      deletedAccountCount,
     });
   } catch (err) {
     console.error("DELETE /account-groups/:id error:", err);

@@ -14,6 +14,7 @@ import campaignsRoutes from "./src/routes/campaigns.routes.js";
 import pitchRoutes from "./src/routes/pitch.routes.js";
 import leadsRoutes from "./src/routes/leads.routes.js";
 import analyticsRoutes from "./src/routes/analytics.routes.js";
+import dashboardRoutes from "./src/routes/dashboard.routes.js";
 import accountGroupsRoutes from "./src/routes/inbox/accountGroups.js";
 
 import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
@@ -53,7 +54,7 @@ app.use("/api/leads", leadsRoutes);
 app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/account-groups", accountGroupsRoutes);
-
+app.use("/api/dashboard", dashboardRoutes);
 // --------------------
 // Health check
 // --------------------
@@ -195,7 +196,7 @@ async function startWorker() {
   await resumeAccountDeletions(prisma);
 
   // Recover stuck emails every 60 seconds
-  setInterval(recoverStuckEmails, 60_000);
+  setInterval(recoverStuckEmails, 120_000);
 
   // Resume any in-progress campaigns every 2 minutes
   // (safe: sendBulkCampaign's global lock prevents duplicate workers)

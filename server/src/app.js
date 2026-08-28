@@ -1,3 +1,4 @@
+// server/src/app.js
 import prisma from "./prismaClient.js";
 
 async function startupSafety() {
