@@ -5,7 +5,6 @@ import prisma from "../prismaClient.js";
 import { decrypt } from "../utils/crypto.js";
 import cache from "../utils/cache.js";
 import dns from "dns/promises";
-import pLimit from "p-limit";   // already a dependency; was unused
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -347,11 +346,6 @@ function extractBaseStyles(html) {
 
 const BATCH_SIZE  = 10;
 const CONCURRENCY = 2; // FIX: defined at module level, not inside a loop
-
-// How many sender accounts may send at the same time. Peak DB connection
-// demand from this worker is roughly ACCOUNT_CONCURRENCY × CONCURRENCY, so
-// keep the product below the worker's Prisma connection_limit.
-const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 3;
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function createTransporter(account, smtpPassword) {
@@ -579,102 +573,88 @@ async function runBatch(batch, ctx) {
     originalCampaignId,
   } = ctx;
 
+  /* ── BUG 1 FIX: CONCURRENCY was a nested for-loop, not parallel ──────────
+     The original code:
+       for (group of chunks)           ← group of 2
+         for (recipient of group)      ← sequential: send, sleep, send, sleep
+     So CONCURRENCY=2 gave zero parallelism. Both sends happened one after
+     the other, each with its own sleep().
+
+     Fixed: Promise.all the inner group, sleep ONCE after the group, not
+     once per email. This sends up to CONCURRENCY emails in parallel, then
+     waits one interval before the next group.                             */
   const chunks = chunkArray(batch, CONCURRENCY);
 
   for (const group of chunks) {
-    for (const recipient of group) {
-  const assignment = assignmentMap.get(recipient.id);
+    await Promise.all(group.map(async (recipient) => {
+      const assignment = assignmentMap.get(recipient.id);
 
-  if (!assignment) {
-    await prisma.campaignRecipient.update({
-      where: { id: recipient.id },
-      data: { status: "failed", error: "No assignment found" },
-    }).catch(() => {});
-    continue;
-  }
+      if (!assignment) {
+        await prisma.campaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "failed", error: "No assignment found" },
+        }).catch(() => {});
+        return;
+      }
 
-  // Fail fast on obviously malformed addresses — genuinely permanent, no
-  // point spending an SMTP connection or a retry slot on these.
-  if (!EMAIL_FORMAT_RE.test(recipient.email || "")) {
-    await prisma.campaignRecipient.update({
-      where: { id: recipient.id },
-      data: { status: "failed", error: "Invalid email address format" },
-    }).catch(() => {});
-    continue;
-  }
+      if (!EMAIL_FORMAT_RE.test(recipient.email || "")) {
+        await prisma.campaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "failed", error: "Invalid email address format" },
+        }).catch(() => {});
+        return;
+      }
 
-  try {
-    if (campaign.sendType === "followup") {
-      await sendOneFollowup({
-        recipient,
-        account,
-        transporter,
-        fromEmail,
-        campaign,
-        assignment,
-        originalCampaignId,
-      });
-    } else {
-      await sendOneNormal({
-        recipient,
-        account,
-        transporter,
-        fromEmail,
-        campaign,
-        assignment,
-        smtpIp,
-      });
-    }
+      try {
+        if (campaign.sendType === "followup") {
+          await sendOneFollowup({
+            recipient, account, transporter, fromEmail,
+            campaign, assignment, originalCampaignId,
+          });
+        } else {
+          await sendOneNormal({
+            recipient, account, transporter, fromEmail,
+            campaign, assignment, smtpIp,
+          });
+        }
+      } catch (err) {
+        console.error(`❌ Failed → ${recipient.email}:`, err.message);
 
-    // console.log(`✅ Sent → ${recipient.email}`);
+        const permanent      = isPermanentError(err);
+        const currentRetries = recipient.retryCount || 0;
+        const nextRetryCount = currentRetries + 1;
+        const errMsg         = err.message?.slice(0, 500) || "Unknown error";
 
-    // 🔥 CONTROLLED DELAY HERE
+        if (!permanent && nextRetryCount <= MAX_TRANSIENT_RETRIES) {
+          await prisma.campaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
+              status:      "pending",
+              retryCount:  nextRetryCount,
+              lastTriedAt: new Date(),
+              error:       `Retry ${nextRetryCount}/${MAX_TRANSIENT_RETRIES} scheduled: ${errMsg}`,
+            },
+          }).catch(() => {});
+          await sleep(Math.min(2000 * nextRetryCount, 10000));
+          return;
+        }
+
+        await prisma.campaignRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            status:      "failed",
+            retryCount:  nextRetryCount,
+            lastTriedAt: new Date(),
+            error: permanent
+              ? errMsg
+              : `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded: ${errMsg}`,
+          },
+        }).catch(() => {});
+      }
+    }));
+
+    // Sleep ONCE per group (not once per email) — this is the rate-limiter.
     await sleep(ctx.delayPerEmail);
-
-  } catch (err) {
-    console.error(`❌ Failed → ${recipient.email}:`, err.message);
-
-    const permanent       = isPermanentError(err);
-    const currentRetries  = recipient.retryCount || 0;
-    const nextRetryCount  = currentRetries + 1;
-    const errMsg          = err.message?.slice(0, 500) || "Unknown error";
-
-    if (!permanent && nextRetryCount <= MAX_TRANSIENT_RETRIES) {
-      // Temporary failure (timeout, rate limit, dropped connection, etc.) —
-      // requeue as "pending" so the batch loop above picks it up again on a
-      // later pass, instead of permanently marking a good address as failed.
-      await prisma.campaignRecipient.update({
-        where: { id: recipient.id },
-        data: {
-          status:      "pending",
-          retryCount:  nextRetryCount,
-          lastTriedAt: new Date(),
-          error:       `Retry ${nextRetryCount}/${MAX_TRANSIENT_RETRIES} scheduled: ${errMsg}`,
-        },
-      }).catch(() => {});
-
-      // Back off briefly before the next send so we don't immediately
-      // hammer a server that just rate-limited or dropped us.
-      await sleep(Math.min(2000 * nextRetryCount, 10000));
-      continue;
-    }
-
-    // Genuine permanent failure, or a temporary one that has exhausted its
-    // retry budget — mark failed for good.
-    await prisma.campaignRecipient.update({
-      where: { id: recipient.id },
-      data: {
-        status:      "failed",
-        retryCount:  nextRetryCount,
-        lastTriedAt: new Date(),
-        error: permanent
-          ? errMsg
-          : `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded: ${errMsg}`,
-      },
-    }).catch(() => {});
-  }
-}
-   
   }
 }
 
@@ -797,21 +777,7 @@ async function processAccountBatched({
     // ── Batch loop ─────────────────────────────────────────────────────────
     while (true) {
 
-      const remainingEmails = await prisma.campaignRecipient.count({
-          where: {
-            campaignId,
-            accountId: Number(accountId),
-            status: "pending",
-          },
-        });
-
-        const delay = getControlledDelay({
-          limit, // user selected (30/hr, 50/hr)
-          remainingEmails,
-          estimatedCompletion: campaign.estimatedCompletion,
-        });
-        ctx.delayPerEmail = delay;
-      // [A] Campaign stop check
+        // [A] Campaign stop check
       const latestCampaign = await prisma.campaign.findUnique({
         where:  { id: campaignId },
         select: { status: true },
@@ -828,11 +794,40 @@ async function processAccountBatched({
         const waitMin = Math.ceil(waitMs / 60000);
         console.log(`🚫 Daily limit reached. Sleeping ${waitMin} min until reset...`);
         await sleep(waitMs);
+        // ── BUG 3 FIX: push estimatedCompletion forward by the sleep time ──
+        // Otherwise the deadline is already in the past when we resume and
+        // the delay falls back to the slow base rate.
+        if (campaign.estimatedCompletion) {
+          campaign = {
+            ...campaign,
+            estimatedCompletion: new Date(
+              new Date(campaign.estimatedCompletion).getTime() + waitMs
+            ),
+          };
+        }
         console.log(`🔄 Resuming campaign ${campaignId} after daily reset...`);
         continue;
       }
 
       // [C] Fetch next batch — only "pending" rows for this account
+      //
+      // ── BUG 2 FIX: delay was computed once before the loop starts ────────
+      // As emails are sent, the remaining count drops but the delay never
+      // adjusted — so early batches ran at the slow opening pace and there
+      // was no way to make up time. Now recomputed every batch so the pace
+      // accelerates naturally as the deadline approaches.
+      const remaining = await prisma.campaignRecipient.count({
+        where: { campaignId, accountId: Number(accountId), status: "pending" },
+      });
+      ctx.delayPerEmail = getControlledDelay({
+        limit,
+        remainingEmails: remaining,
+        estimatedCompletion: campaign.estimatedCompletion,
+      });
+      console.log(
+        `[${account.email}] remaining=${remaining} delay=${(ctx.delayPerEmail/1000).toFixed(1)}s`
+      );
+
       const batch = await prisma.campaignRecipient.findMany({
         where: {
           campaignId,
@@ -1372,34 +1367,20 @@ async function _sendBulkCampaignInner(campaignId) {
 
   console.log(`🚀 Campaign ${campaignId}: dispatching ${accountIds.length} account(s) in parallel`);
 
-  /* ⚡ BOUNDED FAN-OUT
-     This was an unbounded Promise.all across every account. With 7 sender
-     accounts and CONCURRENCY = 2, that is 14 send pipelines running at once,
-     each issuing several DB writes (claim row → update status → log message)
-     against a pool of 10. The pool was guaranteed to time out.
-
-     ACCOUNT_CONCURRENCY caps how many accounts run at the same time, so the
-     worker's peak connection demand is bounded and predictable:
-         peak ≈ ACCOUNT_CONCURRENCY × CONCURRENCY
-     Keep that comfortably under the worker's connection_limit.            */
-  const accountLimit = pLimit(ACCOUNT_CONCURRENCY);
-
   await Promise.all(
     accountIds.map(accountId =>
-      accountLimit(() =>
-        processAccountBatched({
-          campaignId,
-          accountId,
-          campaign,
-          assignmentMap,
-          originalCampaignId,
-          customLimits,
-          userId,
-        }).catch(err => {
-          // One account failing should not abort the others
-          console.error(`❌ Account ${accountId} processor error:`, err.message);
-        })
-      )
+      processAccountBatched({
+        campaignId,
+        accountId,
+        campaign,
+        assignmentMap,
+        originalCampaignId,
+        customLimits,
+        userId,
+      }).catch(err => {
+        // One account failing should not abort the others
+        console.error(`❌ Account ${accountId} processor error:`, err.message);
+      })
     )
   );
 
