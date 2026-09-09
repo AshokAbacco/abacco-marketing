@@ -252,6 +252,13 @@ function FromMailsTab({ campaign }) {
 // ─── Main Modal ───────────────────────────────────────────────────────────────
 export default function CampaignView({ campaignId, onClose }) {
   const [data, setData] = useState(null);
+  // ⚡ Full, unpaginated recipient list (every status), used for the
+  // Copy All/Processing/Completed/Failed buttons, the virtual table, and
+  // the From Mails tab. `data.campaign.recipients` from /:id/view is
+  // capped at pageSize (default 200, max 500) and must NOT be used for
+  // "show me everything" lists — only `data.stats` (grouped counts) is
+  // safe to read off /:id/view for totals.
+  const [allRecipients, setAllRecipients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [copiedSection, setCopiedSection] = useState(null);
@@ -267,11 +274,22 @@ export default function CampaignView({ campaignId, onClose }) {
     try {
       setLoading(true);
       setError(null);
-      const res = await api.get(`${API_BASE_URL}/api/campaigns/${campaignId}/view`);
-      if (res.data.success) {
-        setData(res.data.data);
+      const [viewRes, recipientsRes] = await Promise.all([
+        api.get(`${API_BASE_URL}/api/campaigns/${campaignId}/view`),
+        api.get(`${API_BASE_URL}/api/campaigns/${campaignId}/recipients`),
+      ]);
+
+      if (viewRes.data.success) {
+        setData(viewRes.data.data);
       } else {
         setError("Failed to load campaign data");
+      }
+
+      if (recipientsRes.data.success) {
+        setAllRecipients(recipientsRes.data.data || []);
+      } else {
+        console.error("Failed to load full recipient list:", recipientsRes.data);
+        setAllRecipients([]);
       }
     } catch (error) {
       console.error("Failed to fetch campaign:", error);
@@ -294,8 +312,8 @@ export default function CampaignView({ campaignId, onClose }) {
   };
 
   const getRecipientsByStatus = (status) => {
-    if (!data?.campaign?.recipients) return [];
-    return data.campaign.recipients.filter(r => {
+    if (!allRecipients.length) return [];
+    return allRecipients.filter(r => {
       if (status === 'completed') return r.status === 'sent' || r.status === 'completed';
       if (status === 'processing') return r.status === 'pending' || r.status === 'processing';
       if (status === 'failed') return r.status === 'failed' || r.status === 'error';
@@ -305,15 +323,17 @@ export default function CampaignView({ campaignId, onClose }) {
 
   if (!campaignId) return null;
 
-  const allEmails        = data ? data.campaign.recipients.map(r => r.email) : [];
-  const processingEmails = data ? getRecipientsByStatus('processing').map(r => r.email) : [];
-  const completedEmails  = data ? getRecipientsByStatus('completed').map(r => r.email) : [];
-  const failedEmails     = data ? getRecipientsByStatus('failed').map(r => r.email) : [];
+  const allEmails        = allRecipients.map(r => r.email);
+  const processingEmails = getRecipientsByStatus('processing').map(r => r.email);
+  const completedEmails  = getRecipientsByStatus('completed').map(r => r.email);
+  const failedEmails     = getRecipientsByStatus('failed').map(r => r.email);
 
-
-
-  // From mails count for badge — uses same extractFromEmails helper as FromMailsTab
-  const fromMailsCount = data ? extractFromEmails(data.campaign).length : 0;
+  // From mails count for badge — uses same extractFromEmails helper as
+  // FromMailsTab, but fed the full recipient list rather than the
+  // paginated one on data.campaign.
+  const fromMailsCount = data
+    ? extractFromEmails({ ...data.campaign, recipients: allRecipients }).length
+    : 0;
 
   return (
     <div
@@ -459,7 +479,7 @@ export default function CampaignView({ campaignId, onClose }) {
               {/* ── Tab Panels ─────────────────────────────────────── */}
               {activeTab === "recipients" && (
                 <div className="space-y-6">
-                  {data.campaign.recipients && data.campaign.recipients.length > 0 ? (
+                  {allRecipients.length > 0 ? (
                     <div>
                       {/* Header + Copy Buttons */}
                       <div className="flex items-center justify-between mb-4">
@@ -556,7 +576,7 @@ export default function CampaignView({ campaignId, onClose }) {
               )}
 
               {activeTab === "frommails" && (
-                <FromMailsTab campaign={data.campaign} />
+                <FromMailsTab campaign={{ ...data.campaign, recipients: allRecipients }} />
               )}
 
             </div>

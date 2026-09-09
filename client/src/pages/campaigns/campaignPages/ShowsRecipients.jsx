@@ -20,26 +20,29 @@ export default function ShowsRecipients({ campaignId, onClose, onUpdated }) {
         const token = localStorage.getItem("token");
         console.log("Fetching recipients for campaign:", campaignId);
 
-        const res = await fetch(`${API_BASE_URL}/api/campaigns/${campaignId}/view`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        // ⚡ Use the unpaginated recipients endpoint (not /:id/view, which
+        // pages at pageSize=200/max 500) so ALL sent recipients come back,
+        // not just the first page.
+        const res = await fetch(
+          `${API_BASE_URL}/api/campaigns/${campaignId}/recipients?status=sent`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
         const data = await res.json();
 
-        console.log("Fetched campaign data:", data);
+        console.log("Fetched campaign recipients:", data);
 
         if (data.success) {
-          const allRecipients = data.data.campaign.recipients || [];
-
-          // ✅ Only show recipients that were actually sent (sent or completed)
-          const sentRecipients = allRecipients.filter(
+          // Already filtered to status=sent server-side; keep the guard in
+          // case that ever changes.
+          const sentRecipients = (data.data || []).filter(
             (r) => r.status === "sent" || r.status === "completed"
           );
 
-          console.log(
-            `Recipients: total=${allRecipients.length}, sent/completed=${sentRecipients.length}`
-          );
+          console.log(`Recipients: sent/completed=${sentRecipients.length}`);
 
           setRecipients(sentRecipients);
           setFilteredRecipients(sentRecipients);
