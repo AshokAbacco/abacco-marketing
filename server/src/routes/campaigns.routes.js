@@ -13,10 +13,12 @@ import {
   getCampaignsForFollowup,
   getSingleCampaign,
   stopCampaign,
-  updateFollowupRecipients,      // ✅ ADD
-  sendFollowupCampaign,           // ✅ ADD
+  updateFollowupRecipients,   
+  sendFollowupCampaign,        
   getDailyLimitStatus,
-  getAdminDailyOverview 
+  getAdminDailyOverview,
+  getRecipientBody,
+  getCampaignRecipientEmails,
 } from "../controllers/campaigns.controller.js";
 
 const router = express.Router();
@@ -43,7 +45,15 @@ router.post("/followup", protect, createFollowupCampaign);
 
 // 🔥 IMPORTANT: Specific parameterized routes (:id/view, :id/progress) come before generic :id routes
 router.get("/:id/view", protect, getSingleCampaign);
-router.get("/:id/progress", getCampaignProgress);
+router.get("/:id/progress", protect, getCampaignProgress);
+
+// Full address list (unpaginated, scalar columns only) — used to build
+// follow-ups and the copy-to-clipboard lists.
+router.get("/:id/recipients", protect, getCampaignRecipientEmails);
+
+// One rendered email body, fetched on demand.
+router.get("/:id/recipients/:recipientId/body", protect, getRecipientBody);
+
 router.post("/:id/send", protect, sendCampaignNow);
 router.post("/:id/schedule", protect, scheduleCampaign);
 router.delete("/:id", protect, deleteCampaign);

@@ -1,3 +1,6 @@
+// src/pages/campaigns/campaignPages/Schedulemodal.jsx
+//  Campaign View Modal: Displays campaign recipients, stats, and from-mails in a modal with tabs.
+
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { X, Loader2, Users, CheckCircle, Clock, AlertCircle, Copy, Check, Mail, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../../utils/api";

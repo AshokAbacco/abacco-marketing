@@ -200,11 +200,8 @@ const CampaignTiming = ({ campaign }) => {
     const startTime = campaign.createdAt ? new Date(campaign.createdAt) : null;
 
     // End time: from recipients for completed campaigns
-    const sentRecipients = campaign.recipients?.filter(r => r.sentAt) || [];
-    const sorted = [...sentRecipients].sort((a, b) => new Date(a.sentAt) - new Date(b.sentAt));
-    const lastSent = sorted[sorted.length - 1];
-    const endTime = isCompleted
-      ? (lastSent?.sentAt ? new Date(lastSent.sentAt) : null)
+    const endTime = isCompleted && campaign.lastSentAt
+      ? new Date(campaign.lastSentAt)
       : null;
 
     // ✅ Always use the DB-stored estimatedCompletion — fixed at creation, never drifts.
@@ -789,7 +786,7 @@ const stopCampaign = async (id) => {
                               </div>
 
                               <span className="text-sm font-bold text-slate-900">
-                                {(campaign.recipients?.length || 0).toLocaleString()}
+                                {(campaign.recipientCount ?? 0).toLocaleString()}
                               </span>
 
                               <span className="text-xs text-slate-600 font-medium">

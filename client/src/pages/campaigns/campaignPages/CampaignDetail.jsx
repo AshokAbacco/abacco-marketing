@@ -66,6 +66,17 @@ export default function CampaignDetail() {
   const [showRecipientModal, setShowRecipientModal] = useState(false);
   const [campaignData, setCampaignData] = useState(null);
   const [followupLevel, setFollowupLevel] = useState(1);
+  // ⚡ Full list of SENT recipients for the selected campaign.
+  // Loaded from /:id/recipients?status=sent, which is unpaginated and returns
+  // only id/email/accountId/status. The list endpoints no longer embed
+  // recipients at all, and /:id/view paginates them, so neither can be used
+  // to build a follow-up without silently dropping people.
+  const [allSentRecipients, setAllSentRecipients] = useState([]);
+  const [loadingRecipients, setLoadingRecipients] = useState(false);
+  const [recipientsError, setRecipientsError] = useState("");
+  const [campaignsHasMore, setCampaignsHasMore] = useState(false);
+  const [campaignsTotal, setCampaignsTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const { id } = useParams();
 
   // ── Daily limit ─────────────────────────────────────────────
@@ -75,64 +86,49 @@ export default function CampaignDetail() {
   // ------------------------------
   // Fetch campaigns
   // ------------------------------
-  const fetchCampaigns = (level = 1) => {
-    setLoadingCampaigns(true); // ✅ show loading state immediately
-    fetch(`${API_BASE_URL}/api/campaigns`, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem("token")}`,
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        console.log("Campaign API:", data);
+  const CAMPAIGN_PAGE_SIZE = 6;
 
-        const allCampaigns = data.data || [];
+  // Loads one page of eligible follow-up campaigns.
+  // append=false → first page (replaces the list); append=true → Load More.
+  const fetchCampaigns = async (level = 1, { append = false } = {}) => {
+    const offset = append ? campaigns.length : 0;
 
-        // Block campaigns with an active (in-progress) follow-up
-        const campaignsWithActiveFollowups = new Set();
+    if (append) setLoadingMore(true);
+    else setLoadingCampaigns(true);
 
-        // Count completed follow-ups per parent
-        const followupCountMap = {};
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/campaigns/for-followup?level=${level}` +
+        `&limit=${CAMPAIGN_PAGE_SIZE}&offset=${offset}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
+      );
 
-        allCampaigns.forEach(c => {
-          if (c.sendType === "followup" && c.parentCampaignId) {
-            if (c.status === "draft" || c.status === "sending" || c.status === "scheduled") {
-              campaignsWithActiveFollowups.add(c.parentCampaignId);
-            }
-            if (c.status === "completed") {
-              followupCountMap[c.parentCampaignId] =
-                (followupCountMap[c.parentCampaignId] || 0) + 1;
-            }
-          }
-        });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
 
-        const filtered = allCampaigns
-          .filter(c => {
-            const completedCount = followupCountMap[c.id] || 0;
-            const isBase =
-              (c.sendType === "immediate" || c.sendType === "scheduled") &&
-              c.status === "completed" &&
-              !c.parentCampaignId &&
-              !campaignsWithActiveFollowups.has(c.id);
-
-            if (!isBase) return false;
-            if (completedCount >= 4) return false;
-
-            // Show only campaigns that match the selected follow-up level
-            return completedCount === level - 1;
-          })
-          .map(c => ({
-            ...c,
-            followupNumber: (followupCountMap[c.id] || 0) + 1
-          }));
-
-        setCampaigns(filtered);
-      })
-      .catch(console.error)
-      .finally(() => setLoadingCampaigns(false)); // ✅ always clear loading
+      const items = data.success ? (data.data || []) : [];
+      setCampaigns(prev => (append ? [...prev, ...items] : items));
+      setCampaignsHasMore(Boolean(data.hasMore));
+      setCampaignsTotal(data.total ?? items.length);
+    } catch (err) {
+      console.error("Failed to load follow-up campaigns", err);
+      if (!append) {
+        setCampaigns([]);
+        setCampaignsHasMore(false);
+        setCampaignsTotal(0);
+      }
+    } finally {
+      if (append) setLoadingMore(false);
+      else setLoadingCampaigns(false);
+    }
   };
+
   useEffect(() => {
-    fetchCampaigns(followupLevel);
+    // Switching level starts a fresh list.
+    setCampaigns([]);
+    setCampaignsHasMore(false);
+    setCampaignsTotal(0);
+    fetchCampaigns(followupLevel, { append: false });
   }, [followupLevel]);
 
 
@@ -197,13 +193,20 @@ export default function CampaignDetail() {
     return followUpBody || "";
   };
 
-  const handleSelectCampaign = (id) => {
+  const handleSelectCampaign = async (id) => {
     setSelectedCampaignId(id);
     const campaign = campaigns.find((c) => String(c.id) === String(id));
 
-    if (!campaign) return;
+    if (!campaign) {
+      setLoadedCampaign(null);
+      setAllSentRecipients([]);
+      setOriginalBody("");
+      return;
+    }
 
     setLoadedCampaign(campaign);
+    setAllSentRecipients([]);
+    setOriginalBody("");
 
     try {
       const parsedSubjects = JSON.parse(campaign.subject || "[]");
@@ -212,14 +215,71 @@ export default function CampaignDetail() {
       setSubjects([campaign.subject]);
     }
 
-    // ✅ FIXED HERE
-    const firstRecipient = campaign.recipients?.find(r => r.sentBodyHtml);
+    const token = localStorage.getItem("token");
+    const auth = { headers: { Authorization: `Bearer ${token}` } };
 
-    setOriginalBody(
-      firstRecipient?.sentBodyHtml ||
-      campaign.bodyHtml ||
-      ""
-    );
+    setLoadingRecipients(true);
+    setRecipientsError("");
+    try {
+      // Detail (carries bodyHtml) and the full sent-recipient list, in parallel.
+      const [detailRes, recRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/campaigns/${campaign.id}/view?pageSize=1`, auth),
+        fetch(`${API_BASE_URL}/api/campaigns/${campaign.id}/recipients?status=sent`, auth),
+      ]);
+
+      // Check status BEFORE parsing — a missing route returns HTML, and
+      // res.json() on HTML throws a SyntaxError that hides the real cause.
+      if (!recRes.ok) {
+        throw new Error(
+          recRes.status === 404
+            ? "GET /api/campaigns/:id/recipients returned 404 — check campaigns.routes.js"
+            : `Recipient list request failed (HTTP ${recRes.status})`
+        );
+      }
+
+      const recJson = await recRes.json();
+      const detailJson = detailRes.ok ? await detailRes.json() : { success: false };
+
+      const sent = recJson.success ? (recJson.data || []) : [];
+      setAllSentRecipients(sent);
+
+      let detailCampaign = null;
+      if (detailJson.success) {
+        detailCampaign = detailJson.data.campaign;
+        // Merge so the row's counts (sentCount etc.) survive alongside bodyHtml.
+        setLoadedCampaign({ ...campaign, ...detailCampaign });
+      }
+
+      // "Previous message" body: prefer the actual email that went out, which
+      // now has to be fetched on demand — sentBodyHtml is no longer bundled
+      // into the recipient list responses.
+      let previousBody = "";
+      if (sent.length > 0) {
+        try {
+          const bodyRes = await fetch(
+            `${API_BASE_URL}/api/campaigns/${campaign.id}/recipients/${sent[0].id}/body`,
+            auth
+          );
+          const bodyJson = await bodyRes.json();
+          if (bodyJson.success) previousBody = bodyJson.data.sentBodyHtml || "";
+        } catch (err) {
+          console.error("Failed to load original email body", err);
+        }
+      }
+
+      setOriginalBody(
+        previousBody ||
+        detailCampaign?.bodyHtml ||
+        campaign.bodyHtml ||
+        ""
+      );
+    } catch (err) {
+      console.error("Failed to load campaign detail", err);
+      setAllSentRecipients([]);
+      setRecipientsError(err.message || "Could not load this campaign's recipients.");
+    } finally {
+      setLoadingRecipients(false);
+    }
   };
 
   // 🔥 FIX: Removed pitch requirement - users can now send custom follow-ups
@@ -249,9 +309,34 @@ export default function CampaignDetail() {
     }
 
     // ── Daily-limit guard ────────────────────────────────────
-    const followUpRecipientCount = (loadedCampaign.recipients || []).filter(
-      r => r.status === "sent" || r.status === "completed"
-    ).length;
+    const followUpRecipientCount = allSentRecipients.length;
+
+    if (loadingRecipients) {
+      setModal({
+        open: true,
+        type: "error",
+        message: "Still loading this campaign's address list — please wait a moment.",
+      });
+      return;
+    }
+
+    if (recipientsError) {
+      setModal({
+        open: true,
+        type: "error",
+        message: `Cannot send: the address list failed to load. ${recipientsError}`,
+      });
+      return;
+    }
+
+    if (followUpRecipientCount === 0) {
+      setModal({
+        open: true,
+        type: "error",
+        message: "This campaign has no successfully sent recipients to follow up with.",
+      });
+      return;
+    }
 
     if (dailyLimit && followUpRecipientCount > dailyLimit.remaining) {
       setModal({
@@ -288,9 +373,7 @@ export default function CampaignDetail() {
 
       // Build senderRecipientMap - distribute ONLY completed (sent) recipients across sender accounts
      // ✅ CORRECT - keep each recipient with the account that originally sent to them
-      const recipients = (loadedCampaign.recipients || []).filter(
-        r => r.status === "sent" || r.status === "completed"
-      );
+      const recipients = allSentRecipients;
       const senderRecipientMap = {};
 
       recipients.forEach((recipient) => {
@@ -393,8 +476,16 @@ export default function CampaignDetail() {
       const data = await res.json();
 
       if (data.success) {
-        setLoadedCampaign(data.data.campaign);
+        setLoadedCampaign(prev => ({ ...prev, ...data.data.campaign }));
       }
+
+      // The recipients modal can delete rows, so re-pull the full sent list.
+      const recRes = await fetch(
+        `${API_BASE_URL}/api/campaigns/${selectedCampaignId}/recipients?status=sent`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const recJson = await recRes.json();
+      if (recJson.success) setAllSentRecipients(recJson.data || []);
     } catch (err) {
       console.error("Failed to refresh campaign details", err);
     }
@@ -468,7 +559,7 @@ export default function CampaignDetail() {
                     {loadingCampaigns ? "⏳ Loading campaigns…" : campaigns.length === 0 ? "-- No eligible campaigns --" : "-- Choose a campaign --"}
                   </option>
                   {!loadingCampaigns && campaigns.map((c) => {
-                    const completedCount = c.recipients?.filter(r => r.status === "sent" || r.status === "completed").length || 0;
+                    const completedCount = c.sentCount ?? 0;
                     const ordinal = c.followupNumber === 2 ? "2nd" : c.followupNumber === 3 ? "3rd" : c.followupNumber === 4 ? "4th" : "1st";
                     return (
                       <option key={c.id} value={c.id}>
@@ -477,6 +568,28 @@ export default function CampaignDetail() {
                     );
                   })}
                 </select>
+
+                {/* Load More — the list is fetched 6 at a time. */}
+                {!loadingCampaigns && campaigns.length > 0 && (
+                  <div className="flex items-center justify-between gap-3 mt-3">
+                    <span className="text-xs text-emerald-700 font-semibold">
+                      Showing {campaigns.length}
+                      {campaignsTotal > 0 && ` of ${campaignsTotal}`} campaign
+                      {campaignsTotal === 1 ? "" : "s"}
+                    </span>
+
+                    {campaignsHasMore && (
+                      <button
+                        type="button"
+                        onClick={() => fetchCampaigns(followupLevel, { append: true })}
+                        disabled={loadingMore}
+                        className="px-4 py-2 text-xs font-bold rounded-lg border-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 transition-all disabled:opacity-60 disabled:cursor-wait"
+                      >
+                        {loadingMore ? "Loading…" : "Load more"}
+                      </button>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -538,9 +651,7 @@ export default function CampaignDetail() {
 
                 {/* ── Daily Limit Warning ──────────────────────────────── */}
                 {(() => {
-                  const recipientCount = (loadedCampaign?.recipients || []).filter(
-                    r => r.status === "sent" || r.status === "completed"
-                  ).length;
+                  const recipientCount = loadedCampaign?.sentCount ?? 0;
                   const overLimit = dailyLimit && recipientCount > 0 && recipientCount > dailyLimit.remaining;
                   return overLimit ? (
                     <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4 mt-2">
@@ -565,10 +676,8 @@ export default function CampaignDetail() {
                   </Button>
                   <Button
                     onClick={createFollowUp}
-                    disabled={sendingFollowup || !loadedCampaign || (() => {
-                      const cnt = (loadedCampaign?.recipients || []).filter(
-                        r => r.status === "sent" || r.status === "completed"
-                      ).length;
+                    disabled={sendingFollowup || !loadedCampaign || loadingRecipients || !!recipientsError || (() => {
+                      const cnt = allSentRecipients.length;
                       return dailyLimit && cnt > dailyLimit.remaining;
                     })()}
                   >
@@ -614,9 +723,9 @@ export default function CampaignDetail() {
                     </ul>
                   </div>
                   <div className="font-bold text-emerald-900">Sent: <span className="font-normal text-slate-700">{new Date(loadedCampaign.createdAt).toLocaleString()}</span></div>
-                  <div className="font-bold text-emerald-900">To: <span className="font-normal text-slate-700">{loadedCampaign.recipients?.[0]?.email || "—"}</span></div>
+                  <div className="font-bold text-emerald-900">To: <span className="font-normal text-slate-700">{allSentRecipients[0]?.email || "—"}</span></div>
                   <div className="text-xs text-emerald-600 font-semibold">
-                    Will send to total {loadedCampaign?.recipients?.filter(r => r.status === "sent" || r.status === "completed").length || 0} recipients (distributed automatically)
+                    Will send to total {loadedCampaign?.sentCount ?? 0} recipients (distributed automatically)
                   </div>
                    
                   <div className="font-bold text-emerald-900">Subject: <span className="font-normal text-slate-700">{subjects[0]}</span></div>
@@ -688,9 +797,33 @@ export default function CampaignDetail() {
                     Recipients
                   </p>
                   <p className="font-black text-slate-900 text-2xl">
-                    {loadedCampaign?.recipients?.filter(r => r.status === "sent" || r.status === "completed").length || 0}
+                    {loadedCampaign?.sentCount ?? 0}
                   </p>
                 </div>
+
+                {/* The number above is instant — it rides on the campaign row.
+                    Sending additionally needs every address, fetched separately;
+                    report that separately rather than blocking the count. */}
+                {loadingRecipients && (
+                  <p className="text-xs text-emerald-600 font-semibold animate-pulse">
+                    Loading address list…
+                  </p>
+                )}
+                {!loadingRecipients && recipientsError && (
+                  <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 mt-1">
+                    <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-700 leading-relaxed break-words">
+                      {recipientsError}
+                    </p>
+                  </div>
+                )}
+                {!loadingRecipients && !recipientsError && loadedCampaign &&
+                  allSentRecipients.length > 0 &&
+                  allSentRecipients.length !== (loadedCampaign.sentCount ?? 0) && (
+                  <p className="text-xs text-amber-700 font-semibold mt-1">
+                    Loaded {allSentRecipients.length} of {loadedCampaign.sentCount} addresses.
+                  </p>
+                )}
                 
                 {loadedCampaign && (
                   <button

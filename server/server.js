@@ -1,11 +1,30 @@
-// server/server.js
+// server/server.js — API PROCESS ONLY
+//
+// Background work (campaign sending, IMAP sync, recovery sweeps, the
+// scheduler) has moved to worker.js and runs as a SEPARATE process.
+//
+// Why: both used to share this process and its 10-connection Prisma pool.
+// Send workers run at concurrency 2 per account across every active
+// campaign, so with 10–20 users sending they held nearly every connection
+// and API requests queued until pool_timeout (30s) fired. That is what made
+// the campaign pages slow to open and sometimes hang on a spinner.
+//
+// Run both:
+//   npm start          → this file  (Render: Web Service)
+//   npm run start:worker → worker.js (Render: Background Worker)
+//
+// ⚠ Run exactly ONE worker instance. The campaign lock in
+//   campaignMailer.service.js (activeCampaigns) is an in-memory Set, so two
+//   workers would both pick up the same campaign and double-send. See
+//   PERFORMANCE_FIXES.md §1c for the Postgres advisory-lock swap that
+//   removes this restriction.
+
+import "dotenv/config";   // previously loaded only incidentally via imap.service.js
 import express from "express";
 import cors from "cors";
-import prisma from "./src/prismaClient.js";
-import { runSync } from "./src/services/imap.service.js";
 
 // Routes
-import accountRoutes, { resumeAccountDeletions } from "./src/routes/inbox/accounts.js";
+import accountRoutes from "./src/routes/inbox/accounts.js";
 import inboxRoutes from "./src/routes/inbox/inbox.js";
 import customStatusRoutes from "./src/routes/inbox/customStatusRoutes.js";
 import userRoutes from "./src/routes/user.js";
@@ -16,10 +35,6 @@ import leadsRoutes from "./src/routes/leads.routes.js";
 import analyticsRoutes from "./src/routes/analytics.routes.js";
 import dashboardRoutes from "./src/routes/dashboard.routes.js";
 import accountGroupsRoutes from "./src/routes/inbox/accountGroups.js";
-
-import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
-import { sendBulkCampaign, MAX_TRANSIENT_RETRIES } from "./src/services/campaignMailer.service.js";
-import { startFollowupCleanupJob } from "./src/controllers/campaigns.controller.js";
 
 const app = express();
 
@@ -55,179 +70,32 @@ app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/account-groups", accountGroupsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+
 // --------------------
 // Health check
 // --------------------
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", role: "api" });
 });
 
-// --------------------------------------------------
-// 🔧 WORKER LOGIC
-// --------------------------------------------------
+// --------------------
+// Error handler
+// --------------------
+// The app had none, so a thrown error in any handler left the request
+// hanging until the browser timed out — which looked identical to the
+// slowness we were chasing.
+app.use((err, req, res, _next) => {
+  console.error("Unhandled error:", req.method, req.originalUrl, err);
+  if (res.headersSent) return;
+  res.status(500).json({ success: false, message: "Server error" });
+});
 
-/**
- * Recover emails stuck in "processing" for more than 30 seconds.
- *
- * • Up to 2 retries → reset to "pending" so they get picked up again
- * • After 2 retries  → mark as "failed" permanently
- *
- * Note: sendBulkCampaign uses an in-memory Set lock, so recovered "pending"
- * emails will only be re-sent if the campaign worker is still running.
- * If the server restarted, resumeSendingCampaignsSafe will restart the worker.
- */
-async function recoverStuckEmails() {
-  try {
-    // Each send attempt now gets up to ~20s, retried up to 3x with backoff
-    // inside campaignMailer.service.js (worst case ~75-80s per recipient)
-    // before the row's status is updated. This threshold must stay safely
-    // above that, or this job can race an in-flight retry, reset the row to
-    // "pending" while it's still being processed, and let it get picked up
-    // and sent a second time. 3 minutes gives a comfortable margin.
-    const STUCK_THRESHOLD_MS = 3 * 60 * 1000;
-
-    // Reset emails stuck in processing (under retry limit) — this only
-    // fires for rows whose worker genuinely died (e.g. server restart),
-    // not ones actively being retried within the normal flow above.
-    const recovered = await prisma.campaignRecipient.updateMany({
-      where: {
-        status:    "processing",
-        updatedAt: { lt: new Date(Date.now() - STUCK_THRESHOLD_MS) },
-        retryCount: { lt: MAX_TRANSIENT_RETRIES },
-      },
-      data: {
-        status:     "pending",
-        retryCount: { increment: 1 },
-        error:      "Recovered from stuck processing",
-        updatedAt:  new Date(),
-      },
-    });
-
-    // Permanently fail emails that exceeded retry limit
-    const failed = await prisma.campaignRecipient.updateMany({
-      where: {
-        status:     "processing",
-        updatedAt:  { lt: new Date(Date.now() - STUCK_THRESHOLD_MS) },
-        retryCount: { gte: MAX_TRANSIENT_RETRIES },
-      },
-      data: {
-        status:    "failed",
-        error:     `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded after being stuck`,
-        updatedAt: new Date(),
-      },
-    });
-
-    if (recovered.count > 0) {
-      console.log(`♻️ Recovered ${recovered.count} stuck emails → pending`);
-    }
-    if (failed.count > 0) {
-      console.log(`❌ Marked ${failed.count} emails as failed (max ${MAX_TRANSIENT_RETRIES} retries)`);
-    }
-
-  } catch (err) {
-    console.error("❌ Error in recoverStuckEmails:", err.message);
-  }
-}
-
-// --------------------------------------------------
-
-/**
- * Resume any campaigns that are still in "sending" status.
- *
- * FIX: sendBulkCampaign now has a global in-memory lock (activeCampaigns Set).
- * This means calling it for an already-running campaign is a safe no-op —
- * the lock check at the top of sendBulkCampaign will immediately return.
- *
- * So this function can safely be called on a timer without risk of spawning
- * duplicate workers or double-sending emails.
- */
-async function resumeSendingCampaignsSafe() {
-  try {
-    const campaigns = await prisma.campaign.findMany({
-      where:  { status: "sending" },
-      select: { id: true },
-    });
-
-    if (campaigns.length > 0) {
-      console.log(`🔄 Checking ${campaigns.length} campaigns in "sending" state`);
-    }
-
-    for (const campaign of campaigns) {
-      // Only resume if there are actually emails left to send
-      const remaining = await prisma.campaignRecipient.count({
-        where: {
-          campaignId: campaign.id,
-          status:     { in: ["pending", "processing"] },
-        },
-      });
-
-      if (remaining === 0) {
-        console.log(`ℹ️ Campaign ${campaign.id} has no remaining emails — skipping resume`);
-        continue;
-      }
-
-      console.log(`▶️ Resuming campaign ${campaign.id} (${remaining} emails remaining)`);
-
-      // Safe to call even if already running — the lock inside sendBulkCampaign
-      // will detect the duplicate and return immediately
-      sendBulkCampaign(campaign.id).catch((err) => {
-        console.error(`❌ Resume error for campaign ${campaign.id}:`, err.message);
-      });
-    }
-
-  } catch (err) {
-    console.error("❌ Error in resumeSendingCampaignsSafe:", err.message);
-  }
-}
-
-// --------------------------------------------------
-// 🚀 START WORKER
-// --------------------------------------------------
-
-async function startWorker() {
-  console.log("🚀 Worker started...");
-
-  // Wait for DB connections to stabilise on boot (important on Render/Railway cold starts)
-  await new Promise((r) => setTimeout(r, 8000));
-
-  console.log("⚙️ Running initial recovery and resume...");
-  await recoverStuckEmails();
-  await resumeSendingCampaignsSafe();
-  await resumeAccountDeletions(prisma);
-
-  // Recover stuck emails every 60 seconds
-  setInterval(recoverStuckEmails, 120_000);
-
-  // Resume any in-progress campaigns every 2 minutes
-  // (safe: sendBulkCampaign's global lock prevents duplicate workers)
-  setInterval(resumeSendingCampaignsSafe, 120_000);
-
-  // Resume any account deletions interrupted by a restart, every 2 minutes
-  // (safe: accountDeletionWorker's activeDeletions lock prevents duplicate runs)
-  setInterval(() => {
-    resumeAccountDeletions(prisma).catch((err) =>
-      console.error("🗑️ Account deletion resume error:", err.message)
-    );
-  }, 120_000);
-
-  // IMAP sync every 2 minutes
-  setInterval(() => {
-    runSync(prisma).catch((err) =>
-      console.error("📩 IMAP sync error:", err.message)
-    );
-  }, 120_000);
-}
-
-// --------------------------------------------------
-// 🚀 START SERVER
-// --------------------------------------------------
-
+// --------------------
+// Start
+// --------------------
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`✅ API server running on port ${PORT}`);
-
-  startCampaignScheduler();
-  startFollowupCleanupJob();
-  startWorker();
+  console.log("ℹ️  Background jobs run separately — start them with: npm run start:worker");
 });
