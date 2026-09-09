@@ -68,7 +68,8 @@ export default function Dashboard() {
           campaignDate.getTime() === today.getTime() &&
           campaign.status === "completed"
         ) {
-          return sum + (campaign.recipients?.length || 0);
+          // was campaign.recipients?.length — that array is no longer sent
+          return sum + (campaign.sentCount ?? 0);
         }
         return sum;
       }, 0);
@@ -90,18 +91,20 @@ export default function Dashboard() {
         .filter((c) => c.status === "completed")
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, 4)
-        .map((c) => ({
-          name: c.name || "Untitled Campaign",
-          performance: c.recipients
-            ? Math.min(
-                100,
-                Math.round(
-                  (c.recipients.length / Math.max(c.recipients.length, 100)) *
-                    100,
-                ),
-              )
-            : 0,
-        }));
+        .map((c) => {
+          // Real delivery rate. The old formula was
+          //   len / max(len, 100) * 100
+          // which returned 100% for any campaign with 100+ recipients and
+          // the raw count otherwise — it never measured delivery.
+          const total = c.recipientCount ?? 0;
+          const sent  = c.sentCount ?? 0;
+          return {
+            name: c.name || "Untitled Campaign",
+            performance: total > 0 ? Math.round((sent / total) * 100) : 0,
+            sentCount: sent,
+            totalRecipients: total,
+          };
+        });
 
       // Get scheduled campaigns
       const scheduledCampaigns = campaigns
@@ -147,20 +150,23 @@ export default function Dashboard() {
       const limitedActivity = recentActivity.slice(0, 4);
 
       // Get top campaigns by recipient count
+      const maxRecipients = Math.max(
+        1,
+        ...campaigns.map((camp) => camp.recipientCount ?? 0),
+      );
+
       const topCampaigns = campaigns
-        .filter((c) => c.recipients && c.recipients.length > 0)
-        .sort((a, b) => b.recipients.length - a.recipients.length)
+        .filter((c) => (c.recipientCount ?? 0) > 0)
+        .sort((a, b) => (b.recipientCount ?? 0) - (a.recipientCount ?? 0))
         .slice(0, 4)
         .map((c) => ({
           name: c.name || "Untitled Campaign",
-          company: `${c.recipients.length} recipients`,
+          company: `${c.recipientCount} recipients`,
           score: Math.min(
             100,
             Math.round(
-              (c.recipients.length /
-                Math.max(
-                  ...campaigns.map((camp) => camp.recipients?.length || 0),
-                )) *
+              ((c.recipientCount ?? 0) /
+                maxRecipients) *
                 100,
             ),
           ),
@@ -356,7 +362,11 @@ const upcomingFollowups = campaigns
               dashboardData.recentCampaigns.map((campaign, index) => (
                 <ProgressRow
                   key={index}
-                  label={campaign.name}
+                  label={
+                    campaign.totalRecipients > 0
+                      ? `${campaign.name} — ${campaign.sentCount}/${campaign.totalRecipients} sent`
+                      : `${campaign.name} — no recipients`
+                  }
                   value={campaign.performance}
                 />
               ))
