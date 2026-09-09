@@ -5,6 +5,7 @@ import prisma from "../prismaClient.js";
 import { decrypt } from "../utils/crypto.js";
 import cache from "../utils/cache.js";
 import dns from "dns/promises";
+import pLimit from "p-limit";   // already a dependency; was unused
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -346,6 +347,11 @@ function extractBaseStyles(html) {
 
 const BATCH_SIZE  = 10;
 const CONCURRENCY = 2; // FIX: defined at module level, not inside a loop
+
+// How many sender accounts may send at the same time. Peak DB connection
+// demand from this worker is roughly ACCOUNT_CONCURRENCY × CONCURRENCY, so
+// keep the product below the worker's Prisma connection_limit.
+const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 3;
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function createTransporter(account, smtpPassword) {
@@ -1366,20 +1372,34 @@ async function _sendBulkCampaignInner(campaignId) {
 
   console.log(`🚀 Campaign ${campaignId}: dispatching ${accountIds.length} account(s) in parallel`);
 
+  /* ⚡ BOUNDED FAN-OUT
+     This was an unbounded Promise.all across every account. With 7 sender
+     accounts and CONCURRENCY = 2, that is 14 send pipelines running at once,
+     each issuing several DB writes (claim row → update status → log message)
+     against a pool of 10. The pool was guaranteed to time out.
+
+     ACCOUNT_CONCURRENCY caps how many accounts run at the same time, so the
+     worker's peak connection demand is bounded and predictable:
+         peak ≈ ACCOUNT_CONCURRENCY × CONCURRENCY
+     Keep that comfortably under the worker's connection_limit.            */
+  const accountLimit = pLimit(ACCOUNT_CONCURRENCY);
+
   await Promise.all(
     accountIds.map(accountId =>
-      processAccountBatched({
-        campaignId,
-        accountId,
-        campaign,
-        assignmentMap,
-        originalCampaignId,
-        customLimits,
-        userId,
-      }).catch(err => {
-        // One account failing should not abort the others
-        console.error(`❌ Account ${accountId} processor error:`, err.message);
-      })
+      accountLimit(() =>
+        processAccountBatched({
+          campaignId,
+          accountId,
+          campaign,
+          assignmentMap,
+          originalCampaignId,
+          customLimits,
+          userId,
+        }).catch(err => {
+          // One account failing should not abort the others
+          console.error(`❌ Account ${accountId} processor error:`, err.message);
+        })
+      )
     )
   );
 
