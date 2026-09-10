@@ -4,7 +4,8 @@ import prisma from "../prismaClient.js";
 import {
   sendBulkCampaign,
   getDailyCount,
-  getBucketStartUtc,
+ 
+  
 } from "../services/campaignMailer.service.js";
 import cache from "../utils/cache.js";
 
@@ -166,8 +167,17 @@ export const getAdminDailyOverview = async (req, res) => {
       orderBy: { name: "asc" },
     });
  
-    // ── 3. IST-aware bucket start (same timezone-safe helper as getDailyCount) ──
-    const bucketStart = getBucketStartUtc();
+    // ── 3. IST-aware bucket start (same logic as getDailyCount) ──────────────
+    const nowIST = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    );
+    const resetToday = new Date(nowIST);
+    resetToday.setHours(17, 0, 0, 0);
+ 
+    const bucketStart =
+      nowIST < resetToday
+        ? new Date(resetToday.getTime() - 24 * 60 * 60 * 1000)
+        : resetToday;
  
     // ── 4. Bulk-fetch DailyEmailLog rows for current bucket ──────────────────
     const logs = await prisma.dailyEmailLog.groupBy({

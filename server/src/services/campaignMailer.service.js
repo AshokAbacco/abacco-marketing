@@ -20,73 +20,41 @@ import pLimit from "p-limit";
 
 const DAILY_LIMIT = 5000;
 
-/* ─────────────────────────────────────────────────────────────────────────
-   TIMEZONE-SAFE IST HELPERS
-   ─────────────────────────────────────────────────────────────────────────
-   The old code did:
-     new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }))
-   toLocaleString(...) returns a STRING showing IST wall-clock time, but
-   `new Date(thatString)` re-parses it using the SERVER PROCESS's own local
-   OS timezone — not IST. On a dev machine whose OS timezone happens to be
-   IST this accidentally works, but on Render (OS timezone = UTC) it shifts
-   every calculation by 5.5 hours, which broke the "day bucket" boundaries
-   used for the daily send limit.
-
-   Fix: never round-trip through a locale string. IST has no DST, so it's
-   always exactly UTC+5:30. We do the arithmetic entirely with absolute
-   timestamps (Date.now()) and UTC getters/setters, so the result no longer
-   depends on what timezone the server process happens to be running in.
-───────────────────────────────────────────────────────────────────────── */
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30, fixed year-round
-
-/**
- * A Date object whose UTC getters/setters (getUTCHours, setUTCHours, etc.)
- * read as current IST wall-clock time. NOT a real UTC instant on its own —
- * only use it for wall-clock arithmetic, then convert back with
- * istWallClockToRealUtc() before comparing against DB timestamps.
- */
-function nowAsIstWallClock() {
-  return new Date(Date.now() + IST_OFFSET_MS);
-}
-
-/** Converts an "IST wall-clock" Date (see above) back to a real UTC instant. */
-function istWallClockToRealUtc(istWallClockDate) {
-  return new Date(istWallClockDate.getTime() - IST_OFFSET_MS);
-}
-
-/**
- * Real UTC instant marking the start of the current "day bucket"
- * (bucket resets at 17:00 IST).
- */
-export function getBucketStartUtc() {
-  const istNow = nowAsIstWallClock();
-
-  const resetTodayIstWall = new Date(istNow);
-  resetTodayIstWall.setUTCHours(17, 0, 0, 0);
-
-  const bucketStartIstWall =
-    istNow < resetTodayIstWall
-      ? new Date(resetTodayIstWall.getTime() - 24 * 60 * 60 * 1000)
-      : resetTodayIstWall;
-
-  return istWallClockToRealUtc(bucketStartIstWall);
-}
-
 /**
  * Returns a stable Redis key for the current "day bucket".
- * The bucket starts at 17:00 IST.
+ * The bucket starts at 17:00 local time.
  * @param {number|string} userId
  * @returns {string}
  */
 export function getTodayKey(userId) {
-  const bucketStart = getBucketStartUtc();
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  const resetToday = new Date(now);
+  resetToday.setHours(17, 0, 0, 0);
+
+  const bucketStart = now < resetToday
+    ? new Date(resetToday.getTime() - 86_400_000)
+    : resetToday;
+
   const dateLabel = bucketStart.toISOString().split("T")[0];
   return `mail_limit:${userId}:${dateLabel}`;
 }
 
 function getTodayStart() {
-  return getBucketStartUtc();
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  const resetToday = new Date(now);
+  resetToday.setHours(17, 0, 0, 0);
+
+  const start =
+    now < resetToday
+      ? new Date(resetToday.getTime() - 24 * 60 * 60 * 1000)
+      : resetToday;
+
+  start.setMilliseconds(0);
+  return start;
 }
 
 /**
@@ -95,7 +63,16 @@ function getTodayStart() {
  * @returns {Promise<number>}
  */
 export async function getDailyCount(userId) {
-  const start = getBucketStartUtc();
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  const resetToday = new Date(now);
+  resetToday.setHours(17, 0, 0, 0);
+
+  const start =
+    now < resetToday
+      ? new Date(resetToday.getTime() - 24 * 60 * 60 * 1000)
+      : resetToday;
 
   const result = await prisma.dailyEmailLog.aggregate({
     _sum: { count: true },
@@ -109,15 +86,17 @@ export async function getDailyCount(userId) {
 }
 
 /**
- * Returns milliseconds until the next 17:00 (5 PM) IST reset.
+ * Returns milliseconds until the next 17:00 (5 PM) reset.
  * @returns {number}
  */
 export function msUntilNextWindow() {
-  const istNow = nowAsIstWallClock();
-  const next = new Date(istNow);
-  next.setUTCHours(17, 0, 0, 0);
-  if (istNow >= next) next.setUTCDate(next.getUTCDate() + 1);
-  return next.getTime() - istNow.getTime();
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  const next = new Date(now);
+  next.setHours(17, 0, 0, 0);
+  if (now >= next) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
 }
 
 
