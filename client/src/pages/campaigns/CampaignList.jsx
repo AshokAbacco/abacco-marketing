@@ -23,7 +23,8 @@ import {
   Award,
   StopCircle,
   PauseCircle,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle 
 } from "lucide-react";
 import CreateCampaign from "./campaignPages/CreateCampaign";
 import CampaignDetail from "./campaignPages/CampaignDetail";
@@ -42,6 +43,18 @@ export default function CampaignList() {
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4s'}}></div>
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s', animationDelay: '1s'}}></div>
+      </div>
+
+      {/* Maintenance Notice Banner */}
+      <div className="relative z-[110] bg-red-600 text-white">
+        <div className="max-w-8xl mx-auto px-6 py-2.5 flex items-center justify-center gap-2 text-sm font-medium text-center">
+          <AlertTriangle size={16} className="flex-shrink-0" />
+          <span>
+            <strong>Server Maintenance Notice:</strong> The CRM server will undergo maintenance on{" "}
+            <strong>Sep&nbsp;11,&nbsp;2026, before 11:00 PM</strong>. All existing data will be permanently
+            deleted as part of this process. Please save or export any data you need before then.
+          </span>
+        </div>
       </div>
 
       {/* Modern Header with Glass Effect */}
