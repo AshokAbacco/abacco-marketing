@@ -1,4 +1,4 @@
-import prisma from "../prisma.js";
+import prisma from "../prismaClient.js";
 
 export const getTodayCampaignReport = async (req, res) => {
   try {

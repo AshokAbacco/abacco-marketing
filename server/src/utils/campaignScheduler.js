@@ -1,7 +1,7 @@
 // server/src/utils/campaignScheduler.js
 
 import cron from "node-cron";
-import prisma from "../prisma.js";
+import prisma from "../prismaClient.js";
 import { sendBulkCampaign } from "../services/campaignMailer.service.js";
 
 // ✅ Retry helper (SAFE)
@@ -33,7 +33,7 @@ export function startCampaignScheduler() {
       const scheduled = await retryOperation(() =>
         prisma.campaign.findMany({
           where: {
-            status: "Scheduled", // ✅ FIXED CASE
+            status: "scheduled",
           },
           select: {
             id: true,
@@ -50,7 +50,7 @@ export function startCampaignScheduler() {
       const dueCampaigns = await retryOperation(() =>
         prisma.campaign.findMany({
           where: {
-            status: "Scheduled", // ✅ FIXED CASE
+            status: "scheduled",
             scheduledAt: {
               lte: new Date(),
             },
@@ -74,10 +74,10 @@ export function startCampaignScheduler() {
           prisma.campaign.updateMany({
             where: {
               id: campaign.id,
-              status: "Scheduled", // ✅ FIXED CASE
+              status: "scheduled",
             },
             data: {
-              status: "Sending", // ✅ FIXED CASE
+              status: "sending",
             },
           })
         );
@@ -111,7 +111,7 @@ export function startCampaignScheduler() {
             // ❗ Optional: mark campaign as failed
             await prisma.campaign.update({
               where: { id: campaign.id },
-              data: { status: "Failed" },
+              data: { status: "failed" },
             });
           });
       }

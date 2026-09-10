@@ -1,6 +1,6 @@
 // campaigns.controller.js — Full file with Global Daily Limit (5 PM reset) + all original exports
 
-import prisma from "../prisma.js";
+import prisma from "../prismaClient.js";
 import {
   sendBulkCampaign,
   getDailyCount,

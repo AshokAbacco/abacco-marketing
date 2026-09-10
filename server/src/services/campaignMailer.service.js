@@ -5,6 +5,7 @@ import prisma from "../prismaClient.js";
 import { decrypt } from "../utils/crypto.js";
 import cache from "../utils/cache.js";
 import dns from "dns/promises";
+import pLimit from "p-limit";
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -347,6 +348,44 @@ function extractBaseStyles(html) {
 const BATCH_SIZE  = 10;
 const CONCURRENCY = 2; // FIX: defined at module level, not inside a loop
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL BATCH CONCURRENCY CAP
+
+   Previously, "dispatch accounts in parallel" (step 8 below) only capped
+   concurrency WITHIN one campaign's Promise.all — it had no idea any other
+   campaign existed. resumeSendingCampaignsSafe (worker.js) fires
+   sendBulkCampaign() for every campaign that's "sending" WITHOUT awaiting
+   each one, so with N campaigns active at once, ALL of their accounts ran
+   in parallel simultaneously — e.g. 22 campaigns × ~15 accounts each is
+   hundreds of concurrent send-lanes, every one issuing DB queries (status
+   checks, batch fetch/lock, per-recipient updates, follow-up threading
+   lookups) against a single connection pool. No pool size survives that.
+
+   FIRST ATTEMPT (revised): wrapping each account's ENTIRE remaining send
+   loop in this limiter did cap total DB load, but a slot was then held by
+   one account for its whole campaign — often minutes to hours. With 22
+   campaigns and a handful of slots, whichever accounts grabbed a slot
+   first could occupy every slot for a long time, so other campaigns'
+   accounts never got a turn and looked completely stalled.
+
+   Current design: each account acquires this limiter for ONE BATCH only
+   (see runOneBatchCycle), then releases it and re-queues for its next
+   batch. This is a MODULE-level singleton shared across every campaign in
+   this process, so all accounts — regardless of which campaign they
+   belong to — round-robin fairly through the same small set of slots,
+   holding one only for the few seconds a batch takes, not for an entire
+   campaign's duration. Long waits (daily-limit reset, DB retry backoff)
+   happen OUTSIDE the slot, so a waiting account doesn't block others either.
+
+   Tune via env var against (PRISMA_POOL_SIZE) and how many DB queries one
+   batch issues — a good starting point is roughly pool_size / 2, leaving
+   headroom for the scheduler, recovery jobs, and the API process sharing
+   the same database.
+═══════════════════════════════════════════════════════════════════════════ */
+const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 6;
+const globalAccountLimit = pLimit(ACCOUNT_CONCURRENCY);
+console.log(`🎛️  Global batch concurrency cap: ${ACCOUNT_CONCURRENCY}`);
 
 function createTransporter(account, smtpPassword) {
   const domain = (account.email.split("@")[1] || "localhost").toLowerCase();
@@ -762,7 +801,10 @@ async function processAccountBatched({
   // console.log(`📤 Account ${account.email}: starting (limit=${limit}/hr, concurrency=${CONCURRENCY})`);
   // console.log(`📡 SMTP: ${account.smtpHost} → ${smtpIp}`);
 
-  // Shared context passed to runBatch — avoids re-building per iteration
+  // Shared context passed to runBatch — avoids re-building per iteration.
+  // campaign lives on ctx (not a local variable) because runOneBatchCycle
+  // below needs to mutate its estimatedCompletion across calls, and each
+  // call is now a separate turn through the global limiter.
   const ctx = {
     account,
     transporter,
@@ -774,98 +816,157 @@ async function processAccountBatched({
     delayPerEmail: 1000,
   };
 
-    // ── Batch loop ─────────────────────────────────────────────────────────
-    while (true) {
+  /* ═════════════════════════════════════════════════════════════════════
+     FAIRNESS FIX
 
-        // [A] Campaign stop check
-      const latestCampaign = await prisma.campaign.findUnique({
-        where:  { id: campaignId },
-        select: { status: true },
-      });
-      if (!latestCampaign || latestCampaign.status !== "sending") {
-        console.log(`⏹ Campaign ${campaignId} stopped — halting account ${account.email}`);
-        return;
-      }
+     Previously this whole while(true) loop ran inside ONE globalAccountLimit
+     slot, so a slot was held for this account's ENTIRE remaining campaign —
+     often many minutes to hours at safe sending rates. With 22 campaigns
+     active and only ACCOUNT_CONCURRENCY slots, whichever accounts grabbed a
+     slot first could occupy every slot for a long time, and campaigns whose
+     accounts hadn't gotten a turn yet (e.g. later campaign IDs) looked
+     completely stalled even though the worker was healthy and busy.
 
-      // [B] Global daily-limit check
-      const dailyCount = await getDailyCount(userId);
-      if (dailyCount >= DAILY_LIMIT) {
-        const waitMs  = msUntilNextWindow();
-        const waitMin = Math.ceil(waitMs / 60000);
-        console.log(`🚫 Daily limit reached. Sleeping ${waitMin} min until reset...`);
-        await sleep(waitMs);
-        // ── BUG 3 FIX: push estimatedCompletion forward by the sleep time ──
-        // Otherwise the deadline is already in the past when we resume and
-        // the delay falls back to the slow base rate.
-        if (campaign.estimatedCompletion) {
-          campaign = {
-            ...campaign,
-            estimatedCompletion: new Date(
-              new Date(campaign.estimatedCompletion).getTime() + waitMs
-            ),
-          };
-        }
-        console.log(`🔄 Resuming campaign ${campaignId} after daily reset...`);
-        continue;
-      }
+     Fix: acquire the global slot for ONE batch only, release it, then
+     re-queue for another turn. Long waits (daily-limit reset, transient DB
+     retry backoff) happen OUTSIDE the slot too, so they don't tie it up.
+     This makes every account/campaign round-robin fairly through the
+     shared slots instead of a few campaigns monopolizing them.
+  ═════════════════════════════════════════════════════════════════════ */
+  while (true) {
+    const result = await globalAccountLimit(() =>
+      runOneBatchCycle({ campaignId, accountId, account, userId, limit, ctx })
+    );
 
-      // [C] Fetch next batch — only "pending" rows for this account
-      //
-      // ── BUG 2 FIX: delay was computed once before the loop starts ────────
-      // As emails are sent, the remaining count drops but the delay never
-      // adjusted — so early batches ran at the slow opening pace and there
-      // was no way to make up time. Now recomputed every batch so the pace
-      // accelerates naturally as the deadline approaches.
-      const remaining = await prisma.campaignRecipient.count({
-        where: { campaignId, accountId: Number(accountId), status: "pending" },
-      });
-      ctx.delayPerEmail = getControlledDelay({
-        limit,
-        remainingEmails: remaining,
-        estimatedCompletion: campaign.estimatedCompletion,
-      });
-      console.log(
-        `[${account.email}] remaining=${remaining} delay=${(ctx.delayPerEmail/1000).toFixed(1)}s`
-      );
-
-      const batch = await prisma.campaignRecipient.findMany({
-        where: {
-          campaignId,
-          accountId: Number(accountId),
-          status:    "pending",
-        },
-        orderBy: { id: "asc" },
-        take:    BATCH_SIZE,
-      });
-
-      // FIX: was `continue` here causing infinite loop — now we BREAK
-      if (batch.length === 0) {
-        console.log(`✅ Account ${account.email}: no more pending recipients — done`);
-        break;
-      }
-
-      // // console.log(`📦 Account ${account.email}: batch of ${batch.length} recipients`);
-
-      // [D] Lock batch → "processing" atomically before sending
-      //     Only update rows still "pending" to prevent double-processing
-      await prisma.campaignRecipient.updateMany({
-        where: {
-          id:     { in: batch.map(r => r.id) },
-          status: "pending", // guard: skip any that were grabbed by another worker
-        },
-        data: {
-          status:    "processing",
-          updatedAt: new Date(),
-        },
-      });
-
-      // [E] Send batch in parallel (CONCURRENCY emails at a time)
-      await runBatch(batch, ctx);
-
-      // [F] Small inter-batch delay to avoid SMTP rate limits
-      await sleep(300);
-    }
+    if (result.action === "stop")  return;   // campaign no longer sending
+    if (result.action === "done")  return;   // no more pending recipients
+    if (result.action === "wait")  await sleep(result.ms); // outside the slot
+    // action === "continue" → loop immediately, re-entering the queue
   }
+}
+
+/**
+ * One batch's worth of work for one account, run while holding a single
+ * global concurrency slot. Returns what the caller should do next so any
+ * waiting happens OUTSIDE the slot.
+ */
+async function runOneBatchCycle({ campaignId, accountId, account, userId, limit, ctx }) {
+  // [A] Campaign stop check
+  // A transient DB/connection error here (e.g. pool exhaustion under
+  // concurrent load) used to throw straight out of this loop, silently
+  // killing this account's sender for the rest of the campaign — the
+  // recipients it had locked to "processing" then sat stuck until the
+  // 3-minute recovery sweep in worker.js. Now we retry instead of
+  // aborting, so a DB blip pauses this account briefly rather than
+  // ending it.
+  let latestCampaign;
+  try {
+    latestCampaign = await prisma.campaign.findUnique({
+      where:  { id: campaignId },
+      select: { status: true },
+    });
+  } catch (err) {
+    console.error(
+      `⚠️ [${account.email}] campaign status check failed (${err.message}) — retrying in 5s`
+    );
+    return { action: "wait", ms: 5000 };
+  }
+  if (!latestCampaign || latestCampaign.status !== "sending") {
+    console.log(`⏹ Campaign ${campaignId} stopped — halting account ${account.email}`);
+    return { action: "stop" };
+  }
+
+  // [B] Global daily-limit check
+  const dailyCount = await getDailyCount(userId);
+  if (dailyCount >= DAILY_LIMIT) {
+    const waitMs  = msUntilNextWindow();
+    const waitMin = Math.ceil(waitMs / 60000);
+    console.log(`🚫 Daily limit reached. Sleeping ${waitMin} min until reset...`);
+    // ── BUG 3 FIX: push estimatedCompletion forward by the sleep time ──
+    // Otherwise the deadline is already in the past when we resume and
+    // the delay falls back to the slow base rate.
+    if (ctx.campaign.estimatedCompletion) {
+      ctx.campaign = {
+        ...ctx.campaign,
+        estimatedCompletion: new Date(
+          new Date(ctx.campaign.estimatedCompletion).getTime() + waitMs
+        ),
+      };
+    }
+    console.log(`🔄 Will resume campaign ${campaignId} after daily reset...`);
+    return { action: "wait", ms: waitMs };
+  }
+
+  // [C] Fetch next batch — only "pending" rows for this account
+  //
+  // ── BUG 2 FIX: delay was computed once before the loop starts ────────
+  // As emails are sent, the remaining count drops but the delay never
+  // adjusted — so early batches ran at the slow opening pace and there
+  // was no way to make up time. Now recomputed every batch so the pace
+  // accelerates naturally as the deadline approaches.
+  // [C]/[D] wrapped together: a DB blip while counting/fetching/locking
+  // the next batch used to throw straight out of this loop and end this
+  // account's sender for the rest of the campaign. Now it retries.
+  let batch;
+  try {
+    const remaining = await prisma.campaignRecipient.count({
+      where: { campaignId, accountId: Number(accountId), status: "pending" },
+    });
+    ctx.delayPerEmail = getControlledDelay({
+      limit,
+      remainingEmails: remaining,
+      estimatedCompletion: ctx.campaign.estimatedCompletion,
+    });
+    console.log(
+      `[${account.email}] remaining=${remaining} delay=${(ctx.delayPerEmail/1000).toFixed(1)}s`
+    );
+
+    batch = await prisma.campaignRecipient.findMany({
+      where: {
+        campaignId,
+        accountId: Number(accountId),
+        status:    "pending",
+      },
+      orderBy: { id: "asc" },
+      take:    BATCH_SIZE,
+    });
+
+    // FIX: was `continue` here causing infinite loop — now we're DONE
+    if (batch.length === 0) {
+      console.log(`✅ Account ${account.email}: no more pending recipients — done`);
+      return { action: "done" };
+    }
+
+    // [D] Lock batch → "processing" atomically before sending
+    //     Only update rows still "pending" to prevent double-processing
+    await prisma.campaignRecipient.updateMany({
+      where: {
+        id:     { in: batch.map(r => r.id) },
+        status: "pending", // guard: skip any that were grabbed by another worker
+      },
+      data: {
+        status:    "processing",
+        updatedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error(
+      `⚠️ [${account.email}] batch fetch/lock failed (${err.message}) — retrying in 5s`
+    );
+    return { action: "wait", ms: 5000 };
+  }
+
+  // [E] Send batch in parallel (CONCURRENCY emails at a time)
+  await runBatch(batch, ctx);
+
+  // [F] Small inter-batch delay to avoid SMTP rate limits.
+  // Deliberately short and INSIDE the slot — this is the natural pacing
+  // between two batches from the same account, not a long wait, so there's
+  // no fairness cost to keeping it here.
+  await sleep(300);
+
+  return { action: "continue" };
+}
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1365,7 +1466,10 @@ async function _sendBulkCampaignInner(campaignId) {
     return;
   }
 
-  console.log(`🚀 Campaign ${campaignId}: dispatching ${accountIds.length} account(s) in parallel`);
+  console.log(
+    `🚀 Campaign ${campaignId}: dispatching ${accountIds.length} account(s); ` +
+    `each takes turns through the shared ${ACCOUNT_CONCURRENCY}-slot queue one batch at a time`
+  );
 
   await Promise.all(
     accountIds.map(accountId =>
