@@ -21,7 +21,9 @@ import {
   Zap,
   Target,
   Award,
-  StopCircle
+  StopCircle,
+  PauseCircle,
+  RotateCcw
 } from "lucide-react";
 import CreateCampaign from "./campaignPages/CreateCampaign";
 import CampaignDetail from "./campaignPages/CampaignDetail";
@@ -337,6 +339,7 @@ const DashboardTab = () => {
   const [search, setSearch] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [resending, setResending] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
 
   // ✅ PERF FIX: fetchCampaigns takes explicit args to avoid stale closure bug.
@@ -423,6 +426,34 @@ const stopCampaign = async (id) => {
   } catch (error) {
     console.error("Stop campaign error:", error);
     alert(error.response?.data?.message || "Network or server error");
+  }
+};
+
+// Resumes a paused ("stopped") campaign from where it left off — the
+// backend only ever re-selects "pending" recipients, so completed sends
+// are never repeated.
+const resendCampaign = async (id) => {
+  try {
+    const confirmResend = window.confirm(
+      "Resend this campaign? It will pick up exactly where it left off — recipients who already received it won't be emailed again."
+    );
+    if (!confirmResend) return;
+
+    setResending(id);
+    const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/resend`);
+
+    if (res.data.success) {
+      alert(res.data.message || "Campaign resumed successfully!");
+      fetchCampaigns(filter, customDate);
+    } else {
+      alert(res.data.message || "Failed to resend campaign");
+    }
+
+  } catch (error) {
+    console.error("Resend campaign error:", error);
+    alert(error.response?.data?.message || "Network or server error");
+  } finally {
+    setResending(null);
   }
 };
 
@@ -850,13 +881,38 @@ const stopCampaign = async (id) => {
                               )}
                             </button>
 
-                            {/* 🔥 STOP BUTTON */}
+                            {/* 🔥 PAUSE BUTTON — stops the send immediately;
+                                already-sent recipients are untouched and the
+                                rest stay "pending" for Resend to pick up. */}
                             {campaign.status === "sending" && (
                               <button
                                 onClick={() => stopCampaign(campaign.id)}
-                                className="px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all flex items-center gap-1 font-bold transform hover:scale-105"
+                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all font-bold transform hover:scale-105"
                               >
-                                Stop
+                                <PauseCircle size={14} />
+                                Pause
+                              </button>
+                            )}
+
+                            {/* 🔄 RESEND BUTTON — resumes a paused campaign
+                                from where it stopped, no duplicate sends. */}
+                            {campaign.status === "stopped" && (
+                              <button
+                                onClick={() => resendCampaign(campaign.id)}
+                                disabled={resending === campaign.id}
+                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-xs hover:shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
+                              >
+                                {resending === campaign.id ? (
+                                  <>
+                                    <Loader2 size={12} className="animate-spin" />
+                                    Resending...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RotateCcw size={14} />
+                                    Resend
+                                  </>
+                                )}
                               </button>
                             )}
 

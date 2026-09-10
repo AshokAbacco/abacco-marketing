@@ -1379,6 +1379,93 @@ export const stopCampaign = async (req, res) => {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   RESEND (RESUME) CAMPAIGN
+   POST /api/campaigns/:id/resend
+
+   Resumes a paused ("stopped") campaign from where it left off.
+   sendBulkCampaign / _sendBulkCampaignInner only ever queries recipients
+   with status "pending" (see campaignMailer.service.js §6), so recipients
+   that already went out ("sent") are never re-selected — resuming can never
+   double-send. Recipients still mid-flight when the campaign was paused
+   finish their in-progress batch before the stop is honored (see the
+   campaign-status check at the top of runOneBatchCycle), so there's
+   normally nothing left in "processing" to worry about; if the server
+   crashed instead, worker.js's stuck-email sweep already resets those rows
+   back to "pending" on its own schedule.
+═══════════════════════════════════════════════════════════════════════════ */
+export const resendCampaign = async (req, res) => {
+  try {
+    const campaignId = Number(req.params.id);
+    if (!campaignId) return res.status(400).json({ success: false, message: "Invalid campaign id" });
+
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: campaignId, userId: req.user.id },
+    });
+    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+
+    if (campaign.status !== "stopped") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot resend campaign with status: ${campaign.status}`,
+      });
+    }
+
+    // 🌐 Global daily-limit check
+    const blocked = await checkGlobalSendingRules(campaign.userId);
+    if (blocked) return res.status(blocked.status).json(blocked.body);
+
+    // Nothing left to send? Don't spin up a worker for zero recipients —
+    // just tell the user so instead of silently no-op-ing.
+    const remaining = await prisma.campaignRecipient.count({
+      where: { campaignId, status: "pending" },
+    });
+    if (remaining === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No pending recipients left — every recipient has already been sent to (or failed permanently).",
+      });
+    }
+
+    // Account lock check — same guard as sendCampaignNow, so a resumed
+    // campaign can't grab a sending account another active campaign is using.
+    const activeCampaigns = await prisma.campaign.findMany({
+      where: { status: "sending", NOT: { id: campaignId } },
+    });
+    const locked = new Set();
+    for (const c of activeCampaigns) {
+      try { JSON.parse(c.fromAccountIds || "[]").forEach(id => locked.add(Number(id))); } catch {}
+    }
+    const fromIds = JSON.parse(campaign.fromAccountIds || "[]");
+    if (fromIds.find(id => locked.has(Number(id)))) {
+      return res.status(400).json({
+        success: false,
+        message: "Email account is already used in another active campaign.",
+      });
+    }
+
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data:  { status: "sending", error: null },
+    });
+    invalidateDashboardCache(campaign.userId);
+
+    sendBulkCampaign(campaignId).catch(err => {
+      console.error(`Error resending campaign ${campaignId}:`, err);
+    });
+
+    return res.json({
+      success: true,
+      message: `Campaign resumed — ${remaining} recipient(s) remaining`,
+    });
+
+  } catch (err) {
+    console.error("Resend campaign error:", err);
+    return res.status(500).json({ success: false, message: "Failed to resend campaign" });
+  }
+};
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
    UPDATE FOLLOWUP RECIPIENTS
 ═══════════════════════════════════════════════════════════════════════════ */
 export const updateFollowupRecipients = async (req, res) => {

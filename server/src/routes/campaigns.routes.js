@@ -13,6 +13,7 @@ import {
   getCampaignsForFollowup,
   getSingleCampaign,
   stopCampaign,
+  resendCampaign,
   updateFollowupRecipients,   
   sendFollowupCampaign,        
   getDailyLimitStatus,
@@ -58,6 +59,7 @@ router.post("/:id/send", protect, sendCampaignNow);
 router.post("/:id/schedule", protect, scheduleCampaign);
 router.delete("/:id", protect, deleteCampaign);
 router.post("/:id/stop", protect, stopCampaign);
+router.post("/:id/resend", protect, resendCampaign);
 
 // Update followup recipients
 router.post("/followup/update-recipients", protect, updateFollowupRecipients);
