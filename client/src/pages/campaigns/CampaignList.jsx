@@ -38,15 +38,15 @@ export default function CampaignList() {
   const [activeTab, setActiveTab] = useState("dashboard");
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 relative overflow-hidden">
       {/* Animated Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4s'}}></div>
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s', animationDelay: '1s'}}></div>
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4s'}}></div>
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s', animationDelay: '1s'}}></div>
       </div>
 
       {/* Maintenance Notice Banner */}
-      <div className="relative z-[110] bg-red-600 text-white">
+      {/* <div className="relative z-[110] bg-red-600 text-white">
         <div className="max-w-8xl mx-auto px-6 py-2.5 flex items-center justify-center gap-2 text-sm font-medium text-center">
           <AlertTriangle size={16} className="flex-shrink-0" />
           <span>
@@ -55,21 +55,21 @@ export default function CampaignList() {
             deleted as part of this process. Please save or export any data you need before then.
           </span>
         </div>
-      </div>
+      </div> */}
 
       {/* Modern Header with Glass Effect */}
-      <div className="bg-green/20 backdrop-blur-xl border-b border-emerald-200/50 sticky top-0 z-100 shadow-sm">
+      <div className="bg-blue/20 backdrop-blur-xl border-b border-sky-200/50 sticky top-0 z-100 shadow-sm">
         <div className="max-w-8xl mx-auto px-6">
           <div className="flex items-center justify-between py-5">
             <div className="flex items-center gap-4">
               <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-2xl blur opacity-50"></div>
-                <div className="relative w-12 h-12 bg-gradient-to-br from-emerald-600 to-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/30 transform transition-all hover:scale-110 hover:rotate-3">
+                <div className="absolute inset-0 bg-gradient-to-br from-sky-500 to-blue-600 rounded-2xl blur opacity-50"></div>
+                <div className="relative w-12 h-12 bg-gradient-to-br from-sky-600 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-sky-500/30 transform transition-all hover:scale-110 hover:rotate-3">
                   <Mail className="text-white" size={22} />
                 </div>
               </div>
               <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent">
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent">
                   Campaign Manager
                 </h1>
                 <p className="text-xs text-slate-600 font-medium mt-0.5">Manage & optimize your email campaigns</p>
@@ -77,12 +77,12 @@ export default function CampaignList() {
             </div>
             
             {/* Quick Stats Badge */}
-            <div className="hidden md:flex items-center gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 px-4 py-1 rounded-xl border border-emerald-200/50">
+            <div className="hidden md:flex items-center gap-3 bg-gradient-to-r from-sky-50 to-blue-50 px-4 py-1 rounded-xl border border-sky-200/50">
               <div className="flex items-center gap-1.5">
                 <Zap className="text-slate-600" size={16} />
-                <span className="text-xs font-semibold text-emerald-700">Active</span>
+                <span className="text-xs font-semibold text-sky-700">Active</span>
               </div>
-              <div className="w-px h-4 bg-emerald-200"></div>
+              <div className="w-px h-4 bg-sky-200"></div>
               
               <DailyLimitBanner />
             </div>
@@ -143,29 +143,29 @@ const CampaignProgress = ({ campaignId }) => {
   };
 
   return (
-    <div className="mt-4 bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 rounded-2xl p-5 border border-emerald-200/50 shadow-sm">
+    <div className="mt-4 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 rounded-2xl p-5 border border-sky-200/50 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
-        <div className="p-1.5 bg-emerald-100 rounded-lg">
+        <div className="p-1.5 bg-sky-100 rounded-lg">
           <Activity className="text-slate-600" size={16} />
         </div>
-        <h4 className="text-sm font-bold text-emerald-900">Live Progress Tracking</h4>
-        <span className="ml-auto text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-medium">Real-time</span>
+        <h4 className="text-sm font-bold text-sky-900">Live Progress Tracking</h4>
+        <span className="ml-auto text-xs bg-sky-100 text-sky-700 px-2 py-1 rounded-full font-medium">Real-time</span>
       </div>
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-emerald-100 overflow-hidden shadow-sm">
+      <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-sky-100 overflow-hidden shadow-sm">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-100">
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">Email</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">Domain</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">Processing</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">Completed</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">Sending IP</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-emerald-600 uppercase tracking-wide">ETA</th>
+            <tr className="bg-gradient-to-r from-sky-50 to-blue-50 border-b border-sky-100">
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Email</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Domain</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Processing</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Completed</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Sending IP</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">ETA</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-emerald-100">
+          <tbody className="divide-y divide-sky-100">
             {rows.map(r => (
-              <tr key={r.email} className="hover:bg-emerald-50/50 transition-colors">
+              <tr key={r.email} className="hover:bg-sky-50/50 transition-colors">
                 <td className="px-4 py-3.5 text-slate-800 font-medium">{r.email}</td>
                 <td className="px-4 py-3.5 text-slate-600">{r.domain}</td>
                 <td className="px-4 py-3.5">
@@ -174,7 +174,7 @@ const CampaignProgress = ({ campaignId }) => {
                   </span>
                 </td>
                 <td className="px-4 py-3.5">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-sky-100 text-sky-700 border border-sky-200">
                     {r.completed}
                   </span>
                 </td>
@@ -236,21 +236,21 @@ const CampaignTiming = ({ campaign }) => {
   }, [campaign, isActive]);
 
   return (
-    <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 rounded-2xl p-5 border border-emerald-200/50 shadow-sm">
+    <div className="bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 rounded-2xl p-5 border border-sky-200/50 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
-        <div className="p-1.5 bg-emerald-100 rounded-lg">
+        <div className="p-1.5 bg-sky-100 rounded-lg">
           <Clock className="text-slate-600" size={16} />
         </div>
-        <h4 className="text-sm font-bold text-emerald-700">Campaign Timeline</h4>
+        <h4 className="text-sm font-bold text-sky-700">Campaign Timeline</h4>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {timing.startTime && (
-          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-emerald-200/50 shadow-sm hover:shadow-md transition-all hover:border-emerald-300">
+          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-sky-200/50 shadow-sm hover:shadow-md transition-all hover:border-sky-300">
             <div className="flex items-center gap-2 mb-2">
-              <div className="p-1 bg-emerald-100 rounded-lg">
+              <div className="p-1 bg-sky-100 rounded-lg">
                 <Play className="text-slate-600" size={14} />
               </div>
-              <span className="text-xs font-bold text-emerald-700 uppercase tracking-wide">Start Time</span>
+              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">Start Time</span>
             </div>
             <p className="text-sm font-bold text-slate-900">
               {timing.startTime.toLocaleString("en-US", {
@@ -265,12 +265,12 @@ const CampaignTiming = ({ campaign }) => {
         )}
         
         {timing.endTime && (
-          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-emerald-200/50 shadow-sm hover:shadow-md transition-all hover:border-emerald-300">
+          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-sky-200/50 shadow-sm hover:shadow-md transition-all hover:border-sky-300">
             <div className="flex items-center gap-2 mb-2">
-              <div className="p-1 bg-emerald-100 rounded-lg">
+              <div className="p-1 bg-sky-100 rounded-lg">
                 <CheckCircle2 className="text-slate-600" size={14} />
               </div>
-              <span className="text-xs font-bold text-emerald-700 uppercase tracking-wide">End Time</span>
+              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">End Time</span>
             </div>
             <p className="text-sm font-bold text-slate-900">
               {timing.endTime.toLocaleString("en-US", {
@@ -318,7 +318,7 @@ const TabButton = ({ active, onClick, icon, label }) => (
     className={`group relative flex items-center gap-2 px-6 py-3 text-sm font-semibold transition-all
       ${
         active
-          ? "text-emerald-700"
+          ? "text-sky-700"
           : "text-slate-600 hover:text-slate-600"
       }`}
   >
@@ -327,7 +327,7 @@ const TabButton = ({ active, onClick, icon, label }) => (
     </span>
     <span>{label}</span>
     {active && (
-      <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-600 to-green-600 rounded-t-full"></div>
+      <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-sky-600 to-blue-600 rounded-t-full"></div>
     )}
   </button>
 );
@@ -484,21 +484,21 @@ const resendCampaign = async (id) => {
         {/* Skeleton stat cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-white/70 rounded-2xl p-6 border border-emerald-100 h-32">
-              <div className="w-12 h-12 bg-emerald-100 rounded-xl mb-4" />
-              <div className="h-3 bg-emerald-100 rounded w-3/4 mb-2" />
-              <div className="h-6 bg-emerald-100 rounded w-1/2" />
+            <div key={i} className="bg-white/70 rounded-2xl p-6 border border-sky-100 h-32">
+              <div className="w-12 h-12 bg-sky-100 rounded-xl mb-4" />
+              <div className="h-3 bg-sky-100 rounded w-3/4 mb-2" />
+              <div className="h-6 bg-sky-100 rounded w-1/2" />
             </div>
           ))}
         </div>
         {/* Skeleton table rows */}
-        <div className="bg-white/70 rounded-2xl border border-emerald-100 overflow-hidden">
+        <div className="bg-white/70 rounded-2xl border border-sky-100 overflow-hidden">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="flex gap-4 px-6 py-4 border-b border-emerald-50">
-              <div className="h-4 bg-emerald-100 rounded flex-1" />
-              <div className="h-4 bg-emerald-100 rounded w-20" />
-              <div className="h-4 bg-emerald-100 rounded w-24" />
-              <div className="h-4 bg-emerald-100 rounded w-16" />
+            <div key={i} className="flex gap-4 px-6 py-4 border-b border-sky-50">
+              <div className="h-4 bg-sky-100 rounded flex-1" />
+              <div className="h-4 bg-sky-100 rounded w-20" />
+              <div className="h-4 bg-sky-100 rounded w-24" />
+              <div className="h-4 bg-sky-100 rounded w-16" />
             </div>
           ))}
         </div>
@@ -512,8 +512,8 @@ const resendCampaign = async (id) => {
         <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-8 border border-red-200 shadow-lg">
           <p className="text-red-600 mb-4 font-semibold">{error}</p>
           <button
-            onClick={manualRefresh}
-            className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl hover:shadow-lg transition-all font-semibold"
+            onClick={() => window.location.reload()}
+            className="px-6 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:shadow-lg transition-all font-semibold"
           >
             Retry
           </button>
@@ -530,25 +530,25 @@ const resendCampaign = async (id) => {
           icon={<Send size={26} />}
           label="Total Campaigns"
           value={stats.totalCampaigns || 0}
-          iconBg="bg-gradient-to-br from-emerald-100 to-green-100"
+          iconBg="bg-gradient-to-br from-sky-100 to-blue-100"
           iconColor="text-slate-600"
-          accentColor="emerald"
+          accentColor="sky"
         />
         <StatCard
           icon={<Users size={26} />}
           label="Total Recipients"
           value={(stats.totalRecipients || 0).toLocaleString()}
-          iconBg="bg-gradient-to-br from-green-100 to-emerald-100"
-          iconColor="text-green-600"
-          accentColor="green"
+          iconBg="bg-gradient-to-br from-blue-100 to-sky-100"
+          iconColor="text-blue-600"
+          accentColor="blue"
         />
         <StatCard
           icon={<Target size={26} />}
           label="Follow-up Campaigns"
           value={stats.totalFollowups || 0}
-          iconBg="bg-gradient-to-br from-teal-100 to-cyan-100"
-          iconColor="text-teal-600"
-          accentColor="teal"
+          iconBg="bg-gradient-to-br from-blue-100 to-cyan-100"
+          iconColor="text-blue-600"
+          accentColor="blue"
         />
         <StatCard
           icon={<Award size={26} />}
@@ -561,7 +561,7 @@ const resendCampaign = async (id) => {
       </div>
 
       {/* Enhanced Filters & Search */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-emerald-200/50 shadow-sm mb-8">
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-sky-200/50 shadow-sm mb-8">
         <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
           {/* Filter Buttons */}
           <div className="flex gap-2 flex-wrap">
@@ -574,8 +574,8 @@ const resendCampaign = async (id) => {
                 }}
                 className={`relative px-5 py-2.5 rounded-xl text-sm font-bold transition-all transform hover:scale-105 ${
                   filter === f && !customDate
-                    ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/30"
-                    : "bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 hover:from-emerald-100 hover:to-teal-100 border border-emerald-200"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-lg shadow-sky-500/30"
+                    : "bg-gradient-to-r from-sky-50 to-blue-50 text-sky-700 hover:from-sky-100 hover:to-blue-100 border border-sky-200"
                 }`}
               >
                 {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -589,7 +589,7 @@ const resendCampaign = async (id) => {
               <Calendar
                 size={18}
                 className="absolute left-3 top-1/2 -translate-y-1/2
-                          text-emerald-600 opacity-80
+                          text-sky-600 opacity-80
                           pointer-events-none"
               />
 
@@ -601,15 +601,15 @@ const resendCampaign = async (id) => {
                   setFilter("");
                 }}
                 className="pl-10 pr-4 py-2.5
-                          border-2 border-emerald-400
+                          border-2 border-sky-400
                           rounded-xl
                           text-sm font-semibold
                           bg-white
                           text-slate-800
                           placeholder-slate-400
                           focus:outline-none
-                          focus:ring-2 focus:ring-emerald-400/40
-                          focus:border-emerald-500
+                          focus:ring-2 focus:ring-sky-400/40
+                          focus:border-sky-500
                           transition-colors"
               />
             </div>
@@ -622,7 +622,7 @@ const resendCampaign = async (id) => {
             <Search
               size={18}
               className="absolute left-4 top-1/2 -translate-y-1/2 
-                        text-emerald-600 opacity-70 
+                        text-sky-600 opacity-70 
                         pointer-events-none"
             />
 
@@ -633,20 +633,20 @@ const resendCampaign = async (id) => {
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-11 pr-4 py-3
                         rounded-xl
-                        border-2 border-emerald-500
+                        border-2 border-sky-500
                         text-sm font-semibold
                         bg-white
                         text-slate-800
-                        placeholder-emerald-400
+                        placeholder-sky-400
                         focus:outline-none
-                        focus:ring-2 focus:ring-emerald-400/40"
+                        focus:ring-2 focus:ring-sky-400/40"
             />
           </div>
 
             <button
               onClick={manualRefresh}
               disabled={isRefreshing}
-              className="p-2.5 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl hover:shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
+              className="p-2.5 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
               title="Refresh campaigns"
             >
               <RefreshCw size={20} className={isRefreshing ? "animate-spin" : ""} />
@@ -656,41 +656,41 @@ const resendCampaign = async (id) => {
       </div>
 
       {/* Enhanced Campaigns Table */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-emerald-200/50 shadow-lg overflow-hidden min-h-[600px]">
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-sky-200/50 shadow-lg overflow-hidden min-h-[600px]">
         {campaigns.length === 0 ? (
           <div className="text-center py-24">
             <div className="relative inline-block mb-6">
-              <div className="absolute inset-0 bg-emerald-200 rounded-full blur-2xl opacity-30"></div>
-              <Mail className="relative mx-auto text-emerald-300" size={64} />
+              <div className="absolute inset-0 bg-sky-200 rounded-full blur-2xl opacity-30"></div>
+              <Mail className="relative mx-auto text-sky-300" size={64} />
             </div>
-            <p className="text-emerald-600 text-xl font-bold mb-2">No campaigns found</p>
+            <p className="text-sky-600 text-xl font-bold mb-2">No campaigns found</p>
             <p className="text-slate-600 text-sm">Create your first campaign to get started</p>
           </div>
         ) : (
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-emerald-200/50 shadow-lg overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-sky-200/50 shadow-lg overflow-hidden">
             <div className="overflow-auto min-h-[600px] max-h-[650px]">
               <table className="w-full">
-                <thead className="sticky top-0 bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 z-10">
-                  <tr className="border-b border-emerald-200">
+                <thead className="sticky top-0 bg-gradient-to-r from-sky-50 via-blue-50 to-blue-50 z-10">
+                  <tr className="border-b border-sky-200">
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Campaign</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Campaign</span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Type</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Type</span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Recipients</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Recipients</span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Date</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Date</span>
                     </th>
                 
                     <th className="px-6 py-4 text-center">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Actions</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Actions</span>
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-emerald-100 bg-white">
+                <tbody className="divide-y divide-sky-100 bg-white">
                   {campaigns
                   .filter(campaign =>
                     campaign.name?.toLowerCase().includes(search.toLowerCase())
@@ -759,9 +759,9 @@ const resendCampaign = async (id) => {
                       icon: <Calendar size={14} />
                     },
                     completed: {
-                      bg: "bg-gradient-to-br from-emerald-50 to-teal-50",
-                      text: "text-emerald-700",
-                      border: "border-emerald-200",
+                      bg: "bg-gradient-to-br from-sky-50 to-blue-50",
+                      text: "text-sky-700",
+                      border: "border-sky-200",
                       icon: <TrendingUp size={14} />
                     },
                     completed_with_errors: {
@@ -772,7 +772,7 @@ const resendCampaign = async (id) => {
                     },
                     draft: {
                       bg: "bg-gradient-to-br from-slate-50 to-gray-50",
-                      text: "text-emerald-600",
+                      text: "text-sky-600",
                       border: "border-slate-200",
                       icon: <Mail size={14} />
                     },
@@ -782,7 +782,7 @@ const resendCampaign = async (id) => {
 
                   return (
                     <>
-                      <tr key={campaign.id} className="hover:bg-emerald-50/50 transition-all group">
+                      <tr key={campaign.id} className="hover:bg-sky-50/50 transition-all group">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
                             <div className={`relative w-11 h-11 rounded-xl ${config.bg} flex items-center justify-center flex-shrink-0 border ${config.border} shadow-sm group-hover:scale-105 transition-transform`}>
@@ -812,7 +812,7 @@ const resendCampaign = async (id) => {
                                   ? "bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 border-blue-200"
                                   : getCampaignLabel(campaign) === "Stopped"
                                   ? "bg-gradient-to-br from-red-50 to-orange-50 text-red-700 border-red-200"
-                                  : "bg-gradient-to-br from-emerald-50 to-teal-50 text-emerald-700 border-emerald-200"
+                                  : "bg-gradient-to-br from-sky-50 to-blue-50 text-sky-700 border-sky-200"
                               }
                             `}
                           >
@@ -825,7 +825,7 @@ const resendCampaign = async (id) => {
                             
                             {/* Left Side - Icon + Count */}
                             <div className="flex items-center gap-2">
-                              <div className="p-1 bg-emerald-100 rounded-lg">
+                              <div className="p-1 bg-sky-100 rounded-lg">
                                 <Users size={16} className="text-slate-600" />
                               </div>
 
@@ -863,7 +863,7 @@ const resendCampaign = async (id) => {
                               campaign.status === "completed_with_errors") && (
                               <button
                                 onClick={() => toggleRow(campaign.id)}
-                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-emerald-100 to-teal-100 hover:from-emerald-200 hover:to-teal-200 text-emerald-700 rounded-xl transition-all text-xs font-bold border border-emerald-200 shadow-sm transform hover:scale-105"
+                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-100 to-blue-100 hover:from-sky-200 hover:to-blue-200 text-sky-700 rounded-xl transition-all text-xs font-bold border border-sky-200 shadow-sm transform hover:scale-105"
                               >
                                 {isExpanded ? (
                                   <>
@@ -913,7 +913,7 @@ const resendCampaign = async (id) => {
                               <button
                                 onClick={() => resendCampaign(campaign.id)}
                                 disabled={resending === campaign.id}
-                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-xs hover:shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
+                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
                               >
                                 {resending === campaign.id ? (
                                   <>
@@ -935,7 +935,7 @@ const resendCampaign = async (id) => {
                       </tr>
                       {isExpanded && (campaign.status === "sending" || campaign.status === "completed" || campaign.status === "completed_with_errors") && (
                         <tr>
-                          <td colSpan={5} className="px-6 py-0 bg-gradient-to-br from-emerald-50/30 via-teal-50/30 to-green-50/30">
+                          <td colSpan={5} className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30">
                             <div className="py-5 space-y-4">
                               <CampaignTiming campaign={campaign} />
                               {campaign.status === "sending" && (
@@ -970,14 +970,14 @@ const resendCampaign = async (id) => {
 const StatCard = ({ icon, label, value, iconBg, iconColor, accentColor }) => (
   <div className="group relative">
     <div className={`absolute inset-0 bg-${accentColor}-200/30 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
-    <div className="relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-emerald-200/50 hover:border-emerald-300/70 transition-all shadow-sm hover:shadow-lg transform hover:scale-105 duration-300">
+    <div className="relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-sky-200/50 hover:border-sky-300/70 transition-all shadow-sm hover:shadow-lg transform hover:scale-105 duration-300">
       <div className="flex items-start justify-between mb-5">
         <div className={`relative w-14 h-14 ${iconBg} rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform duration-300`}>
           <div className={iconColor}>{icon}</div>
         </div>
       </div>
       <div>
-        <p className="text-[16px] font-bold text-emerald-600 mb-2 tracking-wide">{label}</p>
+        <p className="text-[16px] font-bold text-sky-600 mb-2 tracking-wide">{label}</p>
         <p className="text-3xl font-black text-slate-900 tracking-tight">{value}</p>
       </div>
     </div>

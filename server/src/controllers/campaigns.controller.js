@@ -1157,6 +1157,80 @@ export const getCampaignsForFollowup = async (req, res) => {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   GET FOLLOW-UP PREVIEW  (NEW)
+   GET /api/campaigns/:id/followup-preview
+
+   Everything the Follow-up "Email Preview" panel needs, in ONE request:
+     • sentCount            — via a single COUNT (not a full row fetch)
+     • previewRecipients    — first 3 sent rows only (enough for "To: a, b +N more")
+     • previousBody         — sentBodyHtml of the first sent row, or bodyHtml fallback
+
+   This replaces the old client-side chain of:
+     GET /:id/view?pageSize=1
+     GET /:id/recipients?status=sent        (UNPAGINATED — every sent row)
+     GET /:id/recipients/:recipientId/body  (only fires AFTER the above resolves)
+
+   That chain pulled every sent recipient just to show two email addresses
+   and a count, then paid a third, fully sequential round trip for the
+   preview body. For a campaign with hundreds/thousands of sent recipients
+   that unpaginated list was also the single largest payload in the whole
+   Follow-ups flow. This endpoint does 3 tiny, parallel DB queries and
+   returns one small JSON object — one round trip, no large payload.
+
+   The FULL unpaginated recipient list (with accountId, needed to build
+   senderRecipientMap) is still fetched via GET /:id/recipients?status=sent
+   — just lazily, at the moment "Create Follow-up" is actually clicked,
+   not on every campaign selection.
+═══════════════════════════════════════════════════════════════════════════ */
+export const getFollowupPreview = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ success: false, message: "Invalid campaign id" });
+    }
+
+    const campaign = await prisma.campaign.findFirst({
+      where:  { id, userId: req.user.id },
+      select: {
+        id: true, name: true, subject: true, fromAccountIds: true,
+        createdAt: true, bodyHtml: true,
+      },
+    });
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
+
+    const [sentCount, previewRecipients] = await Promise.all([
+      prisma.campaignRecipient.count({ where: { campaignId: id, status: "sent" } }),
+      prisma.campaignRecipient.findMany({
+        where:   { campaignId: id, status: "sent" },
+        orderBy: { id: "asc" },
+        take: 3,
+        select: {
+          id: true, email: true, accountId: true,
+          sentSubject: true, sentFromEmail: true, sentBodyHtml: true, sentAt: true,
+        },
+      }),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        campaign,
+        sentCount,
+        previewRecipients,
+        previousBody: previewRecipients[0]?.sentBodyHtml || campaign.bodyHtml || "",
+      },
+    });
+
+  } catch (err) {
+    console.error("getFollowupPreview error:", err);
+    return res.status(500).json({ success: false });
+  }
+};
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
    GET SINGLE CAMPAIGN
 ═══════════════════════════════════════════════════════════════════════════ */
 export const getSingleCampaign = async (req, res) => {

@@ -16,6 +16,8 @@ import { resumeAccountDeletions } from "./src/routes/inbox/accounts.js";
 import { startCampaignScheduler } from "./src/utils/campaignScheduler.js";
 import { sendBulkCampaign, MAX_TRANSIENT_RETRIES } from "./src/services/campaignMailer.service.js";
 import { startFollowupCleanupJob } from "./src/controllers/campaigns.controller.js";
+import { purgeExpiredEmails } from "./src/services/emailRetention.service.js";
+import { EMAIL_RETENTION_DAYS } from "./src/config/emailRetention.js";
 
 /* ══════════════════════════════════════════════════════════════════════════
    CIRCUIT BREAKER
@@ -213,6 +215,10 @@ async function resumeSendingCampaignsSafe() {
 
 const TICK_MS = 120_000;
 
+// Retention runs more often than a daily cron so every email is removed close
+// to its own 7-day mark (within ~10 minutes), not all together once a day.
+const RETENTION_TICK_MS = 10 * 60_000;
+
 async function startWorker() {
   console.log("🚀 Worker process started...");
 
@@ -225,10 +231,15 @@ async function startWorker() {
   await guarded("resumeSendingCampaigns", resumeSendingCampaignsSafe)();
   await guarded("resumeAccountDeletions", () => resumeAccountDeletions(prisma))();
 
+  console.log(`🧹 Email retention: ${EMAIL_RETENTION_DAYS} days per email (checked every ${RETENTION_TICK_MS / 60_000} min)`);
+  // Not awaited: a first run with a large backlog shouldn't delay the other jobs.
+  guarded("purgeExpiredEmails", () => purgeExpiredEmails(prisma))();
+
   setInterval(guarded("recoverStuckEmails", recoverStuckEmails), TICK_MS);
   setInterval(guarded("resumeSendingCampaigns", resumeSendingCampaignsSafe), TICK_MS);
   setInterval(guarded("resumeAccountDeletions", () => resumeAccountDeletions(prisma)), TICK_MS);
   setInterval(guarded("imapSync", () => runSync(prisma)), TICK_MS);
+  setInterval(guarded("purgeExpiredEmails", () => purgeExpiredEmails(prisma)), RETENTION_TICK_MS);
 }
 
 startCampaignScheduler();

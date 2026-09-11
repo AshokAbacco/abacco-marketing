@@ -394,11 +394,11 @@ const logoutAccount = async () => {
 
           {/* ✅ Group banner — shows which group this account will be added to */}
           {pendingGroup && (
-            <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-emerald-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="mb-4 px-4 py-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-sky-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
               </svg>
-              <p className="text-sm text-emerald-700">
+              <p className="text-sm text-sky-700">
                 Adding to group: <span className="font-bold">{pendingGroup.groupName}</span>
               </p>
             </div>
@@ -440,7 +440,7 @@ const logoutAccount = async () => {
                   <div>SMTP Port: {suggestion.smtpPort}</div>
 
                   <button
-                    className="mt-2 px-3 py-1 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded text-sm"
+                    className="mt-2 px-3 py-1 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded text-sm"
                     onClick={() => {
                       setForm({
                         ...form,
@@ -466,7 +466,7 @@ const logoutAccount = async () => {
           )}
 
           {showSuccessMessage && (
-            <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
+            <div className="mb-4 p-3 bg-blue-100 border border-blue-400 text-blue-700 rounded">
               {showSuccessMessage}
             </div>
           )}
@@ -534,7 +534,7 @@ const logoutAccount = async () => {
                   onClick={() => handleAccountSelect(acc)}
                   className={`border p-3 rounded mb-2 cursor-pointer ${
                     selectedAccountId === acc.id
-                      ? "bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-500"
+                      ? "bg-gradient-to-r from-sky-50 to-teal-50 border-sky-500"
                       : "bg-gray-50 hover:bg-gray-100"
                   }`}
                 >
@@ -564,7 +564,7 @@ const logoutAccount = async () => {
                                 setTempSenderName(e.target.value)
                               }
                               placeholder="Enter your name"
-                              className="flex-1 px-2 py-1 border border-emerald-300 rounded text-sm"
+                              className="flex-1 px-2 py-1 border border-sky-300 rounded text-sm"
                               onClick={(e) => e.stopPropagation()}
                             />
                             <button
@@ -573,7 +573,7 @@ const logoutAccount = async () => {
                                 updateSenderName(acc.id, tempSenderName);
                                 setEditingSenderName(null);
                               }}
-                              className="px-3 py-1 bg-green-600 text-white rounded text-sm"
+                              className="px-3 py-1 bg-blue-600 text-white rounded text-sm"
                             >
                               Save
                             </button>
@@ -591,7 +591,7 @@ const logoutAccount = async () => {
                           <div className="flex items-center gap-2">
                             <span className="text-sm text-gray-600">
                               📝 Sender Name:{" "}
-                              <span className="font-semibold text-emerald-600">
+                              <span className="font-semibold text-sky-600">
                                 {acc.senderName || "Not set"}
                               </span>
                             </span>
@@ -601,7 +601,7 @@ const logoutAccount = async () => {
                                 setEditingSenderName(acc.id);
                                 setTempSenderName(acc.senderName || "");
                               }}
-                              className="text-xs text-emerald-600 hover:underline"
+                              className="text-xs text-sky-600 hover:underline"
                             >
                               {acc.senderName ? "Edit" : "Set Name"}
                             </button>
@@ -612,7 +612,7 @@ const logoutAccount = async () => {
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <button
                         onClick={(e) => openEditModal(e, acc)}
-                        className="px-3 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
+                        className="px-3 py-1 bg-sky-600 text-white rounded text-sm hover:bg-sky-700"
                       >
                         ✏️ Edit
                       </button>
@@ -640,7 +640,7 @@ const logoutAccount = async () => {
               <select
                 value={form.provider}
                 onChange={handleProviderChange}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
               >
                 <option value="gmail">Gmail</option>
                 <option value="gsuite">G Suite</option>
@@ -656,7 +656,7 @@ const logoutAccount = async () => {
               <select
                 value={form.authType}
                 onChange={(e) => setForm({ ...form, authType: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
               >
                 <option value="password">App Password</option>
               </select>
@@ -670,7 +670,7 @@ const logoutAccount = async () => {
                 type="email"
                 value={form.email}
                 onChange={handleEmailChange}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                 required
               />
             </div>
@@ -687,7 +687,7 @@ const logoutAccount = async () => {
                   setForm({ ...form, senderName: e.target.value })
                 }
                 placeholder="Sender Name"
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                 required
               />
               <p className="text-xs text-gray-500 mt-1">
@@ -706,7 +706,7 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, imapHost: e.target.value })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                   required
                 />
               </div>
@@ -720,7 +720,7 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, imapPort: parseInt(e.target.value) })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                   required
                 />
               </div>
@@ -734,7 +734,7 @@ const logoutAccount = async () => {
                 type="text"
                 value={form.imapUser}
                 onChange={(e) => setForm({ ...form, imapUser: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                 required
               />
             </div>
@@ -750,7 +750,7 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, smtpHost: e.target.value })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                   required
                 />
               </div>
@@ -764,7 +764,7 @@ const logoutAccount = async () => {
                   onChange={(e) =>
                     setForm({ ...form, smtpPort: parseInt(e.target.value) })
                   }
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                   required
                 />
               </div>
@@ -778,7 +778,7 @@ const logoutAccount = async () => {
                 type="text"
                 value={form.smtpUser}
                 onChange={(e) => setForm({ ...form, smtpUser: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                 required
               />
             </div>
@@ -793,7 +793,7 @@ const logoutAccount = async () => {
                 onChange={(e) =>
                   setForm({ ...form, encryptedPass: e.target.value })
                 }
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-sky-500 focus:border-sky-500"
                 required
               />
               <p className="text-sm text-gray-500 mt-1">
@@ -830,7 +830,7 @@ const logoutAccount = async () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-md hover:from-emerald-700 hover:to-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-md hover:from-sky-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading || totalCount >= 80}
               >
                 {loading ? "Adding..." : totalCount >= 80 ? "Limit Reached (80/80)" : "Add Account"}
@@ -874,7 +874,7 @@ const logoutAccount = async () => {
                       value={editForm.senderName}
                       onChange={(e) => setEditForm({ ...editForm, senderName: e.target.value })}
                       placeholder="e.g. John from Acme"
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 text-sm"
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 text-sm"
                     />
                     <p className="text-xs text-gray-400 mt-1">This name appears in outgoing emails.</p>
                   </div>
@@ -890,7 +890,7 @@ const logoutAccount = async () => {
                         value={editForm.newPassword}
                         onChange={(e) => setEditForm({ ...editForm, newPassword: e.target.value })}
                         placeholder="Leave blank to keep current password"
-                        className="w-full p-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 text-sm"
+                        className="w-full p-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 text-sm"
                       />
                       <button
                         type="button"
@@ -920,7 +920,7 @@ const logoutAccount = async () => {
                         value={editForm.confirmPassword}
                         onChange={(e) => setEditForm({ ...editForm, confirmPassword: e.target.value })}
                         placeholder="Re-enter new password"
-                        className={`w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-emerald-400 text-sm ${
+                        className={`w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-sky-400 text-sm ${
                           editForm.confirmPassword && editForm.newPassword !== editForm.confirmPassword
                             ? "border-red-400 bg-red-50"
                             : "border-gray-300"
@@ -943,7 +943,7 @@ const logoutAccount = async () => {
                   <button
                     onClick={saveAccountEdit}
                     disabled={editLoading || (editForm.newPassword && editForm.newPassword !== editForm.confirmPassword)}
-                    className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-lg hover:from-emerald-700 hover:to-green-700 text-sm disabled:opacity-50"
+                    className="px-5 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-lg hover:from-sky-700 hover:to-blue-700 text-sm disabled:opacity-50"
                   >
                     {editLoading ? "Saving…" : "Save Changes"}
                   </button>

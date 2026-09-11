@@ -75,18 +75,18 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
       {/* Header Section */}
-      <div className="bg-green/20 dark:bg-slate-800 border-b border-emerald-50 dark:border-emerald-900">
+      <div className="bg-blue/20 dark:bg-slate-800 border-b border-sky-50 dark:border-sky-900">
         <div className="max-w-7xl mx-auto px-6 py-8">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-emerald-600 to-green-600 rounded-xl flex items-center justify-center shadow-lg">
+                <div className="w-12 h-12 bg-gradient-to-br from-sky-600 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
                   <Sparkles className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent">
+                  <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent">
                     Pitch Templates
                   </h1>
                   <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
@@ -98,7 +98,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
             <button
               onClick={() => setShowCreate(true)}
-              className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl hover:from-emerald-700 hover:to-green-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all duration-200 font-medium"
+              className="px-6 py-3 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:from-sky-700 hover:to-blue-700 flex items-center justify-center gap-2 shadow-lg shadow-sky-500/30 hover:shadow-xl hover:shadow-sky-500/40 transition-all duration-200 font-medium"
             >
               <Plus size={20} strokeWidth={2.5} />
               Create New Pitch
@@ -114,7 +114,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                 placeholder="Search pitches..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 bg-emerald-50 dark:bg-slate-700 border border-emerald-200 dark:border-emerald-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white dark:focus:bg-slate-600 transition-all text-slate-900 dark:text-white placeholder-slate-400"
+                className="w-full pl-12 pr-4 py-3 bg-sky-50 dark:bg-slate-700 border border-sky-200 dark:border-sky-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white dark:focus:bg-slate-600 transition-all text-slate-900 dark:text-white placeholder-slate-400"
               />
             </div>
           </div>
@@ -124,9 +124,9 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
         {filteredPitches.length === 0 ? (
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-emerald-200 dark:border-emerald-900 p-12 text-center shadow-xl">
-            <div className="w-20 h-20 bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/20 dark:to-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Sparkles className="w-10 h-10 text-emerald-600 dark:text-emerald-400" />
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-sky-200 dark:border-sky-900 p-12 text-center shadow-xl">
+            <div className="w-20 h-20 bg-gradient-to-br from-sky-100 to-blue-100 dark:from-sky-900/20 dark:to-blue-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Sparkles className="w-10 h-10 text-sky-600 dark:text-sky-400" />
             </div>
             <h3 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
               {searchQuery ? "No pitches found" : "No pitches yet"}
@@ -137,7 +137,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
             {!searchQuery && (
               <button
                 onClick={() => setShowCreate(true)}
-                className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl hover:from-emerald-700 hover:to-green-700 inline-flex items-center gap-2 shadow-lg shadow-emerald-500/30"
+                className="px-6 py-3 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:from-sky-700 hover:to-blue-700 inline-flex items-center gap-2 shadow-lg shadow-sky-500/30"
               >
                 <Plus size={20} />
                 Create Your First Pitch
@@ -149,10 +149,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
             {filteredPitches.map((pitch) => (
               <div
                 key={pitch.id}
-                className="group bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-900 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-300 hover:-translate-y-1 flex flex-col"
+                className="group bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-900 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300 hover:-translate-y-1 flex flex-col"
               >
                 {/* Card Header */}
-                <div className="p-6 border-b border-emerald-100 dark:border-emerald-900 bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20">
+                <div className="p-6 border-b border-sky-100 dark:border-sky-900 bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20">
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <h3 className="font-bold text-slate-900 dark:text-white text-lg line-clamp-2 flex-1">
                       {pitch.name}
@@ -161,7 +161,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                       className={`text-xs font-semibold px-3 py-1.5 rounded-full whitespace-nowrap ${
                         pitch.type === "followup"
                           ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/30"
-                          : "bg-gradient-to-r from-emerald-500 to-green-500 text-white shadow-lg shadow-emerald-500/30"
+                          : "bg-gradient-to-r from-sky-500 to-blue-500 text-white shadow-lg shadow-sky-500/30"
                       }`}
                     >
                       {pitch.type === "followup" ? "Follow Up" : "Fresh Pitch"}
@@ -178,18 +178,18 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                 </div>
 
                 {/* Card Footer - Actions */}
-                <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-t border-emerald-100 dark:border-emerald-900">
+                <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-t border-sky-100 dark:border-sky-900">
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
                         setSelectedPitch(pitch);
                         setShowPreview(true);
                       }}
-                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 hover:border-emerald-300 dark:hover:border-emerald-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
+                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-sky-50 dark:hover:bg-sky-900/30 border border-sky-200 dark:border-sky-700 hover:border-sky-300 dark:hover:border-sky-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
                       title="Preview"
                     >
-                      <Eye size={16} className="text-emerald-600 dark:text-emerald-400 group-hover/btn:scale-110 transition-transform" />
-                      <span className="group-hover/btn:text-emerald-600 dark:group-hover/btn:text-emerald-400">View</span>
+                      <Eye size={16} className="text-sky-600 dark:text-sky-400 group-hover/btn:scale-110 transition-transform" />
+                      <span className="group-hover/btn:text-sky-600 dark:group-hover/btn:text-sky-400">View</span>
                     </button>
 
                     <button
@@ -197,7 +197,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                         setEditingPitch(pitch);
                         setShowCreate(true);
                       }}
-                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-emerald-200 dark:border-emerald-700 hover:border-blue-300 dark:hover:border-blue-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
+                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-sky-200 dark:border-sky-700 hover:border-blue-300 dark:hover:border-blue-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
                       title="Edit"
                     >
                       <Edit size={16} className="text-blue-600 dark:text-blue-400 group-hover/btn:scale-110 transition-transform" />
@@ -206,7 +206,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
                     <button
                       onClick={() => handleDelete(pitch)}
-                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-900/30 border border-emerald-200 dark:border-emerald-700 hover:border-red-300 dark:hover:border-red-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
+                      className="flex-1 px-3 py-2.5 bg-white dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-900/30 border border-sky-200 dark:border-sky-700 hover:border-red-300 dark:hover:border-red-600 rounded-lg transition-all group/btn flex items-center justify-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"
                       title="Delete"
                     >
                       <Trash2 size={16} className="text-red-600 dark:text-red-400 group-hover/btn:scale-110 transition-transform" />

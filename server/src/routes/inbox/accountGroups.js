@@ -7,11 +7,14 @@
  */
 
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+import prisma from "../../prismaClient.js"; // shared pool (see prismaClient.js)
 import { protect } from "../../middlewares/authMiddleware.js";
 
 const router = express.Router();
-const prisma = new PrismaClient();
+// NOTE: this file used to call `new PrismaClient()`, which opened a SECOND
+// connection pool in the API process (and a third via the other route file),
+// on top of the sized pool in prismaClient.js. Extra pools compete for the
+// database's max_connections and made account/inbox requests queue.
 
 /* ─────────────────────────────────────────────────────────────
    GET /api/account-groups

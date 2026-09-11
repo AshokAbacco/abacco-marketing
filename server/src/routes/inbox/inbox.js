@@ -3,14 +3,18 @@ import express from "express";
 import prisma from "../../prismaClient.js";
 import { protect } from "../../middlewares/authMiddleware.js";
 import cache from "../../utils/cache.js";
+import {
+  EMAIL_RETENTION_DAYS,
+  RETENTION_EXEMPT_FOLDERS,
+  retentionCutoff,
+} from "../../config/emailRetention.js";
 
 // ─────────────────────────────────────────────
-// PRISMA SCHEMA NOTE
-// Add this index to your EmailMessage model for
-// faster sentAt-range queries per account:
-//
-//   @@index([emailAccountId, sentAt])
-//   @@index([emailAccountId, folder, direction, sentAt])
+// Indexes these queries rely on (schema.prisma, EmailMessage):
+//   @@index([emailAccountId, folder, sentAt])            ← conversation list
+//   @@index([emailAccountId, folder, direction, isRead]) ← unread badges
+//   @@index([conversationId, sentAt])                    ← open a thread
+//   @@index([createdAt])                                 ← retention purge
 // ─────────────────────────────────────────────
 
 function extractNameOrEmail(value) {
@@ -27,32 +31,32 @@ function extractNameOrEmail(value) {
 const router = express.Router();
 
 /* =========================================================
-   HELPER: Resolve monthFilter → startDate
-   Supported values: "current" | "last" | "three"
-   Default (unknown / missing): "current"
+   HELPER: Retention filter
+   Emails are kept for EMAIL_RETENTION_DAYS from arrival and
+   then purged by the worker (services/emailRetention.service.js).
+   The purge runs every ~10 min, so the API also filters by the
+   cutoff: an email never shows up after its window has ended,
+   even if the worker hasn't removed the row yet.
+   Drafts are exempt from retention.
 ========================================================= */
-function resolveStartDate(monthFilter) {
-  const now = new Date();
-
-  if (monthFilter === "last") {
-    // First day of the previous calendar month
-    return new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  }
-
-  if (monthFilter === "three") {
-    // First day of the month that was 3 months ago
-    return new Date(now.getFullYear(), now.getMonth() - 3, 1);
-  }
-
-  // Default: "current" → first day of the current month
-  return new Date(now.getFullYear(), now.getMonth(), 1);
+function withinRetention(folder) {
+  if (RETENTION_EXEMPT_FOLDERS.includes(folder)) return {};
+  return { createdAt: { gte: retentionCutoff() } };
 }
+
+// Upper bound on rows scanned per list request. With a 7-day window a
+// single folder is normally a few hundred rows; this only guards
+// against an unusually busy mailbox.
+const MAX_SCAN_ROWS = 20000;
 
 /* =========================================================
    HELPER: Build ALL cache keys for an account+folder
-   (one per monthFilter value) so bulk-invalidation is easy.
+   The month filter was removed (only 7 days of mail exist),
+   but the old key suffixes are still cleared here and in
+   smtpMailerRoutes.js so nothing stale survives a deploy.
 ========================================================= */
 const MONTH_FILTERS = ["current", "last", "three"];
+const CACHE_SUFFIX = "current";
 
 function allCacheKeys(userId, accountId, folder) {
   return MONTH_FILTERS.map(
@@ -64,6 +68,20 @@ function clearAllFolderCaches(userId, accountId) {
   ["inbox", "sent", "spam", "trash", "draft"].forEach((folder) => {
     allCacheKeys(userId, accountId, folder).forEach((key) => cache.del(key));
   });
+}
+
+// For routes that only receive a conversationId. Uses the
+// (conversationId, sentAt) index, so it's a single cheap lookup.
+async function clearCachesForConversation(userId, conversationId) {
+  try {
+    const msg = await prisma.emailMessage.findFirst({
+      where: { conversationId },
+      select: { emailAccountId: true },
+    });
+    if (msg) clearAllFolderCaches(userId, msg.emailAccountId);
+  } catch (e) {
+    console.warn("Cache clear failed:", e.message);
+  }
 }
 
 /* =========================================================
@@ -80,6 +98,7 @@ router.get("/accounts/:id/unread", protect, async (req, res) => {
         direction: "received",
         isRead: false,
         folder: "inbox",
+        ...withinRetention("inbox"),
       },
     });
 
@@ -110,10 +129,11 @@ router.post("/accounts/unread-bulk", protect, async (req, res) => {
     const rows = await prisma.emailMessage.groupBy({
       by: ["emailAccountId"],
       where: {
-        emailAccountId: { in: accountIds.map(Number) },
+        emailAccountId: { in: accountIds.map(Number).filter(Boolean) },
         direction: "received",
         isRead: false,
         folder: "inbox",
+        ...withinRetention("inbox"),
       },
       _count: { id: true },
     });
@@ -173,43 +193,48 @@ function formatMessages(messages) {
    GET CONVERSATIONS  (PAGINATED)
    GET /api/inbox/conversations/:accountId
        ?folder=inbox
-       &monthFilter=current|last|three   ← NEW
-       &limit=10                          ← NEW (default 10, max 100)
-       &page=0                            ← NEW (0-indexed page number)
+       &limit=10      (default 10, max 100)
+       &page=0        (0-indexed)
+       &bust=<any>    (skip server cache — Refresh button)
 
-   monthFilter defaults to "current" when omitted.
-   limit defaults to 10 so the initial load per account is cheap —
-   this is the fix for the "fetches everything from every account
-   at once" slowdown. The frontend calls again with page+1 (same
-   limit) to implement "Load More" for that one account only.
+   Returns the latest message of each conversation in the
+   folder, newest first, for the retention window (7 days).
+   `monthFilter` is still accepted but ignored, so an older
+   frontend build keeps working during deploy.
 
-   Cache key includes monthFilter (not limit/page) and is only
-   used for the very first page (page=0, limit=10) — the common
-   case on folder open. Subsequent "Load More" pages always hit
-   the DB directly since they're one-off requests and caching
-   every page would make invalidation (clearAllFolderCaches)
-   unreliable.
+   WHY TWO QUERIES
+   The previous version loaded up to 2000 rows INCLUDING the
+   full HTML body of every email, only to keep 10 of them and
+   show 100 characters of each. Bodies are often 20–200 KB,
+   so a single folder open could move many MB from Postgres.
+
+     1) Scan only (id, conversationId) for the folder, newest
+        first — tiny rows, served by the
+        (emailAccountId, folder, sentAt) index.
+     2) Load full rows (with body) for just the page's ids.
+
+   Pagination is now exact: `hasMore` is correct at any depth,
+   instead of being limited to what fit in the old 2000-row cap.
 ========================================================= */
 router.get("/conversations/:accountId", protect, async (req, res) => {
   try {
     const accountId = Number(req.params.accountId);
-    const { folder = "inbox", monthFilter = "current", bust } = req.query;
+    if (!accountId) {
+      return res.status(400).json({ success: false, error: "Invalid account id" });
+    }
+    const { folder = "inbox", bust } = req.query;
 
     // ── Pagination params ────────────────────────────────────
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
     const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
     const offset = page * limit;
 
-    const safeFilter = MONTH_FILTERS.includes(monthFilter) ? monthFilter : "current";
-    const cacheKey = `inbox:${req.user.id}:${accountId}:${folder}:${safeFilter}`;
+    const cacheKey = `inbox:${req.user.id}:${accountId}:${folder}:${CACHE_SUFFIX}`;
     const isCacheablePage = page === 0 && limit === 10;
-    const cached = !bust && isCacheablePage ? cache.get(cacheKey) : null; // skip cache when bust param present
+    const cached = !bust && isCacheablePage ? cache.get(cacheKey) : null;
 
-    // ── Return cache instantly — NO sync triggered here ──────
-    // Sync is triggered only by explicit Refresh button or the
-    // background scheduler (imap.service.js runSync). Triggering
-    // a full IMAP sync on every inbox load was the main cause of
-    // 5-10 minute wait times.
+    // Cache hit returns instantly. No IMAP sync is triggered from here —
+    // sync is done by the worker (every 2 min) or the Refresh button.
     if (cached) {
       return res.json({
         success: true,
@@ -217,16 +242,13 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
         hasMore: cached.hasMore,
         page,
         fromCache: true,
+        retentionDays: EMAIL_RETENTION_DAYS,
       });
     }
 
-    // ── Cache miss: query DB directly, fast ──────────────────
-    const startDate = resolveStartDate(safeFilter);
-
-    // Build folder filter on EmailMessage for direction/folder
-    let msgWhere = {
+    const msgWhere = {
       emailAccountId: accountId,
-      sentAt: { gte: startDate },
+      ...withinRetention(folder),
     };
 
     if (folder === "inbox") {
@@ -239,56 +261,62 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
       msgWhere.folder = folder; // spam, trash, draft
     }
 
-    // Get one latest message per conversation using a subquery approach:
-    // fetch just enough of the latest messages to cover the requested
-    // page once deduplicated to one-row-per-conversation, instead of
-    // pulling the whole mailbox. The multiplier accounts for multiple
-    // messages per conversation; capped so a single request can never
-    // scan more than ~2000 rows regardless of how deep "Load More" goes.
-    const fetchTake = Math.min((offset + limit) * 5 + 20, 2000);
-
-    const messages = await prisma.emailMessage.findMany({
+    // ── 1) Lightweight scan: ids only, newest first ──────────
+    const scan = await prisma.emailMessage.findMany({
       where: msgWhere,
       orderBy: { sentAt: "desc" },
-      take: fetchTake,
-      select: {
-        id: true,
-        conversationId: true,
-        subject: true,
-        fromEmail: true,
-        fromName: true,
-        toEmail: true,
-        direction: true,
-        sentAt: true,
-        isRead: true,
-        isStarred: true,
-        body: true,
-        folder: true,
-      },
+      select: { id: true, conversationId: true },
+      take: MAX_SCAN_ROWS,
     });
 
-    const formatted = formatMessages(messages);
-
-    // Deduplicate: keep first (most recent) per conversationId
+    // First row seen per conversation = its latest message
     const seen = new Set();
-    const deduplicated = formatted.filter((item) => {
-      if (!item.conversationId || seen.has(item.conversationId)) return false;
-      seen.add(item.conversationId);
-      return true;
-    });
-
-    // Slice out just the requested page of conversations
-    const pageItems = deduplicated.slice(offset, offset + limit);
-    // hasMore is a best-effort signal: true if we already know of more
-    // deduplicated conversations beyond this page within what we fetched.
-    const hasMore = deduplicated.length > offset + limit;
-
-    if (isCacheablePage) {
-      // Cache for 30 seconds (first-page only)
-      cache.set(cacheKey, { data: pageItems, hasMore }, 30);
+    const latestIds = [];
+    for (const row of scan) {
+      if (!row.conversationId || seen.has(row.conversationId)) continue;
+      seen.add(row.conversationId);
+      latestIds.push(row.id);
     }
 
-    return res.json({ success: true, data: pageItems, hasMore, page, fromCache: false });
+    const pageIds = latestIds.slice(offset, offset + limit);
+    const hasMore = latestIds.length > offset + limit;
+
+    // ── 2) Full rows (with body) for this page only ──────────
+    let pageItems = [];
+    if (pageIds.length > 0) {
+      const rows = await prisma.emailMessage.findMany({
+        where: { id: { in: pageIds } },
+        select: {
+          id: true,
+          conversationId: true,
+          subject: true,
+          fromEmail: true,
+          fromName: true,
+          toEmail: true,
+          direction: true,
+          sentAt: true,
+          isRead: true,
+          isStarred: true,
+          body: true,
+          folder: true,
+        },
+      });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      pageItems = formatMessages(pageIds.map((id) => byId.get(id)).filter(Boolean));
+    }
+
+    if (isCacheablePage) {
+      cache.set(cacheKey, { data: pageItems, hasMore }, 30); // 30 s, first page only
+    }
+
+    return res.json({
+      success: true,
+      data: pageItems,
+      hasMore,
+      page,
+      fromCache: false,
+      retentionDays: EMAIL_RETENTION_DAYS,
+    });
   } catch (err) {
     console.error("Conversations error:", err);
     res.status(500).json({ success: false, error: err.message });
@@ -335,6 +363,10 @@ router.patch(
         data: { isRead: true },
       });
 
+      // Without this, the 30 s list cache could show the conversation as
+      // unread again on the next background poll.
+      await clearCachesForConversation(req.user.id, conversationId);
+
       res.json({ success: true });
     } catch (err) {
       console.error("Mark read error:", err);
@@ -358,6 +390,8 @@ router.patch(
         where: { conversationId },
         data: { isRead: false },
       });
+
+      await clearCachesForConversation(req.user.id, conversationId);
 
       res.json({ success: true });
     } catch (err) {

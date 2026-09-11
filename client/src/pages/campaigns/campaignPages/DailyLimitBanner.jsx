@@ -82,25 +82,25 @@ export default function DailyLimitBanner() {
     ? "bg-red-500"
     : isNearLimit
     ? "bg-amber-400"
-    : "bg-emerald-500";
+    : "bg-sky-500";
 
   const containerBg = isExhausted
     ? "bg-red-50 border-red-200"
     : isNearLimit
     ? "bg-amber-50 border-amber-200"
-    : "bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200";
+    : "bg-gradient-to-r from-sky-50 to-blue-50 border-sky-200";
 
   const textColor = isExhausted
     ? "text-red-700"
     : isNearLimit
     ? "text-amber-800"
-    : "text-emerald-800";
+    : "text-sky-800";
 
   const subTextColor = isExhausted
     ? "text-red-500"
     : isNearLimit
     ? "text-amber-600"
-    : "text-emerald-600";
+    : "text-sky-600";
 
   return (
     <div
@@ -120,13 +120,13 @@ export default function DailyLimitBanner() {
         <span
           className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
             data.withinWindow
-              ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+              ? "bg-sky-100 text-sky-700 border-sky-200"
               : "bg-slate-100 text-slate-500 border-slate-200"
           }`}
         >
           <span
             className={`w-1.5 h-1.5 rounded-full inline-block ${
-              data.withinWindow ? "bg-emerald-500 animate-pulse" : "bg-slate-400"
+              data.withinWindow ? "bg-sky-500 animate-pulse" : "bg-slate-400"
             }`}
           />
           {data.withinWindow ? "Window Open" : "Window Closed"}
@@ -154,7 +154,7 @@ export default function DailyLimitBanner() {
               ? "bg-red-100 text-red-700"
               : isNearLimit
               ? "bg-amber-100 text-amber-700"
-              : "bg-emerald-100 text-emerald-700"
+              : "bg-sky-100 text-sky-700"
           }`}
         >
           <Zap size={11} className="inline mr-0.5 -mt-px" />

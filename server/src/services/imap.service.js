@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { decrypt } from "../utils/crypto.js";
+import { EMAIL_RETENTION_DAYS, retentionCutoff } from "../config/emailRetention.js";
 
 dotenv.config();
 
@@ -71,7 +72,7 @@ function deriveConversationId(accountId, parsed) {
 /* ======================================================
    SAVE TO DATABASE
 ====================================================== */
-async function saveEmailToDB(prisma, account, parsed, msg, direction, folder) {
+async function saveEmailToDB(prisma, account, parsed, msg, direction, folder, arrivedAt) {
   const messageId = parsed.messageId || msg.envelope?.messageId || `uid-${msg.uid}`;
   const accountId = Number(account.id);
 
@@ -122,6 +123,11 @@ async function saveEmailToDB(prisma, account, parsed, msg, direction, folder) {
       folder,
       sentAt: parsed.date || new Date(),
       isRead: direction === "sent",
+      // createdAt = when the email ARRIVED in the mailbox. This is the clock
+      // the 7-day retention job uses. For normal syncs (every 2 min) it's
+      // effectively "now"; for a new account's first sync it's the real
+      // arrival time, so a 5-day-old email gets 2 days left, not 7 more.
+      createdAt: arrivedAt,
     },
   });
 
@@ -233,11 +239,14 @@ async function syncImap(prisma, account) {
         let uids = [];
 
         if (lastUid === 0) {
-          // ── FIRST SYNC: date-based to avoid downloading years of history ──
-          const since = new Date();
-          since.setDate(since.getDate() - 30);
+          // ── FIRST SYNC: only the retention window ──
+          // Was 30 days, but anything older than EMAIL_RETENTION_DAYS would be
+          // downloaded, parsed and saved only to be purged minutes later.
+          // IMAP SINCE is day-granular, so this may include a few extra hours;
+          // those are filtered out per message below.
+          const since = retentionCutoff();
           uids = await client.search({ since }, { uid: true });
-          console.log(`📅 [${type}] First sync: ${uids.length} UIDs (last 30 days)`);
+          console.log(`📅 [${type}] First sync: ${uids.length} UIDs (last ${EMAIL_RETENTION_DAYS} days)`);
         } else {
           // ── INCREMENTAL SYNC: UID range only ──
           // `lastUid+1:*` means "all UIDs from lastUid+1 to the end of the mailbox"
@@ -255,19 +264,38 @@ async function syncImap(prisma, account) {
         const batch = pLimit(5);
         let maxUidSeen = lastUid;
         let newCount = 0;
+        const cutoff = retentionCutoff();
 
         await Promise.all(
           uids.slice(-500).map(uid =>
             batch(async () => {
               try {
-                const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
+                const msg = await client.fetchOne(
+                  uid,
+                  { source: true, envelope: true, internalDate: true },
+                  { uid: true }
+                );
                 if (!msg?.source) return;
+
+                // Arrival time on the mail server. Clamp to "now" so a wrong
+                // server clock can't push an email's expiry into the future.
+                const now = new Date();
+                const internal = msg.internalDate ? new Date(msg.internalDate) : now;
+                const arrivedAt = Number.isNaN(internal.getTime()) || internal > now ? now : internal;
+
+                // Already past its retention window (e.g. an old email moved
+                // into this folder gets a new UID). Skip it, but still count
+                // the UID below so it's never fetched again.
+                if (arrivedAt < cutoff) {
+                  if (uid > maxUidSeen) maxUidSeen = uid;
+                  return;
+                }
 
                 const parsed = await simpleParser(msg.source);
                 const fromAddr = parsed.from?.value?.[0]?.address?.toLowerCase() || "";
                 const direction = fromAddr === account.email.toLowerCase() ? "sent" : "received";
 
-                const saved = await saveEmailToDB(prisma, account, parsed, msg, direction, type);
+                const saved = await saveEmailToDB(prisma, account, parsed, msg, direction, type, arrivedAt);
                 if (saved) newCount++;
                 if (uid > maxUidSeen) maxUidSeen = uid;
 
@@ -301,7 +329,9 @@ async function syncImap(prisma, account) {
    PUBLIC EXPORTS
 ====================================================== */
 export async function runSync(prisma) {
-  const accounts = await prisma.emailAccount.findMany({ where: { verified: true } });
+  // deleted: false — accounts mid-background-delete shouldn't keep syncing
+  // new mail into rows the deletion worker is trying to remove.
+  const accounts = await prisma.emailAccount.findMany({ where: { verified: true, deleted: false } });
   const limit = pLimit(2);
   await Promise.allSettled(accounts.map(acc => limit(() => syncImap(prisma, acc))));
 }

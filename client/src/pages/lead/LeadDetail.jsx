@@ -52,13 +52,13 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] overflow-hidden border border-emerald-100 dark:border-emerald-900">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] overflow-hidden border border-sky-100 dark:border-sky-900">
 
         {/* Header */}
-        <div className="border-b border-emerald-100 dark:border-emerald-900 px-8 py-6 bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20">
+        <div className="border-b border-sky-100 dark:border-sky-900 px-8 py-6 bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-lg">
+              <div className="p-3 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-lg">
                 <User className="w-6 h-6" />
               </div>
               <div>
@@ -84,9 +84,9 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
           <div className="p-8 space-y-8">
 
             {/* Basic Information Section */}
-            <div className="bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/10 dark:to-green-900/10 rounded-xl p-6 border border-emerald-100 dark:border-emerald-900">
+            <div className="bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-900/10 dark:to-blue-900/10 rounded-xl p-6 border border-sky-100 dark:border-sky-900">
               <h4 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-                <Mail className="w-5 h-5 text-emerald-600" />
+                <Mail className="w-5 h-5 text-sky-600" />
                 Email Information
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -186,7 +186,7 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-emerald-600" />
+                    <Building2 className="w-4 h-4 text-sky-600" />
                     Lead Type
                   </label>
                   <select
@@ -194,9 +194,9 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
                     value={form.leadType || "ASSOCIATION"}
                     disabled={!editMode}
                     onChange={handleChange}
-                    className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all ${
+                    className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all ${
                       editMode 
-                        ? "bg-white dark:bg-slate-900 border-emerald-200 dark:border-emerald-800" 
+                        ? "bg-white dark:bg-slate-900 border-sky-200 dark:border-sky-800" 
                         : "bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700 cursor-not-allowed"
                     }`}
                   >
@@ -258,8 +258,8 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
 
             {/* Additional Info */}
             {form.sentAt && (
-              <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/10 dark:to-emerald-900/10 rounded-xl p-6 border border-green-100 dark:border-green-900">
-                <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+              <div className="bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-900/10 dark:to-sky-900/10 rounded-xl p-6 border border-blue-100 dark:border-blue-900">
+                <div className="flex items-center gap-2 text-blue-700 dark:text-blue-400">
                   <Calendar className="w-5 h-5" />
                   <span className="font-medium">Sent Date:</span>
                   <span>{new Date(form.sentAt).toLocaleString()}</span>
@@ -271,7 +271,7 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
         </div>
 
         {/* Footer */}
-        <div className="border-t border-emerald-100 dark:border-emerald-900 px-8 py-6 bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 flex justify-end gap-3">
+        <div className="border-t border-sky-100 dark:border-sky-900 px-8 py-6 bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 flex justify-end gap-3">
           <button
             onClick={onClose}
             className="px-6 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all duration-200"
@@ -282,7 +282,7 @@ export default function LeadDetail({ open, onClose, lead, onSave }) {
           {editMode && (
             <button
               onClick={handleSaveClick}
-              className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:from-emerald-700 hover:to-green-700 transition-all duration-200 shadow-lg hover:shadow-emerald-500/50"
+              className="px-6 py-3 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:from-sky-700 hover:to-blue-700 transition-all duration-200 shadow-lg hover:shadow-sky-500/50"
             >
               <Save size={18} />
               Save Changes
@@ -299,16 +299,16 @@ function InputField({ label, icon, ...props }) {
     <div>
       {label && (
         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
-          {icon && <span className="text-emerald-600">{icon}</span>}
+          {icon && <span className="text-sky-600">{icon}</span>}
           {label}
         </label>
       )}
       <input
         {...props}
-        className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all ${
+        className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all ${
           props.disabled 
             ? "bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700 cursor-not-allowed text-slate-600 dark:text-slate-400" 
-            : "bg-white dark:bg-slate-900 border-emerald-200 dark:border-emerald-800 text-slate-900 dark:text-white"
+            : "bg-white dark:bg-slate-900 border-sky-200 dark:border-sky-800 text-slate-900 dark:text-white"
         }`}
       />
     </div>

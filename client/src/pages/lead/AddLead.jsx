@@ -365,7 +365,7 @@ Subject: ${form.subject}`;
 
   // ================= INPUT UI =================
   const input =
-    "w-full px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none";
+    "w-full px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-400 focus:border-blue-400 outline-none";
 
   const isFormInvalid =
     !form.clientEmail?.trim() ||
@@ -391,10 +391,10 @@ Subject: ${form.subject}`;
         }`}
       >
         {/* ================= HEADER ================= */}
-        <div className={`px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white flex justify-between items-center ${!isMinimized ? 'border-b border-green-700' : ''}`}>
+        <div className={`px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white flex justify-between items-center ${!isMinimized ? 'border-b border-blue-700' : ''}`}>
           <div className="flex items-center gap-3">
             {!isMinimized && (
-              <button onClick={onClose} className="p-2 hover:bg-green-700 rounded-lg transition-colors">
+              <button onClick={onClose} className="p-2 hover:bg-blue-700 rounded-lg transition-colors">
                 <ChevronLeft className="w-5 h-5" />
               </button>
             )}
@@ -406,7 +406,7 @@ Subject: ${form.subject}`;
                 {/* Large Restore Button when minimized */}
                 <button 
                   onClick={() => setIsMinimized(false)}
-                  className="p-2 px-3 hover:bg-green-700 rounded transition-colors border border-white/30"
+                  className="p-2 px-3 hover:bg-blue-700 rounded transition-colors border border-white/30"
                   title="Restore"
                 >
                   <svg 
@@ -421,7 +421,7 @@ Subject: ${form.subject}`;
                   </svg>
                 </button>
                 {/* Close Button */}
-                <button onClick={onClose} className="p-2 hover:bg-green-700 rounded transition-colors">
+                <button onClick={onClose} className="p-2 hover:bg-blue-700 rounded transition-colors">
                   <X className="w-5 h-5" />
                 </button>
               </>
@@ -430,7 +430,7 @@ Subject: ${form.subject}`;
                 {/* Small Minimize Button when normal */}
                 <button 
                   onClick={() => setIsMinimized(true)}
-                  className="p-1.5 hover:bg-green-700 rounded transition-colors"
+                  className="p-1.5 hover:bg-blue-700 rounded transition-colors"
                   title="Minimize"
                 >
                   <svg 
@@ -446,7 +446,7 @@ Subject: ${form.subject}`;
                 </button>
                 
                 {/* Small Close Button */}
-                <button onClick={onClose} className="p-1.5 hover:bg-green-700 rounded transition-colors">
+                <button onClick={onClose} className="p-1.5 hover:bg-blue-700 rounded transition-colors">
                   <X className="w-4 h-4" />
                 </button>
               </>
@@ -654,7 +654,7 @@ Subject: ${form.subject}`;
             className={`px-6 py-2 rounded-lg flex items-center gap-2 transition-colors
               ${loading || isFormInvalid
                 ? "bg-gray-400 cursor-not-allowed text-white"
-                : "bg-green-600 hover:bg-green-700 text-white"}
+                : "bg-blue-600 hover:bg-blue-700 text-white"}
             `}
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}

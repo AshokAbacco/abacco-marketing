@@ -175,6 +175,16 @@ model EmailMessage {
   @@unique([emailAccountId, messageId])
   @@index([emailAccountId, conversationId])
   @@index([emailAccountId, sentAt])
+  // ── Inbox performance + 7-day retention ──
+  // Retention purge: "createdAt < now - 7 days" (each email's own clock)
+  @@index([createdAt])
+  // Folder list: one account + folder, newest first
+  @@index([emailAccountId, folder, sentAt])
+  // Sidebar unread badges (POST /api/inbox/accounts/unread-bulk)
+  @@index([emailAccountId, folder, direction, isRead])
+  // Opening a thread (GET /conversations/:id/messages) filters by
+  // conversationId alone, which the composite index above can't serve
+  @@index([conversationId, sentAt])
 }
 
 model Attachment {

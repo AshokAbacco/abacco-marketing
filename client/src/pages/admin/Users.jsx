@@ -93,12 +93,12 @@ export default function UsersPage() {
   });
 
   return (
-    <div className="p-6 bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 min-h-screen">
+    <div className="p-6 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 min-h-screen">
 
       {/* Header */}
       <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-emerald-700 to-green-600 bg-clip-text text-transparent">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-700 to-blue-600 bg-clip-text text-transparent">
             Employee Management
           </h1>
           <p className="text-slate-600 mt-1">Manage your team members</p>
@@ -106,7 +106,7 @@ export default function UsersPage() {
 
         <button
           onClick={() => setOpen(true)}
-          className="bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white px-6 py-3 rounded-xl shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all duration-200 font-semibold"
+          className="bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white px-6 py-3 rounded-xl shadow-lg shadow-sky-500/30 hover:shadow-xl hover:shadow-sky-500/40 transition-all duration-200 font-semibold"
         >
           + Add Employee
         </button>
@@ -124,9 +124,9 @@ export default function UsersPage() {
       {/* Status Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
 
-        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-emerald-100 p-5 flex gap-4 items-center hover:shadow-xl transition-shadow duration-200">
-          <div className="p-3 bg-gradient-to-br from-emerald-100 to-green-100 rounded-xl">
-            <Users className="text-emerald-600" size={24} />
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-sky-100 p-5 flex gap-4 items-center hover:shadow-xl transition-shadow duration-200">
+          <div className="p-3 bg-gradient-to-br from-sky-100 to-blue-100 rounded-xl">
+            <Users className="text-sky-600" size={24} />
           </div>
           <div>
             <p className="text-slate-600 text-sm font-medium">Total Employees</p>
@@ -155,9 +155,9 @@ export default function UsersPage() {
           </div>
         </div>
 
-        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-teal-100 p-5 flex gap-4 items-center hover:shadow-xl transition-shadow duration-200">
-          <div className="p-3 bg-gradient-to-br from-teal-100 to-cyan-100 rounded-xl">
-            <Briefcase className="text-teal-600" size={24} />
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-blue-100 p-5 flex gap-4 items-center hover:shadow-xl transition-shadow duration-200">
+          <div className="p-3 bg-gradient-to-br from-blue-100 to-cyan-100 rounded-xl">
+            <Briefcase className="text-blue-600" size={24} />
           </div>
           <div>
             <p className="text-slate-600 text-sm font-medium">Departments</p>
@@ -167,9 +167,9 @@ export default function UsersPage() {
       </div>
 
       {/* Employee Table */}
-      <div className="bg-white/80 backdrop-blur-sm shadow-xl rounded-2xl overflow-hidden border border-emerald-100">
+      <div className="bg-white/80 backdrop-blur-sm shadow-xl rounded-2xl overflow-hidden border border-sky-100">
 
-        <div className="p-6 border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-green-50">
+        <div className="p-6 border-b border-sky-100 bg-gradient-to-r from-sky-50 to-blue-50">
           <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
             <h2 className="text-xl font-bold text-slate-800">Employee List</h2>
 
@@ -178,12 +178,12 @@ export default function UsersPage() {
               {/* Location Filter Dropdown */}
               <div className="relative flex items-center">
                 <div className="absolute left-3 pointer-events-none">
-                  <MapPin className="h-4 w-4 text-emerald-500" />
+                  <MapPin className="h-4 w-4 text-sky-500" />
                 </div>
                 <select
                   value={locationFilter}
                   onChange={(e) => setLocationFilter(e.target.value)}
-                  className="pl-9 pr-4 py-2.5 bg-white border-2 border-emerald-200 rounded-xl text-slate-800 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all duration-200 appearance-none cursor-pointer font-medium text-sm"
+                  className="pl-9 pr-4 py-2.5 bg-white border-2 border-sky-200 rounded-xl text-slate-800 focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10 outline-none transition-all duration-200 appearance-none cursor-pointer font-medium text-sm"
                 >
                   <option value="All">All Locations</option>
                   <option value="Bengaluru">Bengaluru</option>
@@ -195,19 +195,19 @@ export default function UsersPage() {
               {/* Search Bar */}
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-emerald-500" />
+                  <Search className="h-5 w-5 text-sky-500" />
                 </div>
                 <input
                   type="text"
                   placeholder="Search by name, email, ID, or role..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 pr-10 py-2.5 w-full md:w-80 bg-white border-2 border-emerald-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all duration-200"
+                  className="pl-10 pr-10 py-2.5 w-full md:w-80 bg-white border-2 border-sky-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10 outline-none transition-all duration-200"
                 />
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery("")}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-emerald-600 transition-colors"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-sky-600 transition-colors"
                   >
                     <X size={18} />
                   </button>
@@ -220,12 +220,12 @@ export default function UsersPage() {
           {locationFilter !== "All" && (
             <div className="mt-3 flex items-center gap-2">
               <span className="text-sm text-slate-500">Showing:</span>
-              <span className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-sm font-semibold">
+              <span className="inline-flex items-center gap-1 px-3 py-1 bg-sky-100 text-sky-700 rounded-full text-sm font-semibold">
                 <MapPin size={12} />
                 {locationFilter}
                 <button
                   onClick={() => setLocationFilter("All")}
-                  className="ml-1 hover:text-emerald-900"
+                  className="ml-1 hover:text-sky-900"
                 >
                   <X size={12} />
                 </button>
@@ -236,7 +236,7 @@ export default function UsersPage() {
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-700 text-sm uppercase">
+            <thead className="bg-gradient-to-r from-sky-50 to-blue-50 text-sky-700 text-sm uppercase">
               <tr>
                 <th className="p-4 font-semibold">Emp ID</th>
                 <th className="p-4 font-semibold">Name</th>
@@ -253,11 +253,11 @@ export default function UsersPage() {
               {filteredUsers.map((u, index) => (
                 <tr
                   key={u.id}
-                  className={`border-b border-emerald-50 hover:bg-emerald-50/50 transition-colors duration-150 ${
-                    index % 2 === 0 ? "bg-white" : "bg-emerald-50/20"
+                  className={`border-b border-sky-50 hover:bg-sky-50/50 transition-colors duration-150 ${
+                    index % 2 === 0 ? "bg-white" : "bg-sky-50/20"
                   }`}
                 >
-                  <td className="p-4 font-semibold text-emerald-700">{u.empId}</td>
+                  <td className="p-4 font-semibold text-sky-700">{u.empId}</td>
                   <td className="p-4 text-slate-800 font-medium">{u.name}</td>
                   <td className="p-4 text-slate-600">{u.email}</td>
                   <td className="p-4">
@@ -281,14 +281,14 @@ export default function UsersPage() {
                   </td>
 
                   <td className="p-4">
-                    <span className="px-3 py-1.5 rounded-full bg-gradient-to-r from-emerald-100 to-green-100 text-emerald-700 text-sm font-semibold">
+                    <span className="px-3 py-1.5 rounded-full bg-gradient-to-r from-sky-100 to-blue-100 text-sky-700 text-sm font-semibold">
                       {u.jobRole}
                     </span>
                   </td>
 
                   {/* Location Column */}
                   <td className="p-4">
-                    <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-teal-50 text-teal-700 text-sm font-semibold border border-teal-100">
+                    <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 text-sm font-semibold border border-blue-100">
                       <MapPin size={12} />
                       {u.location || "—"}
                     </span>
@@ -298,7 +298,7 @@ export default function UsersPage() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(u)}
-                        className="p-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-600 rounded-lg transition-all duration-200 hover:scale-110"
+                        className="p-2 bg-sky-100 hover:bg-sky-200 text-sky-600 rounded-lg transition-all duration-200 hover:scale-110"
                         title="Edit"
                       >
                         <Pencil size={18} />
@@ -318,7 +318,7 @@ export default function UsersPage() {
                       onClick={() => handleToggleStatus(u.id)}
                       className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 hover:scale-105 shadow-sm ${
                         u.isActive
-                          ? "bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:shadow-md hover:shadow-green-500/30"
+                          ? "bg-gradient-to-r from-blue-500 to-sky-500 text-white hover:shadow-md hover:shadow-blue-500/30"
                           : "bg-gradient-to-r from-red-500 to-rose-500 text-white hover:shadow-md hover:shadow-red-500/30"
                       }`}
                       title={`Click to set ${u.isActive ? "Inactive" : "Active"}`}
@@ -334,8 +334,8 @@ export default function UsersPage() {
 
         {filteredUsers.length === 0 && (
           <div className="text-center p-12">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">
-              <Users className="text-emerald-600" size={32} />
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-sky-100 rounded-full mb-4">
+              <Users className="text-sky-600" size={32} />
             </div>
             <p className="text-slate-600 font-medium">
               {searchQuery || locationFilter !== "All"
@@ -348,7 +348,7 @@ export default function UsersPage() {
                   setSearchQuery("");
                   setLocationFilter("All");
                 }}
-                className="mt-3 text-emerald-600 hover:text-emerald-700 font-semibold"
+                className="mt-3 text-sky-600 hover:text-sky-700 font-semibold"
               >
                 Clear filters
               </button>

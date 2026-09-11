@@ -579,25 +579,25 @@ export default function CreateCampaign() {
 
 
   return (
-    <div className="space-y-6 p-6 bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 min-h-screen relative overflow-hidden">
+    <div className="space-y-6 p-6 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 min-h-screen relative overflow-hidden">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 right-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '5s'}}></div>
-        <div className="absolute bottom-20 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '7s', animationDelay: '2s'}}></div>
+        <div className="absolute top-20 right-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '5s'}}></div>
+        <div className="absolute bottom-20 left-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '7s', animationDelay: '2s'}}></div>
       </div>
 
       <div className="relative z-10 flex justify-between items-center">
         <div className="flex items-center gap-4">
           <div className="relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-2xl blur opacity-50"></div>
-            <div className="relative w-14 h-14 bg-gradient-to-br from-emerald-600 to-green-600 rounded-2xl flex items-center justify-center shadow-lg ">
+            <div className="absolute inset-0 bg-gradient-to-br from-sky-500 to-blue-600 rounded-2xl blur opacity-50"></div>
+            <div className="relative w-14 h-14 bg-gradient-to-br from-sky-600 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg ">
               <Sparkles className="text-white" size={26} />
             </div>
           </div>
           <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent py-2">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent py-2">
               Create Campaign
             </h1>
-            <p className="text-sm text-emerald-600 mt-1 font-semibold">Send immediate or scheduled email campaigns (continuous sending)</p>
+            <p className="text-sm text-sky-600 mt-1 font-semibold">Send immediate or scheduled email campaigns (continuous sending)</p>
           </div>
         </div>
       </div>
@@ -607,8 +607,8 @@ export default function CreateCampaign() {
           onClick={() => setCampaignType("immediate")}
           className={`group relative px-8 py-3.5 rounded-xl font-bold transition-all transform hover:scale-105 ${
             campaignType === "immediate"
-              ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg "
-              : "bg-white/80 backdrop-blur-sm text-emerald-600 border border-emerald-200 hover:border-emerald-300"
+              ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-lg "
+              : "bg-white/80 backdrop-blur-sm text-sky-600 border border-sky-200 hover:border-sky-300"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -620,8 +620,8 @@ export default function CreateCampaign() {
           onClick={() => setCampaignType("scheduled")}
           className={`group relative px-8 py-3.5 rounded-xl font-bold transition-all transform hover:scale-105 ${
             campaignType === "scheduled"
-              ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg "
-              : "bg-white/80 backdrop-blur-sm text-emerald-600 border border-emerald-200 hover:border-emerald-300"
+              ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-lg "
+              : "bg-white/80 backdrop-blur-sm text-sky-600 border border-sky-200 hover:border-sky-300"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -633,9 +633,9 @@ export default function CreateCampaign() {
 
       <div className="relative z-10 grid grid-cols-12 gap-6">
         <div className="col-span-8 space-y-5">
-          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 space-y-5 shadow-lg">
+          <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl p-6 space-y-5 shadow-lg">
             <div>
-              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide flex items-center gap-2">
+              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide flex items-center gap-2">
                 <Target size={16} />
                 Campaign Name
               </label>
@@ -652,22 +652,22 @@ export default function CreateCampaign() {
                   }
                 }}
                 placeholder="Association Name Outreach"
-                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium hover:border-emerald-300 transition-colors"
+                className="w-full border border-sky-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 font-medium hover:border-sky-300 transition-colors"
               />
               {nameError && <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded-lg border border-red-200 font-semibold">{nameError}</p>}
             </div>
 
             <div ref={fromDropdownRef} className="relative">
-              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide flex items-center gap-2">
+              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide flex items-center gap-2">
                 <Mail size={16} />
                 From Email Accounts
               </label>
 
               <div className="flex items-center gap-4 mb-3 text-xs">
-                <span className="flex items-center gap-1.5 text-emerald-600 font-bold bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                <span className="flex items-center gap-1.5 text-sky-600 font-bold bg-sky-50 px-3 py-1.5 rounded-lg border border-sky-200">
                   <CheckCircle2 size={14} />
                   {lockedLoading ? (
-                    <span className="inline-block w-6 h-3 bg-emerald-200 rounded animate-pulse" />
+                    <span className="inline-block w-6 h-3 bg-sky-200 rounded animate-pulse" />
                   ) : (
                     <>{availableAccounts.length} Available</>
                   )}
@@ -699,18 +699,18 @@ export default function CreateCampaign() {
                   }
                  }}
                 
-                className="w-full border border-emerald-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-emerald-300 transition-all font-medium"
+                className="w-full border border-sky-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-sky-300 transition-all font-medium"
               >
                 <span className="text-slate-700">
                   {selectedFroms.length > 0 
                     ? `${selectedFroms.length} account(s) selected` 
                     : "Select From Emails"}
                 </span>
-                <ChevronDown size={18} className={`text-emerald-600 transition-transform ${showFromDropdown ? 'rotate-180' : ''}`} />
+                <ChevronDown size={18} className={`text-sky-600 transition-transform ${showFromDropdown ? 'rotate-180' : ''}`} />
               </button>
 
               {showFromDropdown && (
-                <div className="relative z-50 mt-2 w-full bg-white/95 backdrop-blur-sm border border-emerald-200 rounded-xl shadow-2xl max-h-96 overflow-y-auto">
+                <div className="relative z-50 mt-2 w-full bg-white/95 backdrop-blur-sm border border-sky-200 rounded-xl shadow-2xl max-h-96 overflow-y-auto">
                   {(() => {
                     // Build grouped view mirroring the sidebar structure
                     const ungrouped = availableAccounts.filter(
@@ -724,7 +724,7 @@ export default function CreateCampaign() {
                     const renderAccountRow = (acc) => (
                       <label
                         key={acc.id}
-                        className="flex items-center gap-3 p-2.5 hover:bg-emerald-50 rounded-lg cursor-pointer transition group"
+                        className="flex items-center gap-3 p-2.5 hover:bg-sky-50 rounded-lg cursor-pointer transition group"
                       >
                         <input
                           type="checkbox"
@@ -736,14 +736,14 @@ export default function CreateCampaign() {
                               setSelectedFroms(selectedFroms.filter(id => id !== acc.id));
                             }
                           }}
-                          className="w-4 h-4 text-emerald-600 border-emerald-300 rounded focus:ring-emerald-500"
+                          className="w-4 h-4 text-sky-600 border-sky-300 rounded focus:ring-sky-500"
                         />
-                        <div className="w-6 h-6 flex-shrink-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-full flex items-center justify-center text-white text-[10px] font-bold">
+                        <div className="w-6 h-6 flex-shrink-0 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full flex items-center justify-center text-white text-[10px] font-bold">
                           {acc.email.charAt(0).toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-slate-900 truncate">{acc.email}</p>
-                          <p className="text-xs text-emerald-600 font-medium">
+                          <p className="text-xs text-sky-600 font-medium">
                             {acc.provider?.toUpperCase()} • Limit: {getActualLimit(acc.id)}/hr
                           </p>
                         </div>
@@ -788,7 +788,7 @@ export default function CreateCampaign() {
                                   }
                                   setCustomLimits(newLimits);
                                 }}
-                                className="text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-emerald-50 font-semibold"
+                                className="text-xs border border-sky-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-sky-500 bg-sky-50 font-semibold"
                               >
                                 <option value="">Default ({getDefaultLimit(acc.provider)})</option>
                                 {LIMIT_OPTIONS.map(opt => (
@@ -815,7 +815,7 @@ export default function CreateCampaign() {
                                       commitCustomValue();
                                     }
                                   }}
-                                  className="w-14 text-xs border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-semibold"
+                                  className="w-14 text-xs border border-sky-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white font-semibold"
                                 />
                               )}
                             </div>
@@ -836,7 +836,7 @@ export default function CreateCampaign() {
                               <button
                                 type="button"
                                 onClick={() => setExpandedGroupsInDropdown(prev => ({ ...prev, [group.id]: !isExpanded }))}
-                                className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-emerald-50 transition"
+                                className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sky-50 transition"
                               >
                                 <span
                                   className="w-5 h-5 rounded flex items-center justify-center text-white flex-shrink-0"
@@ -846,7 +846,7 @@ export default function CreateCampaign() {
                                 </span>
                                 <span className="text-xs font-bold text-slate-700 flex-1 text-left">{group.name}</span>
                                 {groupSelectedCount > 0 && (
-                                  <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded-full">
+                                  <span className="text-[10px] bg-sky-100 text-sky-700 font-bold px-1.5 py-0.5 rounded-full">
                                     {groupSelectedCount} selected
                                   </span>
                                 )}
@@ -854,7 +854,7 @@ export default function CreateCampaign() {
                               </button>
                               {/* Accounts under this group */}
                               {isExpanded && (
-                                <div className="ml-4 pl-2 border-l-2 border-emerald-100 space-y-0.5">
+                                <div className="ml-4 pl-2 border-l-2 border-sky-100 space-y-0.5">
                                   {group.accounts.length === 0 ? (
                                     <p className="text-xs text-slate-400 px-3 py-2">No accounts in this group</p>
                                   ) : (
@@ -889,7 +889,7 @@ export default function CreateCampaign() {
 
                   {/* Locked / In Use accounts — with loading skeleton */}
                   {lockedLoading ? (
-                    <div className="border-t border-emerald-200 p-3">
+                    <div className="border-t border-sky-200 p-3">
                       <div className="flex items-center gap-2 mb-2 px-2">
                         <div className="w-3 h-3 rounded-full bg-slate-200 animate-pulse" />
                         <div className="h-3 w-40 bg-slate-200 rounded animate-pulse" />
@@ -906,7 +906,7 @@ export default function CreateCampaign() {
                       ))}
                     </div>
                   ) : lockedAccountsList.length > 0 ? (
-                    <div className="border-t border-emerald-200 p-3">
+                    <div className="border-t border-sky-200 p-3">
                       {/* Campaign-busy accounts */}
                       {lockedAccountsList.length > 0 && (
                         <>
@@ -935,30 +935,30 @@ export default function CreateCampaign() {
             </div>
 
             {campaignType === "scheduled" && (
-              <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl border border-emerald-200">
+              <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-br from-sky-50 to-blue-50 rounded-xl border border-sky-200">
                 <div>
-                  <label className="block text-sm font-bold text-emerald-600 mb-2">Schedule Date (IST)</label>
+                  <label className="block text-sm font-bold text-sky-600 mb-2">Schedule Date (IST)</label>
                   <input
                     type="date"
                     value={scheduleDate}
                     onChange={(e) => setScheduleDate(e.target.value)}
-                    className="w-full border border-emerald-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                    className="w-full border border-sky-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-sky-500 font-medium"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-emerald-600 mb-2">Schedule Time (IST)</label>
+                  <label className="block text-sm font-bold text-sky-600 mb-2">Schedule Time (IST)</label>
                   <input
                     type="time"
                     value={scheduleTime}
                     onChange={(e) => setScheduleTime(e.target.value)}
-                    className="w-full border border-emerald-200 rounded-lg p-3"
+                    className="w-full border border-sky-200 rounded-lg p-3"
                   />
                 </div>
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">
+              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide">
                 Subject Lines (one per line)
               </label>
               <textarea
@@ -966,41 +966,41 @@ export default function CreateCampaign() {
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
                 placeholder="Enter multiple subject lines...&#10;One per line&#10;Random selection"
-                className="w-full border border-emerald-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
+                className="w-full border border-sky-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-sky-500 font-medium hover:border-sky-300 transition-colors"
               />
-              <p className="mt-2 text-sm font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg">
+              <p className="mt-2 text-sm font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-3 py-2 rounded-lg">
                 Total Subject Lines:{" "}
-                <span className="text-lg font-bold text-emerald-600">
+                <span className="text-lg font-bold text-sky-600">
                   {subjectCount}
                 </span>
               </p>
             </div>
 
             <div ref={pitchDropdownRef} className="relative">
-              <label className="block text-sm font-bold text-emerald-600 mb-2 uppercase tracking-wide">Pitch Templates (Optional)</label>
+              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide">Pitch Templates (Optional)</label>
               <button
                 type="button"
                  onClick={() => {
                     setShowPitchDropdown(!showPitchDropdown); // open/close pitch dropdown
                     setShowFromDropdown(false);               // close from dropdown
                   }}
-                className="w-full border border-emerald-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-emerald-300 transition-all font-medium"
+                className="w-full border border-sky-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-sky-300 transition-all font-medium"
               >
                 <span className="text-slate-700">
                   {selectedPitchIds.length > 0 
                     ? `${selectedPitchIds.length} template(s) selected` 
                     : "Select Pitch Templates"}
                 </span>
-                <ChevronDown size={18} className={`text-emerald-600 transition-transform ${showPitchDropdown ? 'rotate-180' : ''}`} />
+                <ChevronDown size={18} className={`text-sky-600 transition-transform ${showPitchDropdown ? 'rotate-180' : ''}`} />
               </button>
 
               {showPitchDropdown && (
-                <div className="relative z-[9999] bottom mb-2 w-full bg-white border border-emerald-200 rounded-xl shadow-2xl max-h-72 overflow-y-auto">
+                <div className="relative z-[9999] bottom mb-2 w-full bg-white border border-sky-200 rounded-xl shadow-2xl max-h-72 overflow-y-auto">
                   <div className="p-3 space-y-1">
                     {pitches.map((pitch) => (
                       <label
                         key={pitch.id}
-                        className="flex items-center gap-3 p-3 hover:bg-emerald-50 rounded-lg cursor-pointer transition"
+                        className="flex items-center gap-3 p-3 hover:bg-sky-50 rounded-lg cursor-pointer transition"
                       >
                         <input
                           type="checkbox"
@@ -1022,7 +1022,7 @@ export default function CreateCampaign() {
                           <p className="text-sm font-semibold text-slate-900">
                             {pitch.name}
                           </p>
-                          <p className="text-xs text-emerald-600">
+                          <p className="text-xs text-sky-600">
                             Click to load template
                           </p>
                         </div>
@@ -1034,16 +1034,16 @@ export default function CreateCampaign() {
             </div>
           </div>
 
-          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl overflow-visible shadow-lg relative z-[1]">
-            <div className="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-3">
-              <h3 className="text-sm font-bold text-emerald-600 uppercase tracking-wide">Email Content Editor</h3>
+          <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl overflow-visible shadow-lg relative z-[1]">
+            <div className="border-b border-sky-200 bg-gradient-to-r from-sky-50 to-blue-50 p-3">
+              <h3 className="text-sm font-bold text-sky-600 uppercase tracking-wide">Email Content Editor</h3>
             </div>
 
-            <div className="flex flex-wrap gap-2 p-3 border-b border-emerald-100 bg-white/50">
+            <div className="flex flex-wrap gap-2 p-3 border-b border-sky-100 bg-white/50">
               <select
                 value={currentFont}
                 onChange={(e) => applyFontFamily(e.target.value)}
-                className="px-3 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium"
+                className="px-3 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white font-medium"
               >
                 {FONT_FAMILIES.map(f => (
                   <option key={f.value} value={f.value}>{f.label}</option>
@@ -1053,41 +1053,41 @@ export default function CreateCampaign() {
               <select
                 value={currentSize}
                 onChange={(e) => applyFontSize(e.target.value)}
-                className="px-3 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium"
+                className="px-3 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white font-medium"
               >
                 {FONT_SIZES.map(s => (
                   <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
 
-              <div className="w-px h-7 bg-emerald-300 mx-1" />
+              <div className="w-px h-7 bg-sky-300 mx-1" />
 
               <ToolbarButton icon={<Bold size={16} />} onClick={() => formatText("bold")} title="Bold" />
               <ToolbarButton icon={<Italic size={16} />} onClick={() => formatText("italic")} title="Italic" />
               <ToolbarButton icon={<Underline size={16} />} onClick={() => formatText("underline")} title="Underline" />
               <ToolbarButton icon={<Strikethrough size={16} />} onClick={() => formatText("strikeThrough")} title="Strikethrough" />
 
-              <div className="w-px h-7 bg-emerald-300 mx-1" />
+              <div className="w-px h-7 bg-sky-300 mx-1" />
 
               <div className="relative">
                 <button
                   onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="p-2 hover:bg-emerald-100 rounded-lg transition border border-emerald-200"
+                  className="p-2 hover:bg-sky-100 rounded-lg transition border border-sky-200"
                   title="Text Color"
                 >
                   <div className="w-5 h-5 rounded" style={{ backgroundColor: currentColor }} />
                 </button>
                 {showColorPicker && (
-                  <div className="absolute z-50 mt-2 p-3 bg-white border border-emerald-200 rounded-xl shadow-xl" style={{ width: "280px" }}>
+                  <div className="absolute z-50 mt-2 p-3 bg-white border border-sky-200 rounded-xl shadow-xl" style={{ width: "280px" }}>
                     {COLOR_FAMILIES.map((family, familyIndex) => (
-                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-emerald-200" : ""}>
+                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-sky-200" : ""}>
                         <div className="text-xs font-medium text-slate-600 mb-2">{family.name}</div>
                         <div className="grid grid-cols-8 gap-1">
                           {family.colors.map((color, colorIndex) => (
                             <button
                               key={`${family.name}-${colorIndex}`}
                               onClick={() => applyColor(color)}
-                              className="w-6 h-6 rounded border-2 border-emerald-200 hover:scale-110 transition-transform"
+                              className="w-6 h-6 rounded border-2 border-sky-200 hover:scale-110 transition-transform"
                               style={{ backgroundColor: color }}
                               title={color}
                             />
@@ -1099,19 +1099,19 @@ export default function CreateCampaign() {
                 )}
               </div>
 
-              <div className="w-px h-7 bg-emerald-300 mx-1" />
+              <div className="w-px h-7 bg-sky-300 mx-1" />
 
               <ToolbarButton icon={<AlignLeft size={16} />} onClick={() => formatText("justifyLeft")} title="Align Left" />
               <ToolbarButton icon={<AlignCenter size={16} />} onClick={() => formatText("justifyCenter")} title="Center" />
               <ToolbarButton icon={<AlignRight size={16} />} onClick={() => formatText("justifyRight")} title="Align Right" />
               <ToolbarButton icon={<AlignJustify size={16} />} onClick={() => formatText("justifyFull")} title="Justify" />
 
-              <div className="w-px h-7 bg-emerald-300 mx-1" />
+              <div className="w-px h-7 bg-sky-300 mx-1" />
 
               <ToolbarButton icon={<List size={16} />} onClick={() => formatText("insertUnorderedList")} title="Bullet List" />
               <ToolbarButton icon={<ListOrdered size={16} />} onClick={() => formatText("insertOrderedList")} title="Numbered List" />
 
-              <div className="w-px h-7 bg-emerald-300 mx-1" />
+              <div className="w-px h-7 bg-sky-300 mx-1" />
 
               <ToolbarButton icon={<Link size={16} />} onClick={insertLink} title="Insert Link" />
             </div>
@@ -1130,15 +1130,15 @@ export default function CreateCampaign() {
             />
 
             {attachments.length > 0 && (
-              <div className="border-t border-emerald-100 p-4 bg-emerald-50/50">
-                <p className="text-xs text-emerald-600 font-bold mb-3 uppercase tracking-wide">Attachments:</p>
+              <div className="border-t border-sky-100 p-4 bg-sky-50/50">
+                <p className="text-xs text-sky-600 font-bold mb-3 uppercase tracking-wide">Attachments:</p>
                 <div className="flex flex-wrap gap-2">
                   {attachments.map((file, index) => (
                     <div
                       key={index}
-                      className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 shadow-sm"
+                      className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-sky-200 shadow-sm"
                     >
-                      <Paperclip size={14} className="text-emerald-600" />
+                      <Paperclip size={14} className="text-sky-600" />
                       <span className="text-xs text-slate-700 font-medium">{file.name}</span>
                       <button onClick={() => removeAttachment(index)} className="p-1 hover:bg-red-100 rounded-full transition">
                         <X size={12} className="text-red-500" />
@@ -1149,12 +1149,12 @@ export default function CreateCampaign() {
               </div>
             )}
 
-            <div className="border-t border-emerald-200 p-4 flex justify-between items-center bg-gradient-to-r from-emerald-50/50 to-teal-50/50">
+            <div className="border-t border-sky-200 p-4 flex justify-between items-center bg-gradient-to-r from-sky-50/50 to-blue-50/50">
               <div className="flex items-center gap-3">
                 {!editingRole ? (
                   <>
                     <p className="text-sm font-semibold text-gray-700">
-                      Sender: <span className="text-emerald-600">{senderRole || "Not Set"}</span>
+                      Sender: <span className="text-sky-600">{senderRole || "Not Set"}</span>
                     </p>
 
                     <button
@@ -1179,7 +1179,7 @@ export default function CreateCampaign() {
 
                     <button
                       onClick={handleSaveRole}
-                      className="bg-emerald-600 text-white px-3 py-1 rounded text-sm"
+                      className="bg-sky-600 text-white px-3 py-1 rounded text-sm"
                     >
                       Save
                     </button>
@@ -1191,7 +1191,7 @@ export default function CreateCampaign() {
               {selectedPitchIds.length > 0 && (
                 <button
                   onClick={savePitchTemplate}
-                  className="flex items-center gap-2 px-5 py-2 text-sm bg-gradient-to-r from-emerald-600 to-green-600 text-white hover:shadow-lg rounded-lg transition font-bold"
+                  className="flex items-center gap-2 px-5 py-2 text-sm bg-gradient-to-r from-sky-600 to-blue-600 text-white hover:shadow-lg rounded-lg transition font-bold"
                 >
                   Save
                 </button>
@@ -1199,7 +1199,7 @@ export default function CreateCampaign() {
 
               <button
                 onClick={() => setShowPreview(!showPreview)}
-                className="flex items-center gap-2 px-5 py-2 text-sm bg-white text-emerald-600 hover:bg-emerald-50 rounded-lg transition font-bold border border-emerald-200"
+                className="flex items-center gap-2 px-5 py-2 text-sm bg-white text-sky-600 hover:bg-sky-50 rounded-lg transition font-bold border border-sky-200"
               >
                 <Eye size={16} />
                 {showPreview ? "Hide" : "Show"} Preview
@@ -1208,15 +1208,15 @@ export default function CreateCampaign() {
           </div>
 
           {showPreview && (
-            <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 shadow-lg">
-              <h3 className="text-sm font-bold text-emerald-600 mb-4 uppercase tracking-wide">Email Preview</h3>
-              <div className="border border-emerald-200 rounded-xl p-5 min-h-32 max-h-96 overflow-y-auto bg-white">
-                <div className="mb-4 pb-4 border-b border-emerald-200">
-                  <p className="text-xs text-emerald-600 font-semibold">From: {selectedFroms.length} account(s) selected</p>
-                  <p className="text-xs text-emerald-600 font-semibold">To: {parsedEmails.length} recipient(s)</p>
+            <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl p-6 shadow-lg">
+              <h3 className="text-sm font-bold text-sky-600 mb-4 uppercase tracking-wide">Email Preview</h3>
+              <div className="border border-sky-200 rounded-xl p-5 min-h-32 max-h-96 overflow-y-auto bg-white">
+                <div className="mb-4 pb-4 border-b border-sky-200">
+                  <p className="text-xs text-sky-600 font-semibold">From: {selectedFroms.length} account(s) selected</p>
+                  <p className="text-xs text-sky-600 font-semibold">To: {parsedEmails.length} recipient(s)</p>
                   <p className="text-base font-bold text-slate-900 mt-3">{subject || "No subject"}</p>
                   {campaignType === "scheduled" && scheduleDate && (
-                    <p className="text-xs text-emerald-600 font-semibold mt-2">
+                    <p className="text-xs text-sky-600 font-semibold mt-2">
                       Scheduled: {scheduleDate} at {scheduleTime}
                     </p>
                   )}
@@ -1232,8 +1232,8 @@ export default function CreateCampaign() {
         </div>
 
         <div className="col-span-4 space-y-5">
-          <div className="bg-white/80 backdrop-blur-sm border border-emerald-200/50 rounded-2xl p-6 shadow-lg">
-            <h3 className="text-sm font-bold text-emerald-600 mb-4 uppercase tracking-wide flex items-center gap-2">
+          <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl p-6 shadow-lg">
+            <h3 className="text-sm font-bold text-sky-600 mb-4 uppercase tracking-wide flex items-center gap-2">
               <Users size={16} />
               Client Mails
             </h3>
@@ -1247,7 +1247,7 @@ export default function CreateCampaign() {
                     setRecipientMode("manual");
                     setCsvFile(null);
                   }}
-                  className="w-4 h-4 text-emerald-600 border-emerald-300 focus:ring-emerald-500"
+                  className="w-4 h-4 text-sky-600 border-sky-300 focus:ring-sky-500"
                 />
                 Manual Entry
               </label>
@@ -1260,7 +1260,7 @@ export default function CreateCampaign() {
                     setRecipientMode("file");
                     setManualEmails("");
                   }}
-                  className="w-4 h-4 text-emerald-600 border-emerald-300 focus:ring-emerald-500"
+                  className="w-4 h-4 text-sky-600 border-sky-300 focus:ring-sky-500"
                 />
                 Upload CSV
               </label>
@@ -1268,7 +1268,7 @@ export default function CreateCampaign() {
 
             {recipientMode === "manual" && (
               <div>
-                <label className="block text-[13px] text-emerald-600 mb-2 font-bold tracking-wide">
+                <label className="block text-[13px] text-sky-600 mb-2 font-bold tracking-wide">
                   Paste emails (comma or new line separated)
                 </label>
                 <textarea
@@ -1279,14 +1279,14 @@ export default function CreateCampaign() {
                     extractEmails(e.target.value);
                   }}
                   placeholder="client1@gmail.com&#10;client2@gmail.com, client3@gmail.com"
-                  className="w-full border border-emerald-200 rounded-xl p-3.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 font-medium hover:border-emerald-300 transition-colors"
+                  className="w-full border border-sky-200 rounded-xl p-3.5 text-sm outline-none focus:ring-2 focus:ring-sky-500 font-medium hover:border-sky-300 transition-colors"
                 />
               </div>
             )}
 
             {recipientMode === "file" && (
               <div>
-                <label className="block text-[13px] text-emerald-600 mb-3 font-bold tracking-wide">
+                <label className="block text-[13px] text-sky-600 mb-3 font-bold tracking-wide">
                   Upload CSV file containing emails
                 </label>
                 <input
@@ -1296,36 +1296,36 @@ export default function CreateCampaign() {
                     setCsvFile(e.target.files[0]);
                     handleCsvUpload(e.target.files[0]);
                   }}
-                  className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-600 hover:file:bg-emerald-100"
+                  className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-600 hover:file:bg-sky-100"
                 />
                 {csvFile && (
-                  <p className="text-xs text-emerald-600 font-semibold mt-3 bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                  <p className="text-xs text-sky-600 font-semibold mt-3 bg-sky-50 p-2 rounded-lg border border-sky-200">
                     File selected: {csvFile.name}
                   </p>
                 )}
               </div>
             )}
 
-            <div className="mt-5 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+            <div className="mt-5 bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-4 space-y-3">
               <p className="text-sm font-bold text-slate-900">
                 Total Emails:
-                <span className="ml-2 text-emerald-600 text-lg">
+                <span className="ml-2 text-sky-600 text-lg">
                   {parsedEmails.length}
                 </span>
               </p>
 
               {selectedFroms.length > 0 && (
-                <div className="text-xs text-emerald-600 bg-white border border-emerald-200 p-3 rounded-lg font-semibold space-y-1">
+                <div className="text-xs text-sky-600 bg-white border border-sky-200 p-3 rounded-lg font-semibold space-y-1">
                   <div className="flex items-center gap-1.5">
-                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    <CheckCircle2 size={14} className="text-sky-600" />
                     Continuous sending enabled
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Zap size={14} className="text-emerald-600" />
+                    <Zap size={14} className="text-sky-600" />
                     Capacity: {getCapacity()} emails/hour
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Clock size={14} className="text-emerald-600" />
+                    <Clock size={14} className="text-sky-600" />
                     Est. time: {Math.ceil(parsedEmails.length / getCapacity())} hour(s)
                   </div>
                 </div>
@@ -1358,8 +1358,8 @@ export default function CreateCampaign() {
                 : ""
             } ${
               campaignType === "immediate"
-                ? "bg-gradient-to-r from-emerald-600 to-green-600 hover:shadow-emerald-500/50"
-                : "bg-gradient-to-r from-emerald-600 to-green-600 hover:shadow-emerald-500/50"
+                ? "bg-gradient-to-r from-sky-600 to-blue-600 hover:shadow-sky-500/50"
+                : "bg-gradient-to-r from-sky-600 to-blue-600 hover:shadow-sky-500/50"
             }`}
           >
             {sending ? (
@@ -1384,7 +1384,7 @@ export default function CreateCampaign() {
 const ToolbarButton = ({ icon, onClick, title }) => (
   <button 
     onClick={onClick} 
-    className="p-2 hover:bg-emerald-100 rounded-lg transition border border-transparent hover:border-emerald-200" 
+    className="p-2 hover:bg-sky-100 rounded-lg transition border border-transparent hover:border-sky-200" 
     title={title}
   >
     {icon}

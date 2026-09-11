@@ -1,7 +1,7 @@
-// ✅ EmailList.jsx - FIXED VERSION
-// Fix 1: monthFilter passed in API call + default changed to "three" (Last 3 Months)
-// Fix 2: Auto-retry on empty initial load (server IMAP sync may not have finished yet)
-// Fix 3: Per-row delete (trash) button on hover
+// ✅ EmailList.jsx
+// • Shows the last 7 days of mail (server-side retention; month filter removed)
+// • Auto-retry on empty initial load (server IMAP sync may not have finished yet)
+// • Per-row delete (trash) button on hover
 import React, { useState, useEffect, useRef } from "react";
 import { Mail, ChevronDown, ChevronUp, Users, Globe, Zap, MoreVertical, Trash2, Check, X, Flag } from "lucide-react";
 import { api } from "../../utils/api"; 
@@ -22,10 +22,6 @@ export default function ConversationList({
   setConversations,
   refreshKey,
   onUnreadChange,
-  // Default "three" (Last 3 Months) so existing emails always show on first load.
-  // "current" (Current Month) only shows emails from the 1st of this month — if
-  // no emails arrived this month yet, the list looks empty even though emails exist.
-  monthFilter = "current",
 }) {
   // How many conversations each "page" contains. Initial load and each
   // "Load More" click fetch exactly this many for the CURRENT account only —
@@ -41,11 +37,11 @@ export default function ConversationList({
 
   // Next page index to fetch when "Load More" is clicked (0-indexed).
   const [page, setPage] = useState(0);
-  // Whether the current account/folder/monthFilter still has more
+  // Whether the current account/folder still has more
   // conversations beyond what's currently loaded.
   const [hasMore, setHasMore] = useState(false);
 
-  // In-memory cache keyed by `${accountId}:${folder}:${monthFilter}` so
+  // In-memory cache keyed by `${accountId}:${folder}` so
   // reopening a folder you've already viewed this session is instant and
   // doesn't refetch — matches "cache already fetched emails" requirement.
   const cacheRef = useRef(new Map());
@@ -88,7 +84,7 @@ export default function ConversationList({
     loadedCountRef.current = conversations.length;
   }, [conversations]);
 
-  const cacheKeyFor = (accountId, folder, mf) => `${accountId}:${folder}:${mf}`;
+  const cacheKeyFor = (accountId, folder) => `${accountId}:${folder}`;
 
   /**
    * fetchEmails — single entry point for all conversation fetching for THIS
@@ -103,7 +99,7 @@ export default function ConversationList({
   const fetchEmails = async ({ background = false, loadMore = false, forceRefresh = false } = {}) => {
     if (!selectedAccount?.id) return;
 
-    const key = cacheKeyFor(selectedAccount.id, selectedFolder, monthFilter);
+    const key = cacheKeyFor(selectedAccount.id, selectedFolder);
 
     if (loadMore) setLoadingMore(true);
     else if (!background && conversations.length === 0) setLoading(true);
@@ -123,7 +119,6 @@ export default function ConversationList({
         {
           params: {
             folder: selectedFolder,
-            monthFilter,
             limit: effectiveLimit,
             page: targetPage,
             ...(forceRefresh ? { bust: Date.now() } : {}),
@@ -217,11 +212,11 @@ export default function ConversationList({
   // account/folder context".
   const lastRefreshKeyRef = useRef(refreshKey);
 
-  // Re-fetch whenever account, folder, refreshKey, or monthFilter changes
+  // Re-fetch whenever account, folder, or refreshKey changes
   useEffect(() => {
     if (!selectedAccount?.id || !selectedFolder) return;
 
-    const key = cacheKeyFor(selectedAccount.id, selectedFolder, monthFilter);
+    const key = cacheKeyFor(selectedAccount.id, selectedFolder);
     const isNewContext = lastFetchKey.current !== key;
     const isManualRefresh = !isNewContext && lastRefreshKeyRef.current !== refreshKey;
     lastFetchKey.current = key;
@@ -262,7 +257,7 @@ export default function ConversationList({
       clearInterval(interval);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, [refreshKey, selectedAccount?.id, selectedFolder, monthFilter]);
+  }, [refreshKey, selectedAccount?.id, selectedFolder]);
 
   // useEffect(() => {
   //   console.log(`📊 EmailList rendered with ${conversations.length} conversations`);
@@ -270,7 +265,7 @@ export default function ConversationList({
 
   // Only block render on a TRUE initial load (list is empty AND we're loading)
   // Background polls must never blank the existing conversation list.
-  if (loading && conversations.length === 0) return <p className="p-4 text-center text-green-700 mt-20">Loading Mails...</p>;
+  if (loading && conversations.length === 0) return <p className="p-4 text-center text-blue-700 mt-20">Loading Mails...</p>;
 
   const handleSort = (field) => {
     if (sortBy === field) {
@@ -603,21 +598,21 @@ export default function ConversationList({
     <div className="flex flex-col h-full bg-white/90 backdrop-blur-sm">
       {/* ── New mail toast ── */}
       {newMailCount > 0 && (
-        <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium animate-pulse">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-sky-600 text-white text-xs font-medium animate-pulse">
           <span>📬 {newMailCount} new {newMailCount === 1 ? "email" : "emails"} arrived</span>
           <button onClick={() => setNewMailCount(0)} className="ml-2 opacity-70 hover:opacity-100">✕</button>
         </div>
       )}
       {/* Header */}
-      <div className="p-2 border-b border-emerald-200/50 bg-gradient-to-r from-white to-emerald-50/30">
+      <div className="p-2 border-b border-sky-200/50 bg-gradient-to-r from-white to-sky-50/30">
         <div className="flex items-center justify-between ">
           <div className="flex items-center gap-2">
-            <h2 className="text-md font-bold bg-gradient-to-r from-emerald-600 to-green-800 bg-clip-text text-transparent">
+            <h2 className="text-md font-bold bg-gradient-to-r from-sky-600 to-blue-800 bg-clip-text text-transparent">
               {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
             </h2>
             {/* Subtle background refresh indicator */}
             {refreshing && (
-              <span className="text-[10px] text-emerald-500 animate-pulse font-medium">
+              <span className="text-[10px] text-sky-500 animate-pulse font-medium">
                 ● syncing
               </span>
             )}
@@ -627,17 +622,17 @@ export default function ConversationList({
           <div className="relative" ref={moreMenuRef}>
             <button
               onClick={() => setShowMoreMenu(!showMoreMenu)}
-              className="p-2 hover:bg-emerald-100 rounded-lg transition-colors"
+              className="p-2 hover:bg-sky-100 rounded-lg transition-colors"
               title="More options"
             >
-              <MoreVertical className="w-5 h-5 text-emerald-600" />
+              <MoreVertical className="w-5 h-5 text-sky-600" />
             </button>
 
             {showMoreMenu && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-emerald-200 z-50">
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-sky-200 z-50">
                 <button
                   onClick={handleSelectAll}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-emerald-50 flex items-center gap-2 text-slate-700"
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-sky-50 flex items-center gap-2 text-slate-700"
                 >
                   {selectionMode ? (
                     <>
@@ -646,7 +641,7 @@ export default function ConversationList({
                     </>
                   ) : (
                     <>
-                      <Check className="w-4 h-4 text-emerald-600" />
+                      <Check className="w-4 h-4 text-sky-600" />
                       Select
                     </>
                   )}
@@ -657,7 +652,7 @@ export default function ConversationList({
                 <button
                   onClick={handleDeleteSelected}
                   disabled={selectedConversations.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-emerald-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-sky-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Trash2 className="w-4 h-4 text-red-600" />
                   Delete Selected ({selectedConversations.length})
@@ -666,7 +661,7 @@ export default function ConversationList({
                 <button
                   onClick={handleDeleteAll}
                   disabled={conversations.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-emerald-50 flex items-center gap-2 text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-sky-50 flex items-center gap-2 text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Trash2 className="w-4 h-4" />
                   Delete All
@@ -677,16 +672,16 @@ export default function ConversationList({
                 <button
                   onClick={handleMarkAsRead}
                   disabled={selectedConversations.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-emerald-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-sky-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Mail className="w-4 h-4 text-emerald-600" />
+                  <Mail className="w-4 h-4 text-sky-600" />
                   Mark as Read ({selectedConversations.length})
                 </button>
                 
                 <button
                   onClick={handleMarkAsUnread}
                   disabled={selectedConversations.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-emerald-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-sky-50 flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Mail className="w-4 h-4 text-blue-600" />
                   Mark as Unread ({selectedConversations.length})
@@ -704,7 +699,7 @@ export default function ConversationList({
                 type="checkbox"
                 checked={selectAll}
                 onChange={handleTopCheckboxChange}
-                className="accent-emerald-600"
+                className="accent-sky-600"
               />
               <span className="font-medium">Select All</span>
             </label>
@@ -717,10 +712,11 @@ export default function ConversationList({
         {conversations.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500 p-8">
             <div className="relative mb-4">
-              <div className="absolute inset-0 bg-emerald-200/20 rounded-full blur-xl"></div>
-              <Mail className="relative w-12 h-12 text-emerald-300" />
+              <div className="absolute inset-0 bg-sky-200/20 rounded-full blur-xl"></div>
+              <Mail className="relative w-12 h-12 text-sky-300" />
             </div>
             <p className="text-sm font-medium">No conversations found</p>
+            <p className="text-xs mt-1 text-slate-400">Emails are kept for 7 days after they arrive</p>
             {(searchEmail || Object.values(filters).some((v) => v && v !== "all" && v !== "")) && (
               <p className="text-xs mt-2 text-slate-400">Try adjusting your filters</p>
             )}
@@ -764,14 +760,14 @@ export default function ConversationList({
                     onClick={() => handleConversationSelect(conversation)}
                     onMouseEnter={() => setHoveredConversation(conversationId)}
                     onMouseLeave={() => setHoveredConversation(null)}
-                    className={`px-4 py-3 border-b border-emerald-100/50 cursor-pointer transition-all relative ${
+                    className={`px-4 py-3 border-b border-sky-100/50 cursor-pointer transition-all relative ${
                       isDeleting
                         ? "opacity-40 pointer-events-none"
                         : isFlagged
                         ? "bg-yellow-50 border-l-4 border-yellow-400"
                         : isSelected
-                        ? "bg-gradient-to-r from-emerald-50 to-teal-50 border-l-4 border-emerald-600 shadow-sm"
-                        : "hover:bg-gradient-to-r hover:from-emerald-50/50 hover:to-teal-50/50"
+                        ? "bg-gradient-to-r from-sky-50 to-teal-50 border-l-4 border-sky-600 shadow-sm"
+                        : "hover:bg-gradient-to-r hover:from-sky-50/50 hover:to-teal-50/50"
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -785,13 +781,13 @@ export default function ConversationList({
                             e.stopPropagation();
                             toggleSelectConversation(conversation);
                           }}
-                          className="mt-2 accent-emerald-600 cursor-pointer"
+                          className="mt-2 accent-sky-600 cursor-pointer"
                         />
                       )}
 
                       <div className="relative w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-full blur opacity-50"></div>
-                        <div className="relative w-10 h-10 bg-gradient-to-br from-emerald-600 to-green-600 rounded-full flex items-center justify-center shadow-md shadow-emerald-500/30">
+                        <div className="absolute inset-0 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full blur opacity-50"></div>
+                        <div className="relative w-10 h-10 bg-gradient-to-br from-sky-600 to-blue-600 rounded-full flex items-center justify-center shadow-md shadow-sky-500/30">
                           {hasMultipleParticipants ? <Users className="w-5 h-5" /> : getAvatarLetter(clientEmail)}
                         </div>
                       </div>
@@ -806,13 +802,13 @@ export default function ConversationList({
                               )}
                             </span>
                             {conversation.isCrmLead && (
-                              <span className="flex-shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 border border-emerald-200 uppercase tracking-tighter shadow-sm" title="This lead exists in your CRM">
-                                <Zap className="w-2.5 h-2.5 fill-emerald-700" />
+                              <span className="flex-shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-gradient-to-r from-sky-100 to-teal-100 text-sky-700 border border-sky-200 uppercase tracking-tighter shadow-sm" title="This lead exists in your CRM">
+                                <Zap className="w-2.5 h-2.5 fill-sky-700" />
                                 CRM
                               </span>
                             )}
                             {conversation.unreadCount > 0 && (
-                              <span className="flex-shrink-0 w-2 h-2 bg-emerald-600 rounded-full shadow-sm"></span>
+                              <span className="flex-shrink-0 w-2 h-2 bg-sky-600 rounded-full shadow-sm"></span>
                             )}
                           </div>
 
@@ -863,7 +859,7 @@ export default function ConversationList({
 
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                           {conversation.unreadCount > 0 && (
-                            <span className="text-[10px] font-bold text-emerald-700 bg-gradient-to-r from-emerald-100 to-teal-100 px-1.5 py-0.5 rounded-full uppercase border border-emerald-200 shadow-sm">
+                            <span className="text-[10px] font-bold text-sky-700 bg-gradient-to-r from-sky-100 to-teal-100 px-1.5 py-0.5 rounded-full uppercase border border-sky-200 shadow-sm">
                               {conversation.unreadCount} New
                             </span>
                           )}
@@ -893,7 +889,7 @@ export default function ConversationList({
               <button
                 onClick={handleLoadMore}
                 disabled={loadingMore}
-                className="px-4 py-2 text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors disabled:opacity-50"
               >
                 {loadingMore ? "Loading…" : "Load More"}
               </button>

@@ -172,17 +172,17 @@ const handleSave = async () => {
     /* ── Backdrop ── */
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
       {/* ── Modal Shell ── */}
-      <div className="bg-white rounded-2xl w-[90%] max-w-2xl min-h-[500px] max-h-[90vh] flex flex-col shadow-2xl border-2 border-emerald-200 overflow-hidden">
+      <div className="bg-white rounded-2xl w-[90%] max-w-2xl min-h-[500px] max-h-[90vh] flex flex-col shadow-2xl border-2 border-sky-200 overflow-hidden">
 
         {/* ── Header ── */}
-        <div className="flex items-center justify-between px-6 py-5 border-b-2 border-emerald-100 bg-gradient-to-r from-emerald-50 to-teal-50">
+        <div className="flex items-center justify-between px-6 py-5 border-b-2 border-sky-100 bg-gradient-to-r from-sky-50 to-blue-50">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-xl">
-              <Mail className="text-emerald-600" size={20} />
+            <div className="p-2 bg-gradient-to-br from-sky-100 to-blue-100 rounded-xl">
+              <Mail className="text-sky-600" size={20} />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-emerald-700">Update Recipients</h3>
-              <p className="text-xs text-emerald-500 font-medium mt-0.5">
+              <h3 className="text-xl font-bold text-sky-700">Update Recipients</h3>
+              <p className="text-xs text-sky-500 font-medium mt-0.5">
                 Showing only successfully sent emails
               </p>
             </div>
@@ -197,14 +197,14 @@ const handleSave = async () => {
 
         {/* ── Search Bar ── */}
         <div className="px-6 pt-4">
-          <div className="flex items-center gap-2 px-4 py-3 border-2 border-emerald-300 rounded-xl bg-emerald-50/60 focus-within:ring-2 focus-within:ring-emerald-400 transition-all">
-            <Search size={17} className="text-emerald-500 flex-shrink-0" />
+          <div className="flex items-center gap-2 px-4 py-3 border-2 border-sky-300 rounded-xl bg-sky-50/60 focus-within:ring-2 focus-within:ring-sky-400 transition-all">
+            <Search size={17} className="text-sky-500 flex-shrink-0" />
             <input
               type="text"
               placeholder="Search recipients by email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1 bg-transparent border-none outline-none text-sm text-slate-800 placeholder-emerald-400 font-medium"
+              className="flex-1 bg-transparent border-none outline-none text-sm text-slate-800 placeholder-sky-400 font-medium"
             />
             {searchTerm && (
               <button
@@ -249,7 +249,7 @@ const handleSave = async () => {
         {/* ── Body ── */}
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-400 py-16">
-            <Loader2 size={36} className="animate-spin text-emerald-500" />
+            <Loader2 size={36} className="animate-spin text-sky-500" />
             <p className="text-sm font-medium">Loading recipients...</p>
           </div>
         ) : recipients.length === 0 ? (
@@ -266,7 +266,7 @@ const handleSave = async () => {
         ) : (
           <div className="flex-1 overflow-y-auto px-6 pb-2 min-h-[200px] max-h-[380px]">
             {/* Select All Row */}
-            <div className="flex items-center py-3 border-b-2 border-emerald-100 bg-white sticky top-0 z-10">
+            <div className="flex items-center py-3 border-b-2 border-sky-100 bg-white sticky top-0 z-10">
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -289,10 +289,10 @@ const handleSave = async () => {
               return (
                 <div
                   key={r.id}
-                  className={`flex items-center justify-between py-3.5 px-3 border-b border-emerald-50 rounded-lg transition-all ${
+                  className={`flex items-center justify-between py-3.5 px-3 border-b border-sky-50 rounded-lg transition-all ${
                     isSelected
                       ? "bg-blue-50 border-l-4 border-l-blue-400"
-                      : "hover:bg-emerald-50/40 border-l-4 border-l-transparent"
+                      : "hover:bg-sky-50/40 border-l-4 border-l-transparent"
                   }`}
                 >
                   {/* Checkbox */}
@@ -310,9 +310,9 @@ const handleSave = async () => {
                       <span
                         className={`inline-block px-2 py-0.5 text-[10px] font-bold rounded uppercase w-fit tracking-wide ${
                           r.status === "sent"
-                            ? "bg-emerald-100 text-emerald-700"
+                            ? "bg-sky-100 text-sky-700"
                             : r.status === "completed"
-                            ? "bg-teal-100 text-teal-700"
+                            ? "bg-blue-100 text-blue-700"
                             : r.status === "failed"
                             ? "bg-red-100 text-red-700"
                             : "bg-indigo-100 text-indigo-700"
@@ -345,7 +345,7 @@ const handleSave = async () => {
         )}
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t-2 border-emerald-100 bg-gradient-to-r from-slate-50 to-emerald-50">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t-2 border-sky-100 bg-gradient-to-r from-slate-50 to-sky-50">
           <button
             onClick={onClose}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-bold transition-all"
@@ -357,7 +357,7 @@ const handleSave = async () => {
           <button
             onClick={handleSave}
             disabled={saving || recipients.length === 0}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 hover:scale-105 text-white text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:shadow-lg hover:shadow-sky-500/30 hover:scale-105 text-white text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
             {saving ? (
               <>

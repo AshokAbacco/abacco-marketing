@@ -158,7 +158,7 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
             <select
               value={jobRole}
               onChange={(e) => setJobRole(e.target.value)}
-              className="w-full p-3 border rounded-xl bg-white focus:ring-2 focus:ring-green-500"
+              className="w-full p-3 border rounded-xl bg-white focus:ring-2 focus:ring-blue-500"
               required
             >
               <option value="">Select Role</option>
@@ -179,7 +179,7 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
                 setLocationOption(e.target.value);
                 if (e.target.value !== "custom") setCustomLocation("");
               }}
-              className="w-full p-3 border rounded-xl bg-white focus:ring-2 focus:ring-green-500"
+              className="w-full p-3 border rounded-xl bg-white focus:ring-2 focus:ring-blue-500"
               required
             >
               <option value="">Select Location</option>
@@ -194,7 +194,7 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
                 placeholder="Enter location name"
                 value={customLocation}
                 onChange={(e) => setCustomLocation(e.target.value)}
-                className="w-full p-3 border rounded-xl mt-2 focus:ring-2 focus:ring-green-500"
+                className="w-full p-3 border rounded-xl mt-2 focus:ring-2 focus:ring-blue-500"
                 required
                 autoFocus
               />
@@ -212,7 +212,7 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl"
+              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl"
             >
               {editingUser ? "Update" : "Save"}
             </button>

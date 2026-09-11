@@ -18,14 +18,14 @@ const PAGE_SIZE     = 10;
 const STATUS_CONFIG = {
   sending: {
     label: "Sending",
-    dot:   "bg-emerald-500 animate-pulse",
-    badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    dot:   "bg-sky-500 animate-pulse",
+    badge: "bg-sky-50 text-sky-700 border-sky-200",
     icon:  <Radio size={10} className="inline mr-0.5" />,
   },
   active: {
     label: "Active Today",
-    dot:   "bg-teal-500",
-    badge: "bg-teal-50 text-teal-700 border-teal-200",
+    dot:   "bg-blue-500",
+    badge: "bg-blue-50 text-blue-700 border-blue-200",
     icon:  <TrendingUp size={10} className="inline mr-0.5" />,
   },
   completed: {
@@ -46,8 +46,8 @@ const STATUS_CONFIG = {
 function barColor(pct) {
   if (pct >= 100) return "bg-red-500";
   if (pct >= 75)  return "bg-amber-400";
-  if (pct >= 40)  return "bg-teal-500";
-  return "bg-emerald-500";
+  if (pct >= 40)  return "bg-blue-500";
+  return "bg-sky-500";
 }
 
 // ─── Relative time helper ─────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ function fromNow(date) {
 // ─── Summary Card ─────────────────────────────────────────────────────────────
 function SummaryCard({ iconBg, icon, label, value, sub }) {
   return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-5 flex items-center gap-4 hover:shadow-md transition-shadow">
+    <div className="rounded-2xl border border-sky-100 bg-white p-5 flex items-center gap-4 hover:shadow-md transition-shadow">
       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
         {icon}
       </div>
@@ -83,7 +83,7 @@ function ProgressBar({ pct }) {
   const clamped = Math.min(pct, 100);
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 bg-emerald-50 rounded-full overflow-hidden">
+      <div className="flex-1 h-2 bg-sky-50 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${barColor(pct)}`}
           style={{ width: `${clamped}%` }}
@@ -109,7 +109,7 @@ function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) 
   const to   = Math.min(page * pageSize, totalItems);
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-emerald-100">
+    <div className="flex items-center justify-between px-4 py-3 border-t border-sky-100">
       <p className="text-xs text-slate-400">
         Showing <span className="font-semibold text-slate-600">{from}–{to}</span> of{" "}
         <span className="font-semibold text-slate-600">{totalItems}</span> users
@@ -126,8 +126,8 @@ function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) 
               }}
               className={`w-7 h-7 rounded-lg text-xs font-semibold transition-all ${
                 p === page
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
+                  ? "bg-sky-600 text-white shadow-sm"
+                  : "text-slate-500 hover:bg-sky-50 hover:text-sky-700"
               }`}
             >
               {p}
@@ -138,7 +138,7 @@ function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) 
         <button
           onClick={() => onPrev(1)}
           disabled={page === 1}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-200 text-xs text-emerald-700 font-medium hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-sky-200 text-xs text-sky-700 font-medium hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           <ChevronLeft size={14} />
           Prev
@@ -146,7 +146,7 @@ function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) 
         <button
           onClick={() => onNext(1)}
           disabled={page === totalPages || totalPages === 0}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-200 text-xs text-emerald-700 font-medium hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-sky-200 text-xs text-sky-700 font-medium hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           Next
           <ChevronRight size={14} />
@@ -237,7 +237,7 @@ export default function AdminDailyOverview() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="animate-spin text-emerald-500" size={32} />
+        <Loader2 className="animate-spin text-sky-500" size={32} />
       </div>
     );
   }
@@ -264,7 +264,7 @@ export default function AdminDailyOverview() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <Mail size={20} className="text-emerald-600" />
+            <Mail size={20} className="text-sky-600" />
             Daily Email Usage
           </h1>
           <p className="text-xs text-slate-400 mt-1">
@@ -280,7 +280,7 @@ export default function AdminDailyOverview() {
           )}
           <button
             onClick={() => fetchData(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs text-emerald-700 font-medium hover:bg-emerald-50 active:scale-95 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sky-200 bg-white text-xs text-sky-700 font-medium hover:bg-sky-50 active:scale-95 transition-all"
           >
             <RefreshCw size={12} />
             Refresh
@@ -291,22 +291,22 @@ export default function AdminDailyOverview() {
       {/* ── Summary Cards ───────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <SummaryCard
-          iconBg="bg-emerald-100"
-          icon={<Users size={20} className="text-emerald-600" />}
+          iconBg="bg-sky-100"
+          icon={<Users size={20} className="text-sky-600" />}
           label="Total Users"
           value={data?.users?.length ?? 0}
           sub="active accounts"
         />
         <SummaryCard
-          iconBg="bg-teal-100"
-          icon={<Radio size={20} className="text-teal-600" />}
+          iconBg="bg-blue-100"
+          icon={<Radio size={20} className="text-blue-600" />}
           label="Currently Sending"
           value={sendingNow}
           sub="campaigns live now"
         />
         <SummaryCard
-          iconBg="bg-emerald-100"
-          icon={<Zap size={20} className="text-emerald-600" />}
+          iconBg="bg-sky-100"
+          icon={<Zap size={20} className="text-sky-600" />}
           label="Sent Today"
           value={totalSentToday.toLocaleString()}
           sub="across all users"
@@ -323,23 +323,23 @@ export default function AdminDailyOverview() {
       {/* ── Filter Tabs + Search ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
 
-        <div className="flex items-center gap-1 bg-white border border-emerald-100 shadow-sm p-1 rounded-xl">
+        <div className="flex items-center gap-1 bg-white border border-sky-100 shadow-sm p-1 rounded-xl">
           {FILTER_TABS.map(tab => (
             <button
               key={tab.key}
               onClick={() => setFilter(tab.key)}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 filter === tab.key
-                  ? "bg-emerald-600 shadow-sm text-white"
-                  : "text-slate-500 hover:text-emerald-700 hover:bg-emerald-50"
+                  ? "bg-sky-600 shadow-sm text-white"
+                  : "text-slate-500 hover:text-sky-700 hover:bg-sky-50"
               }`}
             >
               {tab.label}
               {tab.key !== "all" && counts[tab.key] != null && (
                 <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${
                   filter === tab.key
-                    ? "bg-emerald-500 text-white"
-                    : "bg-emerald-100 text-emerald-700"
+                    ? "bg-sky-500 text-white"
+                    : "bg-sky-100 text-sky-700"
                 }`}>
                   {counts[tab.key]}
                 </span>
@@ -349,7 +349,7 @@ export default function AdminDailyOverview() {
         </div>
 
         <div className="relative">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-sky-400" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
           </svg>
           <input
@@ -357,29 +357,29 @@ export default function AdminDailyOverview() {
             placeholder="Search name, Emp ID, email…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-8 pr-3 py-2 rounded-xl border border-emerald-200 text-xs w-64 focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white placeholder-slate-400 text-slate-700"
+            className="pl-8 pr-3 py-2 rounded-xl border border-sky-200 text-xs w-64 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white placeholder-slate-400 text-slate-700"
           />
         </div>
       </div>
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-sky-100 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-emerald-100" style={{ background: "#f0fdf4" }}>
-              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+            <tr className="border-b border-sky-100" style={{ background: "#f0fdf4" }}>
+              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-sky-700 uppercase tracking-wider">
                 User
               </th>
-              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-sky-700 uppercase tracking-wider">
                 Status
               </th>
-              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-emerald-700 uppercase tracking-wider hidden md:table-cell">
+              <th className="px-5 py-3.5 text-left text-[11px] font-bold text-sky-700 uppercase tracking-wider hidden md:table-cell">
                 Progress
               </th>
-              <th className="px-5 py-3.5 text-right text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+              <th className="px-5 py-3.5 text-right text-[11px] font-bold text-sky-700 uppercase tracking-wider">
                 Sent
               </th>
-              <th className="px-5 py-3.5 text-right text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+              <th className="px-5 py-3.5 text-right text-[11px] font-bold text-sky-700 uppercase tracking-wider">
                 Remaining
               </th>
             </tr>
@@ -399,7 +399,7 @@ export default function AdminDailyOverview() {
                 return (
                   <tr
                     key={u.userId}
-                    className="border-b border-emerald-50 last:border-0 hover:bg-emerald-50/50 transition-colors"
+                    className="border-b border-sky-50 last:border-0 hover:bg-sky-50/50 transition-colors"
                   >
                     {/* User */}
                     <td className="px-5 py-3.5">
@@ -432,7 +432,7 @@ export default function AdminDailyOverview() {
                     {/* Remaining */}
                     <td className="px-5 py-3.5 text-right">
                       <span className={`font-semibold text-[15px] ${
-                        (u.remaining || 0) <= 500 ? "text-red-500" : "text-emerald-600"
+                        (u.remaining || 0) <= 500 ? "text-red-500" : "text-sky-600"
                       }`}>
                         {(u.remaining || 0).toLocaleString()}
                       </span>

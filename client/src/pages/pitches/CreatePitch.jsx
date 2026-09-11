@@ -275,8 +275,8 @@ export default function CreatePitch({ pitch, onSaved }) {
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
-      <div className="bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 rounded-2xl p-6 border border-emerald-200 dark:border-emerald-800">
-        <h1 className="text-2xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent">
+      <div className="bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 rounded-2xl p-6 border border-sky-200 dark:border-sky-800">
+        <h1 className="text-2xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent">
           {pitch ? "Edit Pitch" : "Create Pitch"}
         </h1>
         <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Design reusable email pitch templates</p>
@@ -284,34 +284,34 @@ export default function CreatePitch({ pitch, onSaved }) {
 
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 space-y-5">
-          <div className="bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 rounded-xl p-5 shadow-lg">
+          <div className="bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-800 rounded-xl p-5 shadow-lg">
             <label className="text-sm font-medium block mb-2 text-slate-700 dark:text-slate-300">Pitch Name</label>
             <input
               value={pitchName}
               onChange={(e) => setPitchName(e.target.value)}
               placeholder="Cold Outreach pitch"
-              className="w-full border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-4 py-3 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+              className="w-full border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-4 py-3 rounded-lg outline-none focus:ring-2 focus:ring-sky-500 transition-all"
             />
           </div>
 
-          <div className="bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 rounded-xl p-5 shadow-lg">
+          <div className="bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-800 rounded-xl p-5 shadow-lg">
             <label className="text-sm font-medium block mb-2 text-slate-700 dark:text-slate-300">Pitch Type</label>
             <select
               value={pitchType}
               onChange={(e) => setPitchType(e.target.value)}
-              className="w-full border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-4 py-3 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+              className="w-full border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-4 py-3 rounded-lg outline-none focus:ring-2 focus:ring-sky-500 transition-all"
             >
               <option value="fresh">Fresh Mail (Pitch)</option>
               <option value="followup">Follow Up (Pitch)</option>
             </select>
           </div>
 
-          <div className="bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 rounded-xl overflow-hidden shadow-lg">
-            <div className="bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 border-b border-emerald-200 dark:border-emerald-800 p-3 flex flex-wrap gap-2 items-center">
+          <div className="bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-800 rounded-xl overflow-hidden shadow-lg">
+            <div className="bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 border-b border-sky-200 dark:border-sky-800 p-3 flex flex-wrap gap-2 items-center">
               <select
                 value={currentFont}
                 onChange={(e) => applyFontFamily(e.target.value)}
-                className="border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-xs px-3 py-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                className="border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-xs px-3 py-2 rounded-lg focus:ring-2 focus:ring-sky-500 outline-none"
               >
                 {FONT_FAMILIES.map(f => (
                   <option key={f.value} value={f.value}>{f.label}</option>
@@ -321,7 +321,7 @@ export default function CreatePitch({ pitch, onSaved }) {
               <select
                 value={currentSize}
                 onChange={(e) => applyFontSize(e.target.value)}
-                className="border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-xs px-3 py-2 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                className="border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-xs px-3 py-2 rounded-lg focus:ring-2 focus:ring-sky-500 outline-none"
               >
                 {FONT_SIZES.map(s => (
                   <option key={s.value} value={s.value}>{s.label}px</option>
@@ -359,7 +359,7 @@ export default function CreatePitch({ pitch, onSaved }) {
               <div className="relative">
                 <button 
                   onClick={() => setShowColors(!showColors)} 
-                  className="p-2 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg transition-all"
+                  className="p-2 hover:bg-sky-100 dark:hover:bg-sky-900/30 text-sky-700 dark:text-sky-400 rounded-lg transition-all"
                   title="Text Color"
                 >
                   <Type size={18} />
@@ -368,12 +368,12 @@ export default function CreatePitch({ pitch, onSaved }) {
                 {showColors && (
                   <div
                       className="absolute right-0 mt-2 bg-white dark:bg-slate-800 
-                                    border border-emerald-200 dark:border-emerald-700 
+                                    border border-sky-200 dark:border-sky-700 
                                     p-3 rounded-xl z-50 shadow-xl"
                           style={{ width: "280px" }}
                     >
                     {COLOR_FAMILIES.map((family, familyIndex) => (
-                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-700" : ""}>
+                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-sky-200 dark:border-sky-700" : ""}>
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">{family.name}</div>
                         <div className="grid grid-cols-8 gap-1">
                           {family.colors.map((color, colorIndex) => (
@@ -399,16 +399,16 @@ export default function CreatePitch({ pitch, onSaved }) {
               <div className="relative">
                 <button
                   onClick={() => setShowBgColors(!showBgColors)}
-                  className="p-2 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 rounded-lg transition-all"
+                  className="p-2 hover:bg-sky-100 dark:hover:bg-sky-900/30 rounded-lg transition-all"
                   title="Text Background Color"
                 >
                   <span className="text-sm font-bold px-2 py-1 bg-yellow-300 text-slate-900 rounded">A</span>
                 </button>
 
                 {showBgColors && (
-                  <div className="absolute right-0 bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-700 p-3 rounded-xl z-50 shadow-xl" style={{ width: "280px" }}>
+                  <div className="absolute right-0 bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-700 p-3 rounded-xl z-50 shadow-xl" style={{ width: "280px" }}>
                     {COLOR_FAMILIES.map((family, familyIndex) => (
-                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-700" : ""}>
+                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-sky-200 dark:border-sky-700" : ""}>
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">{family.name}</div>
                         <div className="grid grid-cols-8 gap-1">
                           {family.colors.map((color, colorIndex) => (
@@ -443,17 +443,17 @@ export default function CreatePitch({ pitch, onSaved }) {
               }}
             />
 
-            <div className="border-t border-emerald-200 dark:border-emerald-800 bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 p-4 gap-3 flex justify-end">
+            <div className="border-t border-sky-200 dark:border-sky-800 bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 p-4 gap-3 flex justify-end">
               <button
                 onClick={() => setShowPreview(!showPreview)}
-                className="flex items-center gap-2 px-5 py-2.5 bg-white dark:bg-slate-700 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-all shadow-md hover:shadow-lg"
+                className="flex items-center gap-2 px-5 py-2.5 bg-white dark:bg-slate-700 hover:bg-sky-50 dark:hover:bg-sky-900/30 border border-sky-200 dark:border-sky-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-all shadow-md hover:shadow-lg"
               >
                 <Eye size={18} />
                 {showPreview ? "Hide Preview" : "Show Preview"}
               </button>
               <button
                 onClick={handleSave}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-sky-500/30 hover:shadow-xl hover:shadow-sky-500/40"
               >
                 <Save size={18} />
                 Save Template
@@ -462,13 +462,13 @@ export default function CreatePitch({ pitch, onSaved }) {
           </div>
 
           {showPreview && (
-            <div className="bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 rounded-xl p-6 shadow-lg">
+            <div className="bg-white dark:bg-slate-800 border border-sky-200 dark:border-sky-800 rounded-xl p-6 shadow-lg">
               <h3 className="text-sm font-semibold mb-4 text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                <Eye size={18} className="text-emerald-600 dark:text-emerald-400" />
+                <Eye size={18} className="text-sky-600 dark:text-sky-400" />
                 Preview
               </h3>
               <div
-                className="border border-emerald-200 dark:border-emerald-700 p-6 rounded-lg bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/10 dark:to-green-900/10"
+                className="border border-sky-200 dark:border-sky-700 p-6 rounded-lg bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-900/10 dark:to-blue-900/10"
                 dangerouslySetInnerHTML={{ __html: editorRef.current?.innerHTML || "" }}
               />
             </div>
@@ -482,10 +482,10 @@ export default function CreatePitch({ pitch, onSaved }) {
 const Btn = ({ icon, onClick }) => (
   <button 
     onClick={onClick} 
-    className="p-2 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-slate-700 dark:text-slate-300 rounded-lg transition-all"
+    className="p-2 hover:bg-sky-100 dark:hover:bg-sky-900/30 text-slate-700 dark:text-slate-300 rounded-lg transition-all"
   >
     {icon}
   </button>
 );
 
-const Divider = () => <div className="w-px h-6 bg-emerald-200 dark:bg-emerald-700 mx-1" />;
+const Divider = () => <div className="w-px h-6 bg-sky-200 dark:bg-sky-700 mx-1" />;

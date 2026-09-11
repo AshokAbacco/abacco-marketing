@@ -76,10 +76,10 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-emerald-600 to-green-600 px-6 py-4 flex items-center justify-between">
+        <div className="bg-gradient-to-r from-sky-600 to-blue-600 px-6 py-4 flex items-center justify-between">
           <div>
             <h2 className="text-white font-bold text-lg">Choose a Group</h2>
-            <p className="text-emerald-100 text-sm mt-0.5">
+            <p className="text-sky-100 text-sm mt-0.5">
               Organise your email account into a group
             </p>
           </div>
@@ -102,8 +102,8 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
                     onClick={() => handleSelectExisting(group)}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 transition-all ${
                       selectedGroupId === group.id && !isCreating
-                        ? "border-emerald-500 bg-emerald-50"
-                        : "border-slate-100 hover:border-emerald-200 hover:bg-slate-50"
+                        ? "border-sky-500 bg-sky-50"
+                        : "border-slate-100 hover:border-sky-200 hover:bg-slate-50"
                     }`}
                   >
                     <div
@@ -116,7 +116,7 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
                       {group.name}
                     </span>
                     {selectedGroupId === group.id && !isCreating && (
-                      <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <Check className="w-4 h-4 text-sky-600 flex-shrink-0" />
                     )}
                   </button>
                 ))}
@@ -124,7 +124,7 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
 
               <button
                 onClick={() => { setIsCreating(true); setSelectedGroupId(null); }}
-                className="mt-3 w-full flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-dashed border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-all text-sm text-slate-500 hover:text-emerald-600"
+                className="mt-3 w-full flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-dashed border-slate-200 hover:border-sky-300 hover:bg-sky-50 transition-all text-sm text-slate-500 hover:text-sky-600"
               >
                 <Plus className="w-4 h-4" />
                 Create new group instead
@@ -151,7 +151,7 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
                     value={newGroupName}
                     onChange={(e) => { setNewGroupName(e.target.value); setError(""); }}
                     onKeyDown={(e) => e.key === "Enter" && handleCreateAndProceed()}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
                   />
                 </div>
 
@@ -194,7 +194,7 @@ export default function GroupSelectModal({ groups = [], onConfirm, onClose, onGr
           <button
             disabled={saving || (isCreating ? !newGroupName.trim() : !selectedGroupId)}
             onClick={isCreating ? handleCreateAndProceed : handleSelectAndProceed}
-            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white rounded-xl text-sm font-bold transition-all shadow-sm hover:shadow-lg shadow-emerald-500/30 disabled:opacity-50"
+            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-sm hover:shadow-lg shadow-sky-500/30 disabled:opacity-50"
           >
             {saving ? "Creating…" : isCreating ? "Create & Continue" : "Continue →"}
           </button>

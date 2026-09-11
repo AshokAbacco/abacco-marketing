@@ -11,6 +11,7 @@ import {
   getLockedAccounts,
   deleteCampaign,
   getCampaignsForFollowup,
+  getFollowupPreview,
   getSingleCampaign,
   stopCampaign,
   resendCampaign,
@@ -47,6 +48,10 @@ router.post("/followup", protect, createFollowupCampaign);
 // 🔥 IMPORTANT: Specific parameterized routes (:id/view, :id/progress) come before generic :id routes
 router.get("/:id/view", protect, getSingleCampaign);
 router.get("/:id/progress", protect, getCampaignProgress);
+
+// One-shot payload for the Follow-up "Email Preview" panel (count + a
+// 3-row sample + the previous message body) — see campaigns.controller.js
+router.get("/:id/followup-preview", protect, getFollowupPreview);
 
 // Full address list (unpaginated, scalar columns only) — used to build
 // follow-ups and the copy-to-clipboard lists.

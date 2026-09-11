@@ -32,7 +32,7 @@ export default function SendReceiveModal({ progress, onClose }) {
             </>
           ) : (
             <>
-              <CheckCircle className="text-green-500 w-4 h-4" />
+              <CheckCircle className="text-blue-500 w-4 h-4" />
               Sync completed
             </>
           )}

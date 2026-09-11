@@ -1,3 +1,4 @@
+//  src/pages/dashboard/Dashboard.jsx
 import { useEffect, useState } from "react";
 import { api } from "../utils/api";
 import PageHeader from "../../components/layout/PageHeader";
@@ -303,7 +304,7 @@ const upcomingFollowups = campaigns
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin text-green-600 mx-auto mb-4" />
+          <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
           <p className="text-slate-600 dark:text-slate-400">
             Loading dashboard...
           </p>
@@ -353,7 +354,7 @@ const upcomingFollowups = campaigns
         {/* Campaign Performance */}
         <div className="xl:col-span-2 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl p-6 shadow-sm hover:shadow-md transition">
           <h3 className="font-semibold text-lg mb-6 dark:text-white flex items-center gap-2">
-            <Target className="w-5 h-5 text-green-600" />
+            <Target className="w-5 h-5 text-blue-600" />
             Recent Campaign Performance
           </h3>
 
@@ -381,7 +382,7 @@ const upcomingFollowups = campaigns
         {/* Recent Activity */}
         <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl p-6 shadow-sm hover:shadow-md transition">
           <h3 className="font-semibold text-lg mb-6 dark:text-white flex items-center gap-2">
-            <Inbox className="w-5 h-5 text-green-600" />
+            <Inbox className="w-5 h-5 text-blue-600" />
             Scheduled Campaigns
           </h3>
 
@@ -409,7 +410,7 @@ const upcomingFollowups = campaigns
         {/* Top Campaigns by Recipients */}
         <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl p-6 shadow-sm hover:shadow-md transition">
           <h3 className="font-semibold text-lg mb-6 dark:text-white flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-green-600" />
+            <TrendingUp className="w-5 h-5 text-blue-600" />
             Top Campaigns by Recipients
           </h3>
 
@@ -434,12 +435,12 @@ const upcomingFollowups = campaigns
         {/* Upcoming Follow-ups */}
         <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-2xl p-6 shadow-sm hover:shadow-md transition">
           <h3 className="font-semibold text-lg mb-6 dark:text-white flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-green-600" />
+            <Calendar className="w-5 h-5 text-blue-600" />
             Upcoming Follow-ups
           </h3>
 
           {/* ✅ Scrollable Follow-up List */}
-          <div className="space-y-4 min-h-[250px] max-h-[350px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-green-500 scrollbar-track-slate-200 dark:scrollbar-track-slate-800">
+          <div className="space-y-4 min-h-[250px] max-h-[350px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-blue-500 scrollbar-track-slate-200 dark:scrollbar-track-slate-800">
             {dashboardData.upcomingFollowups.length > 0 ? (
               dashboardData.upcomingFollowups.map((followup, index) => (
                 <FollowUpItem
@@ -493,10 +494,10 @@ function StatCard({ title, value, icon, trend }) {
         <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
           {title}
         </p>
-        <div className="text-green-600 dark:text-green-400">{icon}</div>
+        <div className="text-blue-600 dark:text-blue-400">{icon}</div>
       </div>
       <h2 className="text-3xl font-bold dark:text-white mb-1">{value}</h2>
-      <p className="text-xs text-green-600 dark:text-green-500 font-medium">
+      <p className="text-xs text-blue-600 dark:text-blue-500 font-medium">
         {trend}
       </p>
     </div>
@@ -514,7 +515,7 @@ function ProgressRow({ label, value }) {
       </div>
       <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-2.5">
         <div
-          className="bg-gradient-to-r from-green-600 to-emerald-500 h-2.5 rounded-full transition-all"
+          className="bg-gradient-to-r from-blue-600 to-sky-500 h-2.5 rounded-full transition-all"
           style={{ width: `${value}%` }}
         />
       </div>
@@ -526,7 +527,7 @@ function ActivityItem({ icon, text, time, alert }) {
   return (
     <li className="flex items-start gap-3 group">
       <div
-        className={`mt-0.5 ${alert ? "text-red-500" : "text-green-600 dark:text-green-400"}`}
+        className={`mt-0.5 ${alert ? "text-red-500" : "text-blue-600 dark:text-blue-400"}`}
       >
         {icon}
       </div>
@@ -550,7 +551,7 @@ function LeadRow({ name, company, score }) {
       <div className="flex items-center gap-2">
         <div className="w-16 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
           <div
-            className="h-full bg-green-600 rounded-full"
+            className="h-full bg-blue-600 rounded-full"
             style={{ width: `${score}%` }}
           />
         </div>
@@ -592,11 +593,11 @@ function NavButton({ title, description, icon, href }) {
   return (
     <a
       href={href}
-      className="group bg-gradient-to-br from-green-50 to-emerald-50 dark:from-slate-800 dark:to-slate-900 border border-green-100 dark:border-slate-700 rounded-2xl p-6 hover:shadow-lg hover:scale-105 transition-all duration-200"
+      className="group bg-gradient-to-br from-blue-50 to-sky-50 dark:from-slate-800 dark:to-slate-900 border border-blue-100 dark:border-slate-700 rounded-2xl p-6 hover:shadow-lg hover:scale-105 transition-all duration-200"
     >
       <div className="flex items-center justify-between mb-3">
-        <div className="text-green-600 dark:text-green-400">{icon}</div>
-        <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-green-600 dark:group-hover:text-green-400 group-hover:translate-x-1 transition-all" />
+        <div className="text-blue-600 dark:text-blue-400">{icon}</div>
+        <ArrowRight className="w-5 h-5 text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 group-hover:translate-x-1 transition-all" />
       </div>
       <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
         {title}

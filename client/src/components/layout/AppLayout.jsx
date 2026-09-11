@@ -2,7 +2,7 @@ import TopNavbar from "./Sidebar";
 
 export default function AppLayout({ children }) {
   return (
-    <div className="min-h-screen bg-green-50 dark:bg-slate-950">
+    <div className="min-h-screen bg-blue-50 dark:bg-slate-950">
 
       {/* Top Navigation Bar */}
       <TopNavbar />

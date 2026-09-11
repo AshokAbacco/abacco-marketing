@@ -1,5 +1,5 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+import prisma from "../../prismaClient.js"; // shared pool (see prismaClient.js)
 import nodemailer from "nodemailer";
 import dns from "dns/promises";
 import { protect } from "../../middlewares/authMiddleware.js";
@@ -12,7 +12,10 @@ import {
 } from "../../services/accountDeletionWorker.js";
 
 const router = express.Router();
-const prisma = new PrismaClient();
+// NOTE: this file used to call `new PrismaClient()`, which opened a SECOND
+// connection pool in the API process (and a third via the other route file),
+// on top of the sized pool in prismaClient.js. Extra pools compete for the
+// database's max_connections and made account/inbox requests queue.
 
 // Background delete tuning — kept in one place so the ETA shown to the
 // user (on delete) and the ETA recalculated by the worker (during delete)
@@ -413,7 +416,10 @@ router.post("/", protect, async (req, res) => {
     });
 
     // ✅ VERY IMPORTANT — CLEAR CACHE
-    cache.del(`accounts:${req.user.id}`);
+    // (the old `cache.del(\`accounts:${id}\`)` never matched the real keys
+    // `accounts:{id}:all` / `accounts:{id}:group:{gid}`, so a new account
+    // could stay invisible for up to 60 s)
+    clearAccountsCache(req.user.id);
 
     // Trigger initial sync in background
     runSyncForAccount(prisma, email)

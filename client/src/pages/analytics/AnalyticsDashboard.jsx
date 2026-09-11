@@ -233,25 +233,25 @@ const fetchTodayReport = async () => {
  
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-12 h-12 text-emerald-600 animate-spin" />
-          <p className="text-emerald-600 font-semibold text-lg">Loading Analytics...</p>
+          <Loader2 className="w-12 h-12 text-sky-600 animate-spin" />
+          <p className="text-sky-600 font-semibold text-lg">Loading Analytics...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-6">
       <div className="max-w-9xl mx-auto space-y-6">
         
         {/* Header */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 border border-emerald-100 dark:border-emerald-900">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 border border-sky-100 dark:border-sky-900">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent flex items-center gap-3">
-                <BarChart3 className="w-8 h-8 text-emerald-600" />
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent flex items-center gap-3">
+                <BarChart3 className="w-8 h-8 text-sky-600" />
                 Analytics Dashboard
               </h1>
               <p className="text-slate-600 dark:text-slate-400 mt-2">
@@ -266,7 +266,7 @@ const fetchTodayReport = async () => {
                 <select
                   value={dateRange}
                   onChange={(e) => setDateRange(e.target.value)}
-                  className="pl-10 pr-8 py-3 rounded-xl border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all duration-200 appearance-none cursor-pointer min-w-[180px] font-medium"
+                  className="pl-10 pr-8 py-3 rounded-xl border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition-all duration-200 appearance-none cursor-pointer min-w-[180px] font-medium"
                 >
                   <option value="all">All Time</option>
                   <option value="today">Today</option>
@@ -281,7 +281,7 @@ const fetchTodayReport = async () => {
                   type="date"
                   value={customDate}
                   onChange={(e) => setCustomDate(e.target.value)}
-                  className="px-4 py-3 rounded-xl border border-emerald-200 dark:border-emerald-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all duration-200"
+                  className="px-4 py-3 rounded-xl border border-sky-200 dark:border-sky-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition-all duration-200"
                 />
               )}
             </div>
@@ -342,9 +342,9 @@ const fetchTodayReport = async () => {
         {/* Secondary Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Email Accounts Card */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-emerald-100 dark:border-emerald-900">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-sky-100 dark:border-sky-900">
             <div className="flex items-center gap-3 mb-6">
-              <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-lg">
+              <div className="p-3 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-lg">
                 <Mail className="w-6 h-6" />
               </div>
               <div>
@@ -354,14 +354,14 @@ const fetchTodayReport = async () => {
             </div>
             
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-4 bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 rounded-xl border border-emerald-100 dark:border-emerald-900">
+              <div className="flex items-center justify-between p-4 bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 rounded-xl border border-sky-100 dark:border-sky-900">
                 <span className="text-slate-700 dark:text-slate-300 font-medium">Total Accounts</span>
-                <span className="text-2xl font-bold text-emerald-600">{stats.accounts.total}</span>
+                <span className="text-2xl font-bold text-sky-600">{stats.accounts.total}</span>
               </div>
               
-              {/* <div className="flex items-center justify-between p-4 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 rounded-xl border border-teal-100 dark:border-teal-900">
+              {/* <div className="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl border border-blue-100 dark:border-blue-900">
                 <span className="text-slate-700 dark:text-slate-300 font-medium">Unique Domains</span>
-                <span className="text-2xl font-bold text-teal-600">{stats.accounts.totalDomains}</span>
+                <span className="text-2xl font-bold text-blue-600">{stats.accounts.totalDomains}</span>
               </div>  */}
             </div>
 
@@ -375,7 +375,7 @@ const fetchTodayReport = async () => {
                       className="w-full flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-all duration-200 border border-slate-200 dark:border-slate-600"
                     >
                       <span className="font-medium text-slate-900 dark:text-white capitalize">{domain.domain}</span>
-                      <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-full text-sm font-semibold">
+                      <span className="px-3 py-1 bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-400 rounded-full text-sm font-semibold">
                         {domain.count} {domain.count === 1 ? 'account' : 'accounts'}
                       </span>
                     </button>
@@ -399,9 +399,9 @@ const fetchTodayReport = async () => {
           </div>
 
           {/* Live Performance Overview */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-emerald-100 dark:border-emerald-900">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-sky-100 dark:border-sky-900">
             <div className="flex items-center gap-3 mb-6">
-              <div className="p-3 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg">
+              <div className="p-3 rounded-xl bg-gradient-to-br from-blue-500 to-sky-600 text-white shadow-lg">
                 <Activity className="w-6 h-6" />
               </div>
               <div>
@@ -419,10 +419,10 @@ const fetchTodayReport = async () => {
         </div>
 
         {/* Activity Chart */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-emerald-100 dark:border-emerald-900">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-sky-100 dark:border-sky-900">
           <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
             <div className="flex items-center gap-3">
-              <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-lg">
+              <div className="p-3 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-lg">
                 <TrendingUp className="w-6 h-6" />
               </div>
               <div>
@@ -438,7 +438,7 @@ const fetchTodayReport = async () => {
                   onClick={() => setChartFilter(type)}
                   className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${
                     chartFilter === type 
-                      ? "bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-emerald-500/30"
+                      ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-lg shadow-sky-500/30"
                       : "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600"
                   }`}
                 >
@@ -461,7 +461,7 @@ const fetchTodayReport = async () => {
                       {(chartFilter === "all" || chartFilter === "campaigns") && (
                         <div className="relative group">
                           <div
-                            className="w-10 bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-lg shadow-lg hover:shadow-emerald-500/50 transition-all duration-200"
+                            className="w-10 bg-gradient-to-t from-sky-600 to-sky-400 rounded-t-lg shadow-lg hover:shadow-sky-500/50 transition-all duration-200"
                             style={{ height: `${campaignHeight}px` }}
                           />
                           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 hidden group-hover:block bg-slate-900 text-white px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap shadow-xl z-10">
@@ -473,7 +473,7 @@ const fetchTodayReport = async () => {
                       {(chartFilter === "all" || chartFilter === "leads") && (
                         <div className="relative group">
                           <div
-                            className="w-10 bg-gradient-to-t from-green-600 to-green-400 rounded-t-lg shadow-lg hover:shadow-green-500/50 transition-all duration-200"
+                            className="w-10 bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-lg shadow-lg hover:shadow-blue-500/50 transition-all duration-200"
                             style={{ height: `${leadHeight}px` }}
                           />
                           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 hidden group-hover:block bg-slate-900 text-white px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap shadow-xl z-10">
@@ -489,22 +489,22 @@ const fetchTodayReport = async () => {
             </div>
           </div>
           
-          <div className="flex justify-center gap-8 mt-6 pt-4 border-t border-emerald-100 dark:border-emerald-900">
+          <div className="flex justify-center gap-8 mt-6 pt-4 border-t border-sky-100 dark:border-sky-900">
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded shadow"></div>
+              <div className="w-4 h-4 bg-gradient-to-br from-sky-500 to-sky-600 rounded shadow"></div>
               <span className="text-slate-700 dark:text-slate-300 font-semibold">Campaigns</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-gradient-to-br from-green-500 to-green-600 rounded shadow"></div>
+              <div className="w-4 h-4 bg-gradient-to-br from-blue-500 to-blue-600 rounded shadow"></div>
               <span className="text-slate-700 dark:text-slate-300 font-semibold">Leads</span>
             </div>
           </div>
         </div>
 
         {/* Today Campaign Report */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-emerald-100 dark:border-emerald-900">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-sky-100 dark:border-sky-900">
           <div className="flex items-center gap-3 mb-6">
-            <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-lg">
+            <div className="p-3 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-lg">
               <FileText className="w-7 h-7" />
             </div>
             <div>
@@ -518,27 +518,27 @@ const fetchTodayReport = async () => {
             <SummaryCard 
               title="Email Accounts Used" 
               value={todayReport.totalAccounts}
-              gradient="from-emerald-500 to-green-600"
+              gradient="from-sky-500 to-blue-600"
               icon={<Mail className="w-5 h-5" />}
             />
             <SummaryCard 
               title="Emails Sent Today" 
               value={todayReport.totalSent}
-              gradient="from-teal-500 to-cyan-600"
+              gradient="from-blue-500 to-cyan-600"
               icon={<Send className="w-5 h-5" />}
             />
             <SummaryCard 
               title="Leads Generated Today" 
               value={todayReport.totalLeads}
-              gradient="from-green-500 to-emerald-600"
+              gradient="from-blue-500 to-sky-600"
               icon={<Target className="w-5 h-5" />}
             />
           </div>
 
           {/* Table */}
-          <div className="overflow-x-auto rounded-xl border border-emerald-100 dark:border-emerald-900">
+          <div className="overflow-x-auto rounded-xl border border-sky-100 dark:border-sky-900">
             <table className="w-full">
-              <thead className="bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20">
+              <thead className="bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20">
                 <tr>
                   <th className="px-6 py-4 text-left text-sm font-bold text-slate-900 dark:text-white">Email Account</th>
                   <th className="px-6 py-4 text-left text-sm font-bold text-slate-900 dark:text-white">Domain</th>
@@ -549,16 +549,16 @@ const fetchTodayReport = async () => {
 
               <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                 {todayReport.rows.map((r, idx) => (
-                  <tr key={r.email} className="hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10 transition-colors">
+                  <tr key={r.email} className="hover:bg-sky-50/50 dark:hover:bg-sky-900/10 transition-colors">
                     <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">{r.email}</td>
                     <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{r.domain}</td>
                     <td className="px-6 py-4 text-center">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400 font-bold text-sm">
+                      <span className="inline-flex items-center px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-bold text-sm">
                         {r.sent}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-bold text-sm">
+                      <span className="inline-flex items-center px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-bold text-sm">
                         {r.leads}
                       </span>
                     </td>
@@ -566,17 +566,17 @@ const fetchTodayReport = async () => {
                 ))}
 
                 {/* TOTAL */}
-                <tr className="bg-gradient-to-r from-emerald-100 to-green-100 dark:from-emerald-900/30 dark:to-green-900/30 font-bold">
+                <tr className="bg-gradient-to-r from-sky-100 to-blue-100 dark:from-sky-900/30 dark:to-blue-900/30 font-bold">
                   <td colSpan="2" className="px-6 py-4 text-slate-900 dark:text-white text-lg">
                     TOTAL
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-teal-600 text-white font-bold text-base shadow-lg">
+                    <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-blue-600 text-white font-bold text-base shadow-lg">
                       {todayReport.totalSent}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-green-600 text-white font-bold text-base shadow-lg">
+                    <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-blue-600 text-white font-bold text-base shadow-lg">
                       {todayReport.totalLeads}
                     </span>
                   </td>
@@ -593,32 +593,32 @@ const fetchTodayReport = async () => {
 
 const StatCard = ({ title, value, icon, color, details }) => {
   const colorClasses = {
-    emerald: 'from-emerald-500 to-green-600',
-    teal: 'from-teal-500 to-cyan-600',
-    green: 'from-green-500 to-emerald-600',
+    emerald: 'from-sky-500 to-blue-600',
+    teal: 'from-blue-500 to-cyan-600',
+    green: 'from-blue-500 to-sky-600',
     amber: 'from-amber-500 to-orange-600'
   };
 
   const bgClasses = {
-    emerald: 'from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20',
-    teal: 'from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20',
-    green: 'from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20',
+    emerald: 'from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20',
+    teal: 'from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20',
+    green: 'from-blue-50 to-sky-50 dark:from-blue-900/20 dark:to-sky-900/20',
     amber: 'from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20'
   };
 
   return (
-    <div className={`group relative bg-gradient-to-br ${bgClasses[color]} p-6 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 border border-emerald-100 dark:border-emerald-900`}>
+    <div className={`group relative bg-gradient-to-br ${bgClasses[color]} p-6 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 border border-sky-100 dark:border-sky-900`}>
       <div className="relative">
         <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${colorClasses[color]} flex items-center justify-center text-white mb-4 shadow-lg group-hover:scale-110 group-hover:rotate-6 transition-all duration-300`}>
           {icon}
         </div>
         <h3 className="text-slate-600 dark:text-slate-400 font-semibold text-sm mb-2">{title}</h3>
         <div className="text-4xl font-bold text-slate-900 dark:text-white mb-4 group-hover:scale-105 transition-transform duration-300">{value}</div>
-        <div className="space-y-2 border-t border-emerald-200 dark:border-emerald-800 pt-3">
+        <div className="space-y-2 border-t border-sky-200 dark:border-sky-800 pt-3">
           {details.map((detail, idx) => (
             <div key={idx} className="flex items-center justify-between text-slate-700 dark:text-slate-300">
               <div className="flex items-center gap-2">
-                <span className="text-emerald-600 dark:text-emerald-400">{detail.icon}</span>
+                <span className="text-sky-600 dark:text-sky-400">{detail.icon}</span>
                 <span className="text-sm font-medium">{detail.label}</span>
               </div>
               <span className="font-bold text-slate-900 dark:text-white">{detail.value}</span>
@@ -632,12 +632,12 @@ const StatCard = ({ title, value, icon, color, details }) => {
 };
 
 const QuickStat = ({ label, value, icon }) => (
-  <div className="flex items-center justify-between p-4 bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/20 dark:to-green-900/20 rounded-xl border border-emerald-100 dark:border-emerald-900 hover:shadow-md transition-all duration-200 group">
+  <div className="flex items-center justify-between p-4 bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-900/20 dark:to-blue-900/20 rounded-xl border border-sky-100 dark:border-sky-900 hover:shadow-md transition-all duration-200 group">
     <div className="flex items-center gap-3">
-      <div className="text-emerald-600 dark:text-emerald-400 group-hover:scale-110 transition-transform duration-200">{icon}</div>
+      <div className="text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform duration-200">{icon}</div>
       <span className="text-slate-700 dark:text-slate-300 font-semibold">{label}</span>
     </div>
-    <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{value}</span>
+    <span className="text-2xl font-bold text-sky-600 dark:text-sky-400">{value}</span>
   </div>
 );
 

@@ -123,18 +123,18 @@ function FromMailsTab({ campaign }) {
       <div className="border border-gray-200 rounded-xl overflow-hidden">
 
         {/* ── Header ── */}
-        <div className="flex items-center justify-between px-5 py-3 bg-emerald-50 border-b border-gray-200">
+        <div className="flex items-center justify-between px-5 py-3 bg-sky-50 border-b border-gray-200">
           <div className="flex items-center gap-2">
-            <Mail className="text-emerald-600" size={15} />
-            <span className="text-sm font-bold text-emerald-800">From Mails</span>
-            <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-full">
+            <Mail className="text-sky-600" size={15} />
+            <span className="text-sm font-bold text-sky-800">From Mails</span>
+            <span className="bg-sky-100 text-sky-700 text-xs font-bold px-2 py-0.5 rounded-full">
               {fromEmailsList.length}
             </span>
           </div>
           {fromEmailsList.length > 0 && (
             <button
               onClick={copyAll}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-medium transition-colors"
             >
               {copiedItem === 'all-from' ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy All</>}
             </button>
@@ -174,7 +174,7 @@ function FromMailsTab({ campaign }) {
                     ) : (
                       <>
                         {/* Avatar */}
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-sky-400 to-blue-500 flex items-center justify-center flex-shrink-0 shadow-sm">
                           <span className="text-white text-xs font-bold">
                             {email.charAt(0).toUpperCase()}
                           </span>
@@ -188,10 +188,10 @@ function FromMailsTab({ campaign }) {
                         {/* Copy button */}
                         <button
                           onClick={() => copyText(email, `from-${i}`)}
-                          className="flex-shrink-0 p-1.5 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          className="flex-shrink-0 p-1.5 text-gray-300 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
                         >
                           {copiedItem === `from-${i}` ? (
-                            <Check size={13} className="text-emerald-600" />
+                            <Check size={13} className="text-sky-600" />
                           ) : (
                             <Copy size={13} />
                           )}
@@ -228,7 +228,7 @@ function FromMailsTab({ campaign }) {
                   key={pi}
                   onClick={() => setPage(pi)}
                   className={`w-7 h-7 rounded-lg text-xs font-semibold transition-colors ${
-                    pi === safePage ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
+                    pi === safePage ? 'bg-sky-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   {pi + 1}
@@ -345,8 +345,8 @@ export default function CampaignView({ campaignId, onClose }) {
         {loading ? (
           <div className="flex flex-col items-center justify-center p-16">
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-emerald-500 to-green-600 rounded-full blur-xl opacity-30"></div>
-              <Loader2 className="relative animate-spin text-emerald-600 mb-4" size={48} />
+              <div className="absolute inset-0 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full blur-xl opacity-30"></div>
+              <Loader2 className="relative animate-spin text-sky-600 mb-4" size={48} />
             </div>
             <p className="text-gray-600 font-medium mt-4">Loading campaign details...</p>
           </div>
@@ -358,7 +358,7 @@ export default function CampaignView({ campaignId, onClose }) {
             <p className="text-red-600 text-lg font-semibold mb-6">{error}</p>
             <button
               onClick={fetchCampaign}
-              className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl hover:from-emerald-700 hover:to-green-700 font-semibold shadow-lg shadow-emerald-500/30 transition-all transform hover:scale-105"
+              className="px-6 py-3 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:from-sky-700 hover:to-blue-700 font-semibold shadow-lg shadow-sky-500/30 transition-all transform hover:scale-105"
             >
               Retry
             </button>
@@ -366,7 +366,7 @@ export default function CampaignView({ campaignId, onClose }) {
         ) : data ? (
           <>
             {/* ── Header ─────────────────────────────────────────── */}
-            <div className="sticky top-0 bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 border-b border-emerald-200/50 px-8 py-6 flex items-start justify-between">
+            <div className="sticky top-0 bg-gradient-to-r from-sky-50 via-blue-50 to-blue-50 border-b border-sky-200/50 px-8 py-6 flex items-start justify-between">
               <div className="flex-1 pr-8">
                 <h2 className="text-2xl font-bold text-gray-900 mb-1">{data.campaign.name}</h2>
                 <p className="text-sm text-gray-600">Campaign Recipients & Statistics</p>
@@ -402,13 +402,13 @@ export default function CampaignView({ campaignId, onClose }) {
                   <p className="text-xs text-yellow-600 mt-1">In Queue</p>
                 </div>
 
-                <div className="bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl p-5 border border-emerald-200/50 shadow-sm">
+                <div className="bg-gradient-to-br from-sky-50 to-blue-50 rounded-xl p-5 border border-sky-200/50 shadow-sm">
                   <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-emerald-100 rounded-lg"><CheckCircle className="text-emerald-600" size={20} /></div>
-                    <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">Completed</span>
+                    <div className="p-2 bg-sky-100 rounded-lg"><CheckCircle className="text-sky-600" size={20} /></div>
+                    <span className="text-xs font-semibold text-sky-700 uppercase tracking-wide">Completed</span>
                   </div>
-                  <p className="text-3xl font-black text-emerald-900">{data.stats.completed}</p>
-                  <p className="text-xs text-emerald-600 mt-1">Sent Successfully</p>
+                  <p className="text-3xl font-black text-sky-900">{data.stats.completed}</p>
+                  <p className="text-xs text-sky-600 mt-1">Sent Successfully</p>
                 </div>
 
                 {data.stats.failed > 0 && (
@@ -428,7 +428,7 @@ export default function CampaignView({ campaignId, onClose }) {
                 <p className="text-sm text-gray-700 font-medium">
                   Total Recipients <span className="font-bold text-blue-600">{data.stats.total}</span>,{" "}
                   Processing count <span className="font-bold text-yellow-600">{data.stats.processing}</span>,{" "}
-                  Completed - <span className="font-bold text-emerald-600">{data.stats.completed}</span>
+                  Completed - <span className="font-bold text-sky-600">{data.stats.completed}</span>
                   {data.stats.failed > 0 && (
                     <>, Failed - <span className="font-bold text-red-600">{data.stats.failed}</span></>
                   )}
@@ -468,7 +468,7 @@ export default function CampaignView({ campaignId, onClose }) {
                   From Mails
                   {fromMailsCount > 0 && (
                     <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
-                      activeTab === "frommails" ? "bg-emerald-100 text-emerald-700" : "bg-gray-200 text-gray-500"
+                      activeTab === "frommails" ? "bg-sky-100 text-sky-700" : "bg-gray-200 text-gray-500"
                     }`}>
                       {fromMailsCount}
                     </span>
@@ -511,11 +511,11 @@ export default function CampaignView({ campaignId, onClose }) {
 
                           <button
                             onClick={() => copyEmails(completedEmails, 'completed')}
-                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
+                            className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
                           >
                             {copiedSection === 'completed' ? <><Check size={16} /><span>Copied!</span></> : (
                               <><Copy size={16} /><span>Copy Completed</span>
-                                <span className="bg-emerald-800 text-white text-xs font-bold px-2 py-0.5 rounded-full">{completedEmails.length}</span>
+                                <span className="bg-sky-800 text-white text-xs font-bold px-2 py-0.5 rounded-full">{completedEmails.length}</span>
                               </>
                             )}
                           </button>
@@ -554,7 +554,7 @@ export default function CampaignView({ campaignId, onClose }) {
                         )}
                         {completedEmails.length > 0 && (
                           <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                            <div className="w-3 h-3 rounded-full bg-sky-500"></div>
                             <span className="text-xs font-medium text-gray-600">Completed: {completedEmails.length}</span>
                           </div>
                         )}

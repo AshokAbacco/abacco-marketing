@@ -1610,7 +1610,7 @@ const fetchTemplates = async () => {
                 </h2>
 
                 {country && (
-                  <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 border border-emerald-200 rounded-full">
+                  <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-gradient-to-r from-sky-100 to-teal-100 text-sky-700 border border-sky-200 rounded-full">
                     <Globe className="w-3 h-3" />
                     {country}
                   </span>
@@ -1647,7 +1647,7 @@ const fetchTemplates = async () => {
                 className="p-2 hover:bg-blue-50 rounded-lg transition-colors group"
                 title="Move to Inbox"
               >
-                <Mail className="w-4 h-4 text-emerald-600 group-hover:text-blue-700" />
+                <Mail className="w-4 h-4 text-sky-600 group-hover:text-blue-700" />
               </button>
             )}
 
@@ -1661,7 +1661,7 @@ const fetchTemplates = async () => {
                   className="p-2 hover:bg-blue-50 rounded-lg transition-colors group"
                   title="Restore to Inbox"
                 >
-                  <RotateCw className="w-4 h-4 text-emerald-600" />
+                  <RotateCw className="w-4 h-4 text-sky-600" />
                 </button>
 
                 {/* Permanent Delete */}
@@ -1698,10 +1698,10 @@ const fetchTemplates = async () => {
             {/* ➕ Add Lead */}
             <button
               onClick={() => setShowAddLead(true)}
-              className="p-2 hover:bg-green-50 rounded-lg transition-colors group"
+              className="p-2 hover:bg-blue-50 rounded-lg transition-colors group"
               title="Add as Lead"
             >
-              <Plus className="w-4 h-4 text-gray-600 group-hover:text-green-600" />
+              <Plus className="w-4 h-4 text-gray-600 group-hover:text-blue-600" />
             </button>
 
             {/* More options */}
@@ -1737,7 +1737,7 @@ const fetchTemplates = async () => {
         {/* ... (Existing Message List Implementation) */}
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <Loader2 className="w-6 h-6 text-emerald-600 animate-spin" />
+            <Loader2 className="w-6 h-6 text-sky-600 animate-spin" />
           </div>
         ) : (
           <div className="max-w-4xl mx-auto py-6 px-6 space-y-4">
@@ -1768,9 +1768,9 @@ const fetchTemplates = async () => {
                     <div
                       className={`border border-gray-200 rounded-lg overflow-hidden transition-all shadow-sm ${
                         isInternal
-                          ? "bg-white border-green-300"
-                          : "bg-green-50/60 border-green-100"
-                      } ${!message.isRead ? "ring-1 ring-green-400" : ""}`}
+                          ? "bg-white border-blue-300"
+                          : "bg-blue-50/60 border-blue-100"
+                      } ${!message.isRead ? "ring-1 ring-blue-400" : ""}`}
                     >
                       <div
                         className="px-6 py-4 cursor-pointer hover:bg-black/5"
@@ -1778,7 +1778,7 @@ const fetchTemplates = async () => {
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex items-start gap-3 flex-1 min-w-0">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center text-white text-sm font-semibold flex-shrink-0 shadow-sm">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white text-sm font-semibold flex-shrink-0 shadow-sm">
                               {message.fromEmail.charAt(0).toUpperCase()}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1786,19 +1786,19 @@ const fetchTemplates = async () => {
                                 <span
                                   className={`text-sm font-bold ${
                                     isInternal
-                                      ? "text-green-700"
-                                      : "text-emerald-700"
+                                      ? "text-blue-700"
+                                      : "text-sky-700"
                                   }`}
                                 >
                                   {message.fromName || message.fromEmail}
                                   {isInternal && (
-                                    <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-emerald-600 text-[10px] rounded uppercase tracking-wider font-bold">
+                                    <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-sky-600 text-[10px] rounded uppercase tracking-wider font-bold">
                                       Internal
                                     </span>
                                   )}
                                 </span>
                                 {!message.isRead && (
-                                  <span className="w-2 h-2 bg-gradient-to-r from-emerald-600 to-green-600 rounded-full"></span>
+                                  <span className="w-2 h-2 bg-gradient-to-r from-sky-600 to-blue-600 rounded-full"></span>
                                 )}
                               </div>
                               <div className="text-xs text-gray-500 space-y-1">
@@ -1949,7 +1949,7 @@ const fetchTemplates = async () => {
                                   {message.attachments.map((att, idx) => (
                                     <div
                                       key={att.id || idx}
-                                      className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-emerald-300 transition-all group"
+                                      className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-sky-300 transition-all group"
                                     >
                                       <div className="w-9 h-9 bg-white rounded border border-gray-200 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-50">
                                         <File className="w-4 h-4 text-blue-500" />
@@ -1969,7 +1969,7 @@ const fetchTemplates = async () => {
                                         }}
                                         className="p-2 hover:bg-blue-100 rounded-full transition-colors"
                                       >
-                                        <Download className="w-4 h-4 text-emerald-600" />
+                                        <Download className="w-4 h-4 text-sky-600" />
                                       </button>
                                     </div>
                                   ))}
@@ -2025,7 +2025,7 @@ const fetchTemplates = async () => {
                   <select
                     value={selectedFromAccount?.id || ""}
                     onChange={(e) => handleAccountChange(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
                     <option value="">Select Account</option>
                     {accounts.map((acc) => (
@@ -2050,7 +2050,7 @@ const fetchTemplates = async () => {
                   <select
                     value={selectedTemplate?.id || ""}
                     onChange={(e) => handleTemplateSelect(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
                     <option value="">Choose a template...</option>
                     {templates.map((template) => (
@@ -2085,7 +2085,7 @@ const fetchTemplates = async () => {
                         setReplyData({ ...replyData, to: e.target.value })
                       }
                       placeholder="Enter recipient email"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -2099,7 +2099,7 @@ const fetchTemplates = async () => {
                         setReplyData({ ...replyData, cc: e.target.value })
                       }
                       placeholder="Enter CC recipients"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -2112,7 +2112,7 @@ const fetchTemplates = async () => {
                       onChange={(e) =>
                         setReplyData({ ...replyData, subject: e.target.value })
                       }
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                   </div>
                 </div>
@@ -2126,7 +2126,7 @@ const fetchTemplates = async () => {
                         <select
                           value={currentFont}
                           onChange={(e) => applyFontFamily(e.target.value)}
-                          className="px-3 py-1.5 text-sm border border-gray-300 rounded bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer appearance-none pr-8"
+                          className="px-3 py-1.5 text-sm border border-gray-300 rounded bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer appearance-none pr-8"
                           style={{ minWidth: "140px" }}
                         >
                           {FONT_FAMILIES.map((font) => (
@@ -2143,7 +2143,7 @@ const fetchTemplates = async () => {
                         <select
                           value={currentSize}
                           onChange={(e) => applyFontSize(e.target.value)}
-                          className="px-3 py-1.5 text-sm border border-gray-300 rounded bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer appearance-none pr-8"
+                          className="px-3 py-1.5 text-sm border border-gray-300 rounded bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer appearance-none pr-8"
                           style={{ minWidth: "70px" }}
                         >
                           {FONT_SIZES.map((size) => (
@@ -2175,7 +2175,7 @@ const fetchTemplates = async () => {
                               <button
                                 key={lh.value}
                                 onClick={() => applyLineHeight(lh.value)}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-emerald-600"
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-sky-600"
                                 style={{ lineHeight: lh.value }} // Preview the effect in the dropdown
                               >
                                 {lh.label}
@@ -2410,7 +2410,7 @@ const fetchTemplates = async () => {
                     <button
                       onClick={handleSendReply}
                       disabled={isSending}
-                      className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 disabled:bg-gray-300 text-white rounded-lg transition-all text-sm font-medium shadow-sm hover:shadow-md"
+                      className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 disabled:bg-gray-300 text-white rounded-lg transition-all text-sm font-medium shadow-sm hover:shadow-md"
                     >
                       {isSending ? (
                         <Loader2 className="w-4 h-4 animate-spin" />

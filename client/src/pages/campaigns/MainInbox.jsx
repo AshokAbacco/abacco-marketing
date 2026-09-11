@@ -40,15 +40,20 @@ export default function InboxMain() {
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [selectedFolder, setSelectedFolder] = useState("inbox");
   const [selectedConversation, setSelectedConversation] = useState(null);
+  // refreshKey       → re-fetch the conversation list (Refresh button, new mail sent)
+  // unreadRefreshKey → re-fetch ONLY the sidebar unread badges (mark read,
+  //                    delete…). These used to share refreshKey, so every
+  //                    mark-as-read also forced a cache-busting list reload.
   const [refreshKey, setRefreshKey] = useState(0);
+  const [unreadRefreshKey, setUnreadRefreshKey] = useState(0);
 
   // ── Active view ───────────────────────────────────────────
   const [activeView, setActiveView] = useState(
     () => localStorage.getItem("activeView") || "inbox"
   );
 
-  // ── Month filter ──────────────────────────────────────────
-  const [monthFilter, setMonthFilter] = useState("current");
+  // Month filter removed: emails are only kept for 7 days (server-side
+  // retention), so "Last month" / "Last 3 months" would always be empty.
 
   // ── Filters ───────────────────────────────────────────────
   const [filters, setFilters] = useState({
@@ -152,24 +157,13 @@ export default function InboxMain() {
         return;
       }
 
-      // ── Single bulk request instead of N individual unread calls ──
-      // Previously: Promise.all with one HTTP call per account → 80 requests
-      // Now: one POST returns all counts in one DB groupBy query
-      let unreadMap = {};
-      try {
-        const bulkRes = await api.post(
-          `${API_BASE_URL}/api/inbox/accounts/unread-bulk`,
-          { accountIds: accountsData.map((a) => a.id) }
-        );
-        unreadMap = bulkRes.data?.data || {};
-      } catch {
-        // Fallback: zero counts — don't block the account list from loading
-      }
-
+      // Show accounts immediately. Unread badges are loaded by the sidebar
+      // (one bulk request) and fill in a moment later. Previously this
+      // function awaited the unread request BEFORE rendering anything, and
+      // then the sidebar fired the exact same request again.
       const normalizedAccounts = accountsData.map((a) => ({
         ...a,
         groupId: a.groupId ? String(a.groupId) : null,
-        unreadCount: unreadMap[a.id] || 0,
       }));
 
       setAccounts(normalizedAccounts);
@@ -380,11 +374,13 @@ export default function InboxMain() {
 
   const handleMessageSent = (conversationId) => {
     if (activeView === "today") {
-      conversationId((prev) => prev.filter((c) => c.conversationId !== conversationId));
+      // was `conversationId(prev => …)`, which threw (a string isn't a function)
+      setConversations((prev) => prev.filter((c) => c.conversationId !== conversationId));
       if (selectedConversation?.conversationId === conversationId) setSelectedConversation(null);
     } else {
+      // Sending mail doesn't change the account list, so no fetchAccounts()
+      // here — refreshing the list (and the badges via refreshKey) is enough.
       setRefreshKey((prev) => prev + 1);
-      fetchAccounts();
     }
   };
 
@@ -394,8 +390,6 @@ export default function InboxMain() {
     setSelectedConversations([]);
     if (activeView === "today") fetchTodayFollowUps();
   };
-
-  const handleMonthFilterChange = (value) => setMonthFilter(value);
 
   const handleRefresh = async () => {
     if (selectedAccount) {
@@ -412,10 +406,10 @@ export default function InboxMain() {
   // RENDER
   // ──────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 overflow-hidden relative">
+    <div className="flex h-screen bg-gradient-to-br from-sky-50 via-teal-50 to-blue-50 overflow-hidden relative">
       {/* Background blobs */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "4s" }} />
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "4s" }} />
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "6s", animationDelay: "1s" }} />
       </div>
 
@@ -429,7 +423,7 @@ export default function InboxMain() {
         onAddAccount={handleAddAccount}
         isCollapsed={sidebarCollapsed}
         onToggleCollapse={setSidebarCollapsed}
-        unreadRefreshKey={refreshKey}
+        unreadRefreshKey={unreadRefreshKey}
         refreshKey={refreshKey}
         accountGroups={accountGroups}
         onGroupsChange={fetchGroups}
@@ -449,8 +443,6 @@ export default function InboxMain() {
           activeView={activeView}
           activeFilters={filters}
           onRefresh={handleRefresh}
-          monthFilter={monthFilter}
-          onMonthFilterChange={handleMonthFilterChange}
         />
 
        
@@ -470,8 +462,7 @@ export default function InboxMain() {
               selectedConversations={selectedConversations}
               setSelectedConversations={setSelectedConversations}
               refreshKey={refreshKey}
-              onUnreadChange={() => setRefreshKey((prev) => prev + 1)}
-              monthFilter={monthFilter}
+              onUnreadChange={() => setUnreadRefreshKey((prev) => prev + 1)}
             />
           </div>
 
