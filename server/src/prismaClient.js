@@ -19,6 +19,14 @@ import { PrismaClient } from "@prisma/client";
 
    pool_timeout is 20s (was 30). Failing sooner is better than holding a
    request for half a minute — the caller retries and the queue drains.
+
+   NOTE: DATABASE_URL may already carry its own connection_limit /
+   pool_timeout / connect_timeout (ours does, in .env). We used to just
+   string-concat our own params onto the end, which produced a URL with
+   each key listed TWICE and left it up to chance which value Prisma
+   actually used. Now we parse the URL and OVERWRITE those three keys
+   instead of appending, so there's exactly one value for each and it's
+   always the one computed below.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const globalForPrisma = globalThis;
@@ -26,14 +34,34 @@ const globalForPrisma = globalThis;
 const POOL_SIZE    = Number(process.env.PRISMA_POOL_SIZE) || 15;
 const POOL_TIMEOUT = Number(process.env.PRISMA_POOL_TIMEOUT) || 20;
 
-const params = [
-  `connection_limit=${POOL_SIZE}`,
-  `pool_timeout=${POOL_TIMEOUT}`,
-  "connect_timeout=10",
-].join("&");
+function buildDbUrl() {
+  const raw = process.env.DATABASE_URL || "";
 
-const base = process.env.DATABASE_URL || "";
-const dbUrl = base.includes("?") ? `${base}&${params}` : `${base}?${params}`;
+  if (!raw) {
+    console.warn("⚠️  DATABASE_URL is not set — Prisma will fail to connect.");
+    return raw;
+  }
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    // Fallback for a malformed/relative URL — shouldn't happen in practice,
+    // but better to fall back to the old append behavior than crash on boot.
+    console.warn("⚠️  Could not parse DATABASE_URL as a URL — falling back to raw string.");
+    return raw;
+  }
+
+  // set() overwrites an existing key instead of adding a duplicate, unlike
+  // the old `${base}&connection_limit=...` string concatenation.
+  url.searchParams.set("connection_limit", String(POOL_SIZE));
+  url.searchParams.set("pool_timeout", String(POOL_TIMEOUT));
+  url.searchParams.set("connect_timeout", "10");
+
+  return url.toString();
+}
+
+const dbUrl = buildDbUrl();
 
 const prisma =
   globalForPrisma.prisma ||
