@@ -19,14 +19,14 @@ export default function LoginPage() {
 
     try {
       const res = await api.post("/api/users/login", { email, password });
-      
+
       console.log("Login response:", res.data); // Debug log
-      
+
       // ✅ Store token
       if (res.data.token) {
         localStorage.setItem("token", res.data.token);
       }
-      
+
       // ✅ Store user data
       const userData = {
         id: res.data.id,
@@ -35,20 +35,20 @@ export default function LoginPage() {
         jobRole: res.data.jobRole,
       };
       localStorage.setItem("user", JSON.stringify(userData));
-      
+
       // Extract user name for welcome message
       setUserName(res.data.name || res.data.email.split('@')[0]);
       setShowSuccess(true);
-      
+
       // Navigate based on user role after showing success message
       setTimeout(() => {
         // ✅ Check user role and redirect accordingly
         const userRole = res.data.jobRole;
-        
+
         // 🔍 Debug log to see what role we got
         console.log("User role from API:", userRole);
         console.log("User role type:", typeof userRole);
-        
+
         // ✅ Case-insensitive check for admin role
         if (userRole && userRole.toString().toLowerCase() === "admin") {
           console.log("Redirecting to /admin");
@@ -68,21 +68,21 @@ export default function LoginPage() {
   // Success Screen
   if (showSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-900 via-green-900 to-teal-900 relative overflow-hidden">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-900 via-blue-900 to-cyan-900 relative overflow-hidden">
         {/* Animated background elements */}
         <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-green-500/20 to-transparent rounded-full blur-3xl animate-pulse"></div>
-          <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-emerald-500/20 to-transparent rounded-full blur-3xl animate-pulse delay-1000"></div>
+          <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-blue-500/20 to-transparent rounded-full blur-3xl animate-pulse"></div>
+          <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-sky-500/20 to-transparent rounded-full blur-3xl animate-pulse delay-1000"></div>
         </div>
 
         <div className="relative z-10 text-center px-4">
           {/* Success checkmark animation */}
           <div className="mb-8 flex justify-center">
             <div className="relative">
-              <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center animate-scale-in">
-                <CheckCircle2 className="w-16 h-16 text-green-400 animate-draw-check" strokeWidth={2.5} />
+              <div className="w-24 h-24 rounded-full bg-blue-500/20 flex items-center justify-center animate-scale-in">
+                <CheckCircle2 className="w-16 h-16 text-blue-400 animate-draw-check" strokeWidth={2.5} />
               </div>
-              <div className="absolute inset-0 rounded-full bg-green-500/30 animate-ping"></div>
+              <div className="absolute inset-0 rounded-full bg-blue-500/30 animate-ping"></div>
             </div>
           </div>
 
@@ -90,15 +90,15 @@ export default function LoginPage() {
           <h1 className="text-5xl md:text-6xl font-bold text-white mb-4 animate-fade-in-up">
             Welcome to Abacco Marketing
           </h1>
-          <p className="text-xl md:text-2xl text-emerald-200 animate-fade-in-up animation-delay-200">
+          <p className="text-xl md:text-2xl text-sky-200 animate-fade-in-up animation-delay-200">
             Taking you to your dashboard...
           </p>
 
           {/* Loading dots */}
           <div className="flex justify-center gap-2 mt-8">
-            <div className="w-3 h-3 bg-green-400 rounded-full animate-bounce"></div>
-            <div className="w-3 h-3 bg-green-400 rounded-full animate-bounce animation-delay-200"></div>
-            <div className="w-3 h-3 bg-green-400 rounded-full animate-bounce animation-delay-400"></div>
+            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce"></div>
+            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce animation-delay-200"></div>
+            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce animation-delay-400"></div>
           </div>
         </div>
 
@@ -170,12 +170,12 @@ export default function LoginPage() {
 
   // Login Form
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4 relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 via-blue-50 to-cyan-50 p-4 relative overflow-hidden">
       {/* Decorative background elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-0 w-96 h-96 bg-green-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
-        <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-        <div className="absolute bottom-0 left-1/2 w-96 h-96 bg-teal-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
+        <div className="absolute top-0 left-0 w-96 h-96 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
+        <div className="absolute top-0 right-0 w-96 h-96 bg-sky-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+        <div className="absolute bottom-0 left-1/2 w-96 h-96 bg-cyan-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
       </div>
 
       <div className="w-full max-w-md relative z-10">
@@ -183,7 +183,7 @@ export default function LoginPage() {
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-white/30">
           {/* Logo/Brand area */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-green-600 to-emerald-600 rounded-2xl mb-4 shadow-lg shadow-green-500/30">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-600 to-sky-600 rounded-2xl mb-4 shadow-lg shadow-blue-500/30">
               <Zap className="w-8 h-8 text-white" strokeWidth={2.5} />
             </div>
             <h2 className="text-3xl font-bold text-slate-800 mb-2">Welcome to Abacco Marketing</h2>
@@ -216,7 +216,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-green-500 focus:ring-4 focus:ring-green-500/10 outline-none transition-all duration-200"
+                  className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
                 />
               </div>
             </div>
@@ -236,12 +236,12 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full pl-12 pr-12 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-green-500 focus:ring-4 focus:ring-green-500/10 outline-none transition-all duration-200"
+                  className="w-full pl-12 pr-12 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-green-600 transition-colors"
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-blue-600 transition-colors"
                 >
                   {showPassword ? (
                     <EyeOff className="w-5 h-5" />
@@ -257,7 +257,7 @@ export default function LoginPage() {
               <label className="flex items-center cursor-pointer group">
                 <input
                   type="checkbox"
-                  className="w-4 h-4 rounded border-2 border-slate-300 text-green-600 focus:ring-2 focus:ring-green-500/20"
+                  className="w-4 h-4 rounded border-2 border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500/20"
                 />
                 <span className="ml-2 text-slate-600 group-hover:text-slate-800 transition-colors">Remember me</span>
               </label>
@@ -267,7 +267,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-6 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transition-all duration-200"
+              className="w-full py-3 px-6 bg-gradient-to-r from-blue-600 to-sky-600 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transition-all duration-200"
             >
               {loading ? (
                 <span className="flex items-center justify-center">
