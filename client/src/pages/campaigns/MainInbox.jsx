@@ -35,6 +35,11 @@ export default function InboxMain() {
   const [accounts, setAccounts] = useState([]);
   const [unreadCounts, setUnreadCounts] = useState({});
   const [loadingAccounts, setLoadingAccounts] = useState(true);
+  // `accounts` above is scoped to whatever group is active in the URL (see
+  // fetchAccounts, which calls /api/accounts?groupId=... when one is set),
+  // so accounts.length is NOT the true cross-group total. This tracks the
+  // real, always-unfiltered total for the account-limit UI.
+  const [totalAccountCount, setTotalAccountCount] = useState(0);
 
   // ── Selection ────────────────────────────────────────────
   const [selectedAccount, setSelectedAccount] = useState(null);
@@ -120,6 +125,7 @@ export default function InboxMain() {
   useEffect(() => {
     fetchGroups();
     fetchAccounts();
+    fetchTotalAccountCount();
   }, []);
   // ──────────────────────────────────────────────────────────
   // FETCH GROUPS
@@ -135,12 +141,25 @@ export default function InboxMain() {
     }
   };
 
+  // ✅ NEW: Always-unfiltered account count (no ?groupId=), independent of
+  // whatever group the inbox happens to be viewing right now. This is what
+  // the account-limit UI (GroupSelectModal, AddEmailAccount) should use.
+  const fetchTotalAccountCount = async () => {
+    try {
+      const res = await api.get(`${API_BASE_URL}/api/accounts`);
+      const data = Array.isArray(res.data?.data) ? res.data.data : [];
+      setTotalAccountCount(data.length);
+    } catch (err) {
+      console.error("Failed to fetch total account count:", err);
+    }
+  };
+
   // ✅ NEW: After an account is added, refresh both the accounts list AND
   // the account-groups list — the group picker's "X/8" badges come from
   // accountGroups (via fetchGroups), so refreshing accounts alone left
   // those badges stuck at their value from whenever the app first loaded.
   const refreshAfterAccountChange = async () => {
-    await Promise.all([fetchAccounts(), fetchGroups()]);
+    await Promise.all([fetchAccounts(), fetchGroups(), fetchTotalAccountCount()]);
   };
 
   // ──────────────────────────────────────────────────────────
@@ -325,6 +344,7 @@ export default function InboxMain() {
     setPendingGroup(null);
     fetchAccounts();
     fetchGroups();
+    fetchTotalAccountCount();
   };
 
   // ──────────────────────────────────────────────────────────
@@ -490,7 +510,7 @@ export default function InboxMain() {
       {showGroupPicker && (
         <GroupSelectModal
           groups={accountGroups}
-          totalAccountCount={accounts.length}
+          totalAccountCount={totalAccountCount}
           onConfirm={handleGroupPickerConfirm}
           onClose={() => setShowGroupPicker(false)}
           onGroupsChange={fetchGroups}
