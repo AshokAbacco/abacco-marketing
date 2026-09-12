@@ -1,6 +1,6 @@
 // client/src/pages/auth/Login.jsx
 import React, { useState } from "react";
-import { Mail, Lock, Eye, EyeOff, Loader2, CheckCircle2, Zap, AlertCircle } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Loader2 } from "lucide-react";
 import { api } from "../utils/api";
 
 export default function LoginPage() {
@@ -37,7 +37,7 @@ export default function LoginPage() {
       localStorage.setItem("user", JSON.stringify(userData));
 
       // Extract user name for welcome message
-      setUserName(res.data.name || res.data.email.split('@')[0]);
+      setUserName(res.data.name || res.data.email.split("@")[0]);
       setShowSuccess(true);
 
       // Navigate based on user role after showing success message
@@ -60,278 +60,320 @@ export default function LoginPage() {
       }, 2000);
     } catch (err) {
       console.error("Login error:", err); // Debug log
-      setError(err.response?.data?.error || "Login failed. Please check your credentials.");
+      setError(
+        err.response?.data?.error || "Login failed. Please check your credentials."
+      );
       setLoading(false);
     }
   };
 
-  // Success Screen
+  const styles = `
+    /* Page backdrop */
+    .abc-page {
+      background: linear-gradient(135deg, #cfe4fd 0%, #bfdcfb 45%, #a9d0fa 100%);
+    }
+
+    /* Dot grid texture on the brand panel */
+    .abc-dots {
+      background-image: radial-gradient(rgba(255, 255, 255, 0.28) 1.6px, transparent 1.6px);
+      background-size: 15px 15px;
+    }
+
+    /* 3D spheres */
+    .abc-sphere {
+      background: radial-gradient(circle at 32% 28%, #bfdbfe, #3b82f6 45%, #1d4ed8 75%, #16358f);
+      box-shadow: -10px 14px 28px rgba(8, 24, 68, 0.45), inset -6px -6px 16px rgba(8, 24, 68, 0.35);
+    }
+
+    /* Glass card over the navy panel */
+    .abc-glass {
+      background: rgba(255, 255, 255, 0.07);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 25px 50px -12px rgba(6, 20, 60, 0.55);
+    }
+
+    .abc-cta {
+      background: linear-gradient(90deg, #1d4ed8 0%, #2563eb 55%, #1e6fe8 100%);
+    }
+    .abc-cta:hover:not(:disabled) {
+      background: linear-gradient(90deg, #1a44bf 0%, #2059d6 55%, #1a63d6 100%);
+    }
+
+    @keyframes abc-rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .abc-rise { animation: abc-rise 0.5s ease-out both; }
+
+    @keyframes abc-shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-6px); }
+      75% { transform: translateX(6px); }
+    }
+    .abc-shake { animation: abc-shake 0.4s ease-in-out; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .abc-rise, .abc-shake { animation: none; }
+    }
+  `;
+
+  /* ---------- Left brand panel (shared by both screens) ---------- */
+  const BrandPanel = () => (
+    <div className="relative w-full md:w-[58%] min-h-[420px] md:min-h-[680px] rounded-t-[22px] md:rounded-tr-none md:rounded-l-[22px] z-10">
+      {/* Clipped navy background with flat overlapping shapes */}
+      <div className="absolute inset-0 rounded-t-[22px] md:rounded-tr-none md:rounded-l-[22px] overflow-hidden bg-[#0a1f56]">
+        <div className="absolute -left-24 top-[18%] w-[520px] h-[520px] rounded-[120px] bg-[#1b4ed1]/60 rotate-45" />
+        <div className="absolute -left-40 top-[24%] w-[440px] h-[440px] rounded-full border-[46px] border-[#2563eb]/70" />
+        <div className="absolute -left-28 top-[40%] w-[300px] h-[300px] rounded-full border-[30px] border-[#1e40af]/80" />
+        <div className="absolute -right-28 -top-20 w-[320px] h-[320px] rounded-full border-[52px] border-[#1d4ed8]/70" />
+        <div className="absolute right-[-90px] top-[34%] w-[260px] h-[260px] rounded-full bg-[#1e50d6]/55" />
+        <div className="absolute right-[-60px] bottom-[-40px] w-[240px] h-[240px] rounded-[70px] bg-[#123a9e]/80 rotate-12" />
+        {/* Dot grids */}
+        <div className="abc-dots absolute left-6 top-[20%] w-24 h-20 opacity-70" />
+        <div className="abc-dots absolute right-8 bottom-[14%] w-28 h-24 opacity-60" />
+      </div>
+
+      {/* Unclipped 3D spheres that pop over the edges */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="abc-sphere absolute -top-10 -left-8 w-[118px] h-[118px] rounded-full z-20" />
+        <div className="abc-sphere absolute top-[45%] -right-7 w-[62px] h-[62px] rounded-full z-20" />
+        <div className="abc-sphere absolute bottom-[22%] -left-6 w-[74px] h-[74px] rounded-full z-20" />
+        <div className="abc-sphere absolute bottom-[0%] -right-8 w-[54px] h-[54px] rounded-full z-20" />
+      </div>
+
+      {/* Glass brand card */}
+      <div className="relative z-30 flex h-full items-center justify-center p-6 sm:p-10">
+        <div className="abc-glass relative w-full max-w-[380px] rounded-[26px] px-8 py-10 text-white overflow-hidden">
+          <div className="absolute -left-14 top-1/3 w-52 h-52 bg-[#3b82f6] rounded-full mix-blend-screen blur-[70px] opacity-60 pointer-events-none" />
+          <div className="absolute -right-14 bottom-1/4 w-52 h-52 bg-[#60a5fa] rounded-full mix-blend-screen blur-[70px] opacity-45 pointer-events-none" />
+
+          <div className="relative z-10">
+            {/* Logo */}
+            <div className="flex justify-center">
+              <div className="relative">
+                <div className="absolute inset-0 rounded-full bg-[#f0b429]/40 blur-2xl" />
+                <img
+                  src="/images/icon.png"
+                  alt="Abacco Technology"
+                  className="relative w-[92px] h-[92px] object-contain drop-shadow-[0_8px_20px_rgba(6,20,60,0.45)]"
+                />
+              </div>
+            </div>
+
+            {/* Brand name */}
+            <div className="mt-4 text-center">
+              <p className="text-[26px] sm:text-[28px] font-bold tracking-tight leading-tight">
+                Abacco Technology
+              </p>
+              <p className="mt-1 text-[12px] font-medium tracking-[0.18em] text-white/80">
+                Marketing Campaign CRM
+              </p>
+            </div>
+
+            {/* Divider */}
+            <div className="my-7 flex items-center justify-center gap-4">
+              <span className="h-px w-16 bg-white/30" />
+              <span className="h-px w-16 bg-white/30" />
+            </div>
+
+            {/* Headline */}
+            <h2 className="text-[30px] sm:text-[34px] font-bold leading-[1.12] tracking-tight text-center">
+               
+              <span className="text-[#fff]">Start Campaigning</span>
+            </h2>
+
+            <p className="mt-5 text-[14px] leading-relaxed text-white/80 max-w-[280px] text-center mx-auto">
+              Sign in with your Abacco credentials to continue managing your campaigns and get leads.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ---------- Decorative page backdrop ---------- */
+  const Backdrop = () => (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      <div className="absolute -left-32 -top-40 w-[560px] h-[560px] rounded-[160px] bg-white/25 rotate-[28deg]" />
+      <div className="absolute -left-56 bottom-[-180px] w-[620px] h-[620px] rounded-full border-[70px] border-white/20" />
+      <div className="absolute -right-40 -top-48 w-[520px] h-[520px] rounded-full border-[40px] border-white/30" />
+      <div className="absolute -right-24 top-[38%] w-[420px] h-[420px] rounded-full border-[52px] border-[#7cb6f7]/40" />
+      <div className="absolute right-[6%] bottom-[-140px] w-[360px] h-[360px] rounded-full bg-white/20" />
+    </div>
+  );
+
+  // ================= SUCCESS SCREEN =================
   if (showSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-900 via-blue-900 to-cyan-900 relative overflow-hidden">
-        {/* Animated background elements */}
-        <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-blue-500/20 to-transparent rounded-full blur-3xl animate-pulse"></div>
-          <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-sky-500/20 to-transparent rounded-full blur-3xl animate-pulse delay-1000"></div>
-        </div>
+      <>
+        <style>{styles}</style>
+        <div className="abc-page relative min-h-[100dvh] w-full flex items-center justify-center p-4 sm:p-8 md:p-10 overflow-hidden">
+          <Backdrop />
+          <div className="relative z-10 w-full max-w-[1120px] flex flex-col md:flex-row rounded-[22px] bg-white shadow-[0_40px_80px_-30px_rgba(12,38,94,0.45)]">
+            <BrandPanel />
 
-        <div className="relative z-10 text-center px-4">
-          {/* Success checkmark animation */}
-          <div className="mb-8 flex justify-center">
-            <div className="relative">
-              <div className="w-24 h-24 rounded-full bg-blue-500/20 flex items-center justify-center animate-scale-in">
-                <CheckCircle2 className="w-16 h-16 text-blue-400 animate-draw-check" strokeWidth={2.5} />
+            <div className="w-full md:w-[52%] bg-white rounded-b-[22px] md:rounded-bl-none md:rounded-r-[22px] flex flex-col justify-center px-8 py-14 md:px-14 md:py-20">
+              <div className="abc-rise">
+                <div className="mb-6 inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-blue-50">
+                  <svg
+                    className="w-8 h-8 text-blue-600"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <polyline points="22 4 12 14.01 9 11.01" />
+                  </svg>
+                </div>
+                <h1 className="text-[34px] font-bold tracking-tight text-slate-900">
+                  You&apos;re in{userName ? `, ${userName}` : ""}
+                </h1>
+                <p className="mt-2 text-[15px] text-slate-500">
+                  Taking you to your dashboard.
+                </p>
+                <div className="mt-7 flex items-center gap-2 text-blue-600">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm font-medium">Loading workspace</span>
+                </div>
               </div>
-              <div className="absolute inset-0 rounded-full bg-blue-500/30 animate-ping"></div>
             </div>
           </div>
-
-          {/* Welcome message */}
-          <h1 className="text-5xl md:text-6xl font-bold text-white mb-4 animate-fade-in-up">
-            Welcome to Abacco Marketing
-          </h1>
-          <p className="text-xl md:text-2xl text-sky-200 animate-fade-in-up animation-delay-200">
-            Taking you to your dashboard...
-          </p>
-
-          {/* Loading dots */}
-          <div className="flex justify-center gap-2 mt-8">
-            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce"></div>
-            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce animation-delay-200"></div>
-            <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce animation-delay-400"></div>
-          </div>
         </div>
-
-        <style>{`
-          @keyframes scale-in {
-            from {
-              transform: scale(0);
-              opacity: 0;
-            }
-            to {
-              transform: scale(1);
-              opacity: 1;
-            }
-          }
-
-          @keyframes fade-in-up {
-            from {
-              opacity: 0;
-              transform: translateY(20px);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-
-          @keyframes draw-check {
-            0% {
-              transform: scale(0) rotate(-45deg);
-              opacity: 0;
-            }
-            50% {
-              opacity: 1;
-            }
-            100% {
-              transform: scale(1) rotate(0deg);
-              opacity: 1;
-            }
-          }
-
-          .animate-scale-in {
-            animation: scale-in 0.5s ease-out forwards;
-          }
-
-          .animate-fade-in-up {
-            animation: fade-in-up 0.6s ease-out forwards;
-            opacity: 0;
-          }
-
-          .animate-draw-check {
-            animation: draw-check 0.8s ease-out forwards;
-          }
-
-          .animation-delay-200 {
-            animation-delay: 0.2s;
-          }
-
-          .animation-delay-400 {
-            animation-delay: 0.4s;
-          }
-
-          .delay-1000 {
-            animation-delay: 1s;
-          }
-        `}</style>
-      </div>
+      </>
     );
   }
 
-  // Login Form
+  // ================= LOGIN FORM =================
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 via-blue-50 to-cyan-50 p-4 relative overflow-hidden">
-      {/* Decorative background elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-0 w-96 h-96 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
-        <div className="absolute top-0 right-0 w-96 h-96 bg-sky-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-        <div className="absolute bottom-0 left-1/2 w-96 h-96 bg-cyan-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
-      </div>
+    <>
+      <style>{styles}</style>
 
-      <div className="w-full max-w-md relative z-10">
-        {/* Login Card */}
-        <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-white/30">
-          {/* Logo/Brand area */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-600 to-sky-600 rounded-2xl mb-4 shadow-lg shadow-blue-500/30">
-              <Zap className="w-8 h-8 text-white" strokeWidth={2.5} />
-            </div>
-            <h2 className="text-3xl font-bold text-slate-800 mb-2">Welcome to Abacco Marketing</h2>
-          </div>
+      <div className="abc-page relative min-h-[100dvh] w-full flex items-center justify-center p-4 sm:p-8 md:p-10 overflow-hidden">
+        <Backdrop />
 
-          {/* Error Message */}
-          {error && (
-            <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-lg animate-shake">
-              <div className="flex items-center">
-                <AlertCircle className="w-5 h-5 text-red-500 mr-2 flex-shrink-0" />
-                <span className="text-red-700 text-sm font-medium">{error}</span>
-              </div>
-            </div>
-          )}
+        {/* Card wrapper — no overflow-hidden so the spheres can pop out */}
+        <div className="relative z-10 w-full max-w-[1120px] flex flex-col md:flex-row rounded-[22px] bg-white shadow-[0_40px_80px_-30px_rgba(12,38,94,0.45)]">
+          <BrandPanel />
 
-          {/* Login Form */}
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email Input */}
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">
-                Email Address
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Mail className="w-5 h-5 text-slate-400" />
+          {/* ================= FORM PANEL ================= */}
+          <div className="w-full md:w-[52%] bg-white rounded-b-[22px] md:rounded-bl-none md:rounded-r-[22px] flex flex-col justify-center px-8 py-12 md:px-14 md:py-20">
+            <h1 className="text-[34px] font-bold tracking-tight text-slate-900">
+              Sign in
+            </h1>
+            <p className="mt-2 text-[15px] leading-relaxed text-slate-500 max-w-[330px]">
+              Welcome back! Please enter your details to continue.
+            </p>
+
+            <form onSubmit={handleSubmit} noValidate className="mt-8 space-y-4">
+              {/* Email */}
+              <div>
+                <label htmlFor="email" className="sr-only">
+                  Email address
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none">
+                    <Mail className="w-[18px] h-[18px] text-blue-600" />
+                  </span>
+                  <input
+                    id="email"
+                    type="email"
+                    autoComplete="username"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Enter your email"
+                    className="w-full rounded-xl border border-slate-200 bg-white pl-12 pr-4 py-4 text-[15px] text-slate-900 placeholder-slate-400 outline-none transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
                 </div>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
-                />
               </div>
-            </div>
 
-            {/* Password Input */}
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">
-                Password
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Lock className="w-5 h-5 text-slate-400" />
+              {/* Password */}
+              <div>
+                <label htmlFor="password" className="sr-only">
+                  Password
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none">
+                    <Lock className="w-[18px] h-[18px] text-blue-600" />
+                  </span>
+                  <input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    className="w-full rounded-xl border border-slate-200 bg-white pl-12 pr-12 py-4 text-[15px] text-slate-900 placeholder-slate-400 outline-none transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 transition-colors hover:text-blue-600 focus:outline-none focus-visible:text-blue-600"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-[18px] h-[18px]" />
+                    ) : (
+                      <Eye className="w-[18px] h-[18px]" />
+                    )}
+                  </button>
                 </div>
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  className="w-full pl-12 pr-12 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-blue-600 transition-colors"
+              </div>
+
+              {/* Remember me / Forgot password */}
+              <div className="flex items-center justify-between pt-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="w-[18px] h-[18px] rounded border-2 border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                  />
+                  <span className="text-[15px] text-slate-600">Remember me</span>
+                </label>
+                <a
+                  href="/forgot-password"
+                  className="text-[15px] font-semibold text-blue-600 hover:text-blue-700 hover:underline"
                 >
-                  {showPassword ? (
-                    <EyeOff className="w-5 h-5" />
-                  ) : (
-                    <Eye className="w-5 h-5" />
-                  )}
-                </button>
+                  Forgot password?
+                </a>
               </div>
-            </div>
 
-            {/* Remember Me & Forgot Password */}
-            <div className="flex items-center justify-between text-sm">
-              <label className="flex items-center cursor-pointer group">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 rounded border-2 border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500/20"
-                />
-                <span className="ml-2 text-slate-600 group-hover:text-slate-800 transition-colors">Remember me</span>
-              </label>
-            </div>
+              {/* Error */}
+              {error ? (
+                <div
+                  role="alert"
+                  className="abc-shake rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-600"
+                >
+                  {error}
+                </div>
+              ) : null}
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 px-6 bg-gradient-to-r from-blue-600 to-sky-600 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transition-all duration-200"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <Loader2 className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" />
-                  Signing in...
-                </span>
-              ) : (
-                <span className="flex items-center justify-center">
-                  Sign In
-                  <Zap className="ml-2 w-4 h-4" />
-                </span>
-              )}
-            </button>
-          </form>
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={!email || !password || loading}
+                className="abc-cta mt-2 flex w-full items-center justify-center gap-2 rounded-xl py-4 text-[16px] font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:shadow-xl hover:shadow-blue-600/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Signing in
+                  </>
+                ) : (
+                  <>
+                    Sign in
+                    <ArrowRight className="w-[18px] h-[18px]" />
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
         </div>
-
-        {/* Footer Text */}
-        <p className="text-center text-sm text-slate-500 mt-6 flex items-center justify-center">
-          <Lock className="w-4 h-4 mr-1" />
-          Protected by industry-leading security
-        </p>
       </div>
-
-      <style>{`
-        @keyframes blob {
-          0%, 100% {
-            transform: translate(0, 0) scale(1);
-          }
-          33% {
-            transform: translate(30px, -50px) scale(1.1);
-          }
-          66% {
-            transform: translate(-20px, 20px) scale(0.9);
-          }
-        }
-
-        @keyframes shake {
-          0%, 100% {
-            transform: translateX(0);
-          }
-          25% {
-            transform: translateX(-10px);
-          }
-          75% {
-            transform: translateX(10px);
-          }
-        }
-
-        .animate-blob {
-          animation: blob 7s infinite;
-        }
-
-        .animate-shake {
-          animation: shake 0.5s ease-in-out;
-        }
-
-        .animation-delay-2000 {
-          animation-delay: 2s;
-        }
-
-        .animation-delay-4000 {
-          animation-delay: 4s;
-        }
-      `}</style>
-    </div>
+    </>
   );
 }
