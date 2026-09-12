@@ -346,7 +346,10 @@ function extractBaseStyles(html) {
 }
 
 const BATCH_SIZE  = 10;
-const CONCURRENCY = 1; // FIX: defined at module level, not inside a loop
+// ONE email at a time per account. runBatch chunks each batch by this value
+// and sleeps once per chunk, so 1 means every individual email gets its own
+// pacing delay. Raising this re-introduces parallel sends per account.
+const CONCURRENCY = 1;
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -394,9 +397,11 @@ function createTransporter(account, smtpPassword) {
     port:    Number(account.smtpPort),
     secure:  Number(account.smtpPort) === 465,
     name:    domain,
-    pool: true,              // ✅ ADD
-    maxConnections: 1,       // ✅ ADD
-    maxMessages: 50,         // ✅ ADD
+    pool: true,
+    // 1, not 2 — a pooled transporter with 2 connections lets a second send
+    // start while the first is still in flight, which defeats CONCURRENCY=1.
+    maxConnections: 1,
+    maxMessages: 50,
     auth: {
       user: account.smtpUser || account.email,
       pass: smtpPassword,
@@ -937,18 +942,60 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
       return { action: "done" };
     }
 
-    // [D] Lock batch → "processing" atomically before sending
-    //     Only update rows still "pending" to prevent double-processing
-    await prisma.campaignRecipient.updateMany({
-      where: {
-        id:     { in: batch.map(r => r.id) },
-        status: "pending", // guard: skip any that were grabbed by another worker
-      },
-      data: {
-        status:    "processing",
-        updatedAt: new Date(),
-      },
-    });
+    /* ── [D] CLAIM the batch → "processing", ONE ROW AT A TIME ──────────
+       ★ DUPLICATE-SEND FIX ★
+
+       The old code issued one bulk updateMany and THREW AWAY the count:
+
+         await prisma.campaignRecipient.updateMany({
+           where: { id: { in: batch.map(r => r.id) }, status: "pending" },
+           data:  { status: "processing", updatedAt: new Date() },
+         });
+
+       Two senders could each read the same rows while they were still
+       "pending", then both call runBatch() with their own stale copy. The
+       loser's updateMany matched 0 rows and nobody checked, so every
+       recipient received TWO emails and produced TWO "sent" records —
+       3 recipients showing as 6 in Inbox → Sent.
+
+       Two senders exist because `activeCampaigns` (the in-memory Set guard
+       further down this file) is per PROCESS. The API process calls
+       sendBulkCampaign() straight from the controllers, and worker.js's
+       resumeSendingCampaignsSafe() calls it again on its own 2-minute
+       timer. Two Node processes = two Sets, neither able to see the other.
+
+       Scoping updateMany to a SINGLE id makes it a compare-and-set:
+       count === 1 comes back only for the sender whose UPDATE actually
+       flipped that row from pending → processing. Exactly one sender wins
+       each row no matter how many processes are racing, and we send only
+       the rows we personally claimed.
+
+       Cost: at most BATCH_SIZE (10) tiny primary-key UPDATEs per batch.   */
+    const claimed = [];
+    for (const r of batch) {
+      const res = await prisma.campaignRecipient.updateMany({
+        where: { id: r.id, status: "pending" },
+        data:  { status: "processing", updatedAt: new Date() },
+      });
+      if (res.count === 1) claimed.push(r);
+    }
+
+    if (claimed.length === 0) {
+      // Another sender took the entire batch between our read and our write.
+      // Back off a moment and fetch a fresh batch rather than tight-looping.
+      console.log(`↩️ [${account.email}] batch already claimed elsewhere — refetching`);
+      return { action: "wait", ms: 1000 };
+    }
+
+    if (claimed.length < batch.length) {
+      console.log(
+        `↩️ [${account.email}] claimed ${claimed.length}/${batch.length} rows ` +
+        `— the rest were taken by another sender`
+      );
+    }
+
+    // Send ONLY what we won. This reassignment is why `batch` is `let`.
+    batch = claimed;
   } catch (err) {
     console.error(
       `⚠️ [${account.email}] batch fetch/lock failed (${err.message}) — retrying in 5s`
@@ -1016,11 +1063,15 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
       { retries: 3, attemptTimeoutMs: 20000 }
     );
 
+    // messageCount is NOT incremented here any more. This upsert runs once
+    // per send ATTEMPT, so a retry inflated the thread's counter even when
+    // only one email had actually gone out. The count is now derived from
+    // EmailMessage rows, which the upsert below keeps at exactly one per
+    // campaign recipient.
     await prisma.conversation.upsert({
       where:  { id: `${account.id}_sent_${recipient.email}` },
       update: {
         lastMessageAt: new Date(),
-        messageCount:  { increment: 1 },
       },
       create: {
         id:             `${account.id}_sent_${recipient.email}`,
@@ -1035,10 +1086,30 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
       },
     });
 
+    /* ★ DUPLICATE-RECORD FIX ★
+       messageId was `sent-${Date.now()}-${email}`, so every call — a retry,
+       a resend, or a racing second sender — minted a brand-new id and
+       create() happily inserted another Sent row.
+
+       Keying the id to the campaign recipient makes it deterministic, and
+       upsert() then UPDATES the existing row instead of adding a duplicate.
+       One campaign recipient can never produce more than one Sent record.
+
+       ⚠ Requires messageId to be @unique in schema.prisma. If yours is only
+         @@index, either add @unique or switch to
+         @@unique([emailAccountId, messageId]) and change the `where` below
+         to { emailAccountId_messageId: { emailAccountId: account.id,
+         messageId: newMessageId } }. Dedupe existing rows before migrating. */
     try {
-      const newMessageId = `sent-${Date.now()}-${recipient.email}`;
-      await prisma.emailMessage.create({
-        data: {
+      const newMessageId = `campaign-${campaign.id}-${recipient.id}`;
+      await prisma.emailMessage.upsert({
+        where:  { messageId: newMessageId },
+        update: {
+          subject,
+          body:   html,
+          sentAt: new Date(),
+        },
+        create: {
           emailAccountId: account.id,
           messageId:      newMessageId,
           conversationId: `${account.id}_sent_${recipient.email}`,
@@ -1245,10 +1316,18 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
       throw err;
     }
 
+    // ★ DUPLICATE-RECORD FIX ★ — same deterministic-id + upsert as
+    // sendOneNormal. See the longer note there for the schema requirement.
     try {
-      const newMessageId = `sent-${Date.now()}-${recipient.email}`;
-      await prisma.emailMessage.create({
-        data: {
+      const newMessageId = `campaign-${campaign.id}-${recipient.id}`;
+      await prisma.emailMessage.upsert({
+        where:  { messageId: newMessageId },
+        update: {
+          subject,
+          body:   html,
+          sentAt: new Date(),
+        },
+        create: {
           emailAccountId: actualAccount.id,
           messageId:      newMessageId,
           conversationId: `${actualAccount.id}_sent_${recipient.email}`,
@@ -1302,14 +1381,28 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SECTION 7 — PUBLIC ENTRY POINT  sendBulkCampaign
-   
-   FIX: Added in-memory global lock to prevent duplicate workers per campaign.
-   resumeSendingCampaignsSafe (in server.js) calls this function — without the
-   lock, every 2-minute tick would spawn a new parallel sender for the same
-   campaign, doubling sends and causing race conditions.
+
+   activeCampaigns below stops two senders starting inside THIS process.
+
+   ⚠ IT DOES NOT WORK ACROSS PROCESSES. It is a plain in-memory Set, so the
+     API process (server.js) and the worker process (worker.js) each hold
+     their own copy and neither can see the other's. That is what caused the
+     duplicate sends: the controllers called sendBulkCampaign() in the API
+     process while resumeSendingCampaignsSafe() called it in the worker.
+
+     Two things now guard against it:
+       1. The per-row compare-and-set claim in runOneBatchCycle [D] above —
+          the real, process-safe fix. Only one sender can own a row.
+       2. Removing the sendBulkCampaign() calls from campaigns.controller.js
+          (createCampaign, sendCampaignNow, sendFollowupCampaign) so the API
+          process only sets status = "sending" and the worker owns sending.
+
+     Keep BOTH. (1) alone is correct but lets two senders waste effort
+     racing; (2) alone reverts to a single in-memory lock that a second
+     worker instance would defeat.
 ═══════════════════════════════════════════════════════════════════════════ */
 
-// Global in-memory lock: tracks which campaign IDs currently have an active worker
+// Per-PROCESS in-memory lock — see the caveat above.
 const activeCampaigns = new Set();
 
 export async function sendBulkCampaign(campaignId) {
