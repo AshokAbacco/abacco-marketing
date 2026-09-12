@@ -16,6 +16,11 @@ const router = express.Router();
 // on top of the sized pool in prismaClient.js. Extra pools compete for the
 // database's max_connections and made account/inbox requests queue.
 
+// Must match GROUP_ACCOUNT_LIMIT in routes/inbox/accounts.js — kept as a
+// separate constant here (rather than importing) since this only needs the
+// number to shape the response, not to enforce anything.
+const GROUP_ACCOUNT_LIMIT = 8;
+
 /* ─────────────────────────────────────────────────────────────
    GET /api/account-groups
    Returns all groups for the logged-in user.
@@ -25,8 +30,21 @@ router.get("/", protect, async (req, res) => {
     const groups = await prisma.emailAccountGroup.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: "asc" },
+      include: {
+        _count: { select: { accounts: true } },
+      },
     });
-    res.json({ success: true, data: groups });
+
+    // Flatten `_count.accounts` into `accountCount` + the shared limit so
+    // the frontend doesn't need to know the Prisma shape or hardcode 8.
+    const data = groups.map((g) => ({
+      ...g,
+      accountCount: g._count.accounts,
+      accountLimit: GROUP_ACCOUNT_LIMIT,
+      _count: undefined,
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     console.error("GET /account-groups error:", err);
     res.status(500).json({ success: false, error: err.message });

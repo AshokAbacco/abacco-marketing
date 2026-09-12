@@ -22,6 +22,15 @@ const router = express.Router();
 // agree with each other.
 const DELETE_SPEED_PER_MIN = 1200;
 
+// ── Account limits ──────────────────────────────────────────────────────
+// TOTAL_ACCOUNT_LIMIT: max mail accounts a single user can add, across all
+// groups (and ungrouped).
+// GROUP_ACCOUNT_LIMIT: max mail accounts allowed inside any one group.
+// Kept in one place so the API check and the numbers shown in the UI
+// (AddEmailAccount.jsx, GroupSelectModal.jsx) always agree.
+const TOTAL_ACCOUNT_LIMIT = 50;
+const GROUP_ACCOUNT_LIMIT = 8;
+
 // accounts:{userId}:all and accounts:{userId}:group:{groupId} are both used
 // as cache keys (see GET / below). A plain `cache.del(`accounts:${userId}`)`
 // never actually matched either of those keys, so the accounts cache wasn't
@@ -75,7 +84,7 @@ const PROVIDER_MAP = {
     imapHost: "imap.mail.yahoo.com",
     imapPort: 993,
     smtpHost: "smtp.mail.yahoo.com",
-    smtpPort: 587,
+    smtpPort: 465,
   },
   outlook: {
     imapHost: "outlook.office365.com",
@@ -142,7 +151,12 @@ const UNIVERSAL_PROVIDER_SETTINGS = {
     imapPort: 993,
     smtpPort: 465,
   },
-
+  yahoo: {
+    imapHost: "imap.mail.yahoo.com",
+    smtpHost: "smtp.mail.yahoo.com",
+    imapPort: 993,
+    smtpPort: 465,
+  },
 
 };
 
@@ -199,6 +213,10 @@ async function detectEmailProvider(domain) {
     // GOOGLE WORKSPACE / GMAIL
     if (mxHost.includes("google") || mxHost.includes("googlehosted"))
       return "gmail";
+
+    // YAHOO / AABIZ (Yahoo Business Mail)
+    if (mxHost.includes("yahoodns") || mxHost.includes("mail.yahoo"))
+      return "yahoo";
 
     // OFFICE 365
     if (mxHost.includes("outlook") || mxHost.includes("office365"))
@@ -309,16 +327,35 @@ router.post("/", protect, async (req, res) => {
       return res.status(400).json({ error: "Account already exists" });
     }
 
-    // ✅ Enforce 80-account limit per user
+    // ✅ Enforce the total-account limit per user
     const accountCount = await prisma.emailAccount.count({
       where: { userId: req.user.id },
     });
-    if (accountCount >= 80) {
+    if (accountCount >= TOTAL_ACCOUNT_LIMIT) {
       return res.status(403).json({
-        error: "Account limit reached. You can add a maximum of 80 email accounts.",
+        error: `Account limit reached. You can add a maximum of ${TOTAL_ACCOUNT_LIMIT} email accounts.`,
         limitReached: true,
+        limitType: "total",
         count: accountCount,
+        limit: TOTAL_ACCOUNT_LIMIT,
       });
+    }
+
+    // ✅ Enforce the per-group limit — only relevant when this account is
+    // being added into a specific group.
+    if (groupId) {
+      const groupAccountCount = await prisma.emailAccount.count({
+        where: { userId: req.user.id, groupId: parseInt(groupId) },
+      });
+      if (groupAccountCount >= GROUP_ACCOUNT_LIMIT) {
+        return res.status(403).json({
+          error: `This group is full. Each group can hold a maximum of ${GROUP_ACCOUNT_LIMIT} email accounts.`,
+          limitReached: true,
+          limitType: "group",
+          count: groupAccountCount,
+          limit: GROUP_ACCOUNT_LIMIT,
+        });
+      }
     }
 
     /* -------------------------
@@ -327,7 +364,7 @@ router.post("/", protect, async (req, res) => {
     const imap = new ImapFlow({
       host: imapHost,
       port: Number(imapPort),
-      secure: Number(imapPort) === 993, // SSL for 993
+      secure: [993, 995].includes(Number(imapPort)), // SSL for 993 (standard) and 995 (e.g. Yahoo Business Mail)
       auth: { user: imapUser || email, pass: encryptedPass },
       tls: { rejectUnauthorized: false },
     });
@@ -862,7 +899,7 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     const imap = new ImapFlow({
       host: account.imapHost,
       port: account.imapPort,
-      secure: account.imapPort === 993,
+      secure: [993, 995].includes(account.imapPort),
       auth: { user: account.imapUser || account.email, pass: newPassword.trim() },
       tls: { rejectUnauthorized: false },
     });

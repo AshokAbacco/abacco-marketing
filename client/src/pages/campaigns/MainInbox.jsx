@@ -135,6 +135,14 @@ export default function InboxMain() {
     }
   };
 
+  // ✅ NEW: After an account is added, refresh both the accounts list AND
+  // the account-groups list — the group picker's "X/8" badges come from
+  // accountGroups (via fetchGroups), so refreshing accounts alone left
+  // those badges stuck at their value from whenever the app first loaded.
+  const refreshAfterAccountChange = async () => {
+    await Promise.all([fetchAccounts(), fetchGroups()]);
+  };
+
   // ──────────────────────────────────────────────────────────
   // FETCH ACCOUNTS  (include groupId returned from API)
   // ──────────────────────────────────────────────────────────
@@ -482,6 +490,7 @@ export default function InboxMain() {
       {showGroupPicker && (
         <GroupSelectModal
           groups={accountGroups}
+          totalAccountCount={accounts.length}
           onConfirm={handleGroupPickerConfirm}
           onClose={() => setShowGroupPicker(false)}
           onGroupsChange={fetchGroups}
@@ -492,7 +501,7 @@ export default function InboxMain() {
       {showAddAccountModal && (
         <AddAccountManager
           onClose={handleAddAccountClose}
-          onAccountAdded={fetchAccounts}
+          onAccountAdded={refreshAfterAccountChange}
           pendingGroup={pendingGroup}   // pass to AddEmailAccount so it can store groupId
         />
       )}

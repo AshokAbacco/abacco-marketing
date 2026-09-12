@@ -5,9 +5,15 @@ import { api } from "../../utils/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
+// Must match TOTAL_ACCOUNT_LIMIT / GROUP_ACCOUNT_LIMIT in
+// routes/inbox/accounts.js on the backend.
+const TOTAL_ACCOUNT_LIMIT = 50;
+const GROUP_ACCOUNT_LIMIT = 8;
+
 export default function AddAccountManager({ onClose, onAccountAdded, pendingGroup }) {
   const [accounts, setAccounts] = useState([]);
   const [totalCount, setTotalCount] = useState(0); // ✅ Total accounts (unfiltered) for limit tracking
+  const [groupCount, setGroupCount] = useState(0); // ✅ NEW: accounts strictly inside pendingGroup, for the 8-per-group limit
   const [selectedAccountId, setSelectedAccountId] = useState(null);
   const [form, setForm] = useState({
     userId: 1,
@@ -115,9 +121,17 @@ const fetchAccounts = async () => {
             !acc.groupId                                             // ungrouped
         );
         setAccounts(filtered);
+
+        // ✅ NEW: count ONLY accounts actually inside this group (not the
+        // ungrouped ones shown above) for the 8-per-group limit.
+        const strictlyInGroup = all.filter(
+          (acc) => String(acc.groupId) === String(pendingGroup.groupId)
+        );
+        setGroupCount(strictlyInGroup.length);
       } else {
         // No group context — show all
         setAccounts(all);
+        setGroupCount(0);
       }
     } else {
       console.warn("Unexpected API response:", res.data);
@@ -158,6 +172,11 @@ const addAccount = async (e) => {
     const res = await api.post(`${API_BASE_URL}/api/accounts`, formData);
 
     console.log("Success:", res.data);
+
+    // ✅ FIX: this used to close the modal without ever telling the parent
+    // an account was added — the parent's accounts list and group counts
+    // (shown in the group picker) stayed stale until an unrelated refresh.
+    if (onAccountAdded) await onAccountAdded();
 
     onClose();
   } catch (err) {
@@ -290,6 +309,10 @@ const logoutAccount = async () => {
     // background on the server, even if this tab is closed.
     setShowSuccessMessage("✅ Account removed successfully. Background cleanup has started.");
 
+    // ✅ FIX: same stale-count issue as add — tell the parent so the
+    // group picker's totals/badges reflect the removal too.
+    if (onAccountAdded) onAccountAdded();
+
     setTimeout(async () => {
       await fetchAccounts();
       setShowSuccessMessage("");
@@ -350,8 +373,14 @@ const logoutAccount = async () => {
         newForm.smtpUser = form.email;
         break;
 
-
-
+      case "yahoo":
+        newForm.imapHost = "imap.mail.yahoo.com";
+        newForm.imapPort = 993;
+        newForm.smtpHost = "smtp.mail.yahoo.com";
+        newForm.smtpPort = 465;
+        newForm.imapUser = form.email;
+        newForm.smtpUser = form.email;
+        break;
 
       default:
         newForm.imapHost = "";
@@ -404,28 +433,78 @@ const logoutAccount = async () => {
             </div>
           )}
 
-          {/* ✅ Account limit warnings */}
-          {totalCount >= 80 ? (
+          {/* ✅ Total account limit — progress + warnings */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Mail Accounts
+              </span>
+              <span className={`text-xs font-semibold ${totalCount >= TOTAL_ACCOUNT_LIMIT ? "text-red-600" : "text-slate-500"}`}>
+                {totalCount} / {TOTAL_ACCOUNT_LIMIT} used
+              </span>
+            </div>
+            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  totalCount >= TOTAL_ACCOUNT_LIMIT
+                    ? "bg-red-500"
+                    : totalCount / TOTAL_ACCOUNT_LIMIT >= 0.8
+                    ? "bg-amber-500"
+                    : "bg-sky-500"
+                }`}
+                style={{ width: `${Math.min(100, Math.round((totalCount / TOTAL_ACCOUNT_LIMIT) * 100))}%` }}
+              />
+            </div>
+          </div>
+
+          {totalCount >= TOTAL_ACCOUNT_LIMIT ? (
             <div className="mb-4 px-4 py-3 bg-red-50 border border-red-300 rounded-xl flex items-start gap-3">
               <span className="text-red-500 text-lg mt-0.5">🚫</span>
               <div>
                 <p className="text-sm font-semibold text-red-700">Account Limit Reached</p>
                 <p className="text-xs text-red-600 mt-0.5">
-                  You have reached the maximum limit of <strong>80 email accounts</strong>. Please remove an existing account to add a new one.
+                  You have reached the maximum limit of <strong>{TOTAL_ACCOUNT_LIMIT} email accounts</strong>. Please remove an existing account to add a new one.
                 </p>
               </div>
             </div>
-          ) : totalCount >= 70 ? (
+          ) : totalCount >= TOTAL_ACCOUNT_LIMIT - 10 ? (
             <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3">
               <span className="text-amber-500 text-lg mt-0.5">⚠️</span>
               <div>
                 <p className="text-sm font-semibold text-amber-700">Approaching Account Limit</p>
                 <p className="text-xs text-amber-600 mt-0.5">
-                  You have used <strong>{totalCount} of 80</strong> accounts. Only <strong>{80 - totalCount}</strong> account{80 - totalCount === 1 ? "" : "s"} remaining.
+                  You have used <strong>{totalCount} of {TOTAL_ACCOUNT_LIMIT}</strong> accounts. Only <strong>{TOTAL_ACCOUNT_LIMIT - totalCount}</strong> account{TOTAL_ACCOUNT_LIMIT - totalCount === 1 ? "" : "s"} remaining.
                 </p>
               </div>
             </div>
           ) : null}
+
+          {/* ✅ NEW: Per-group limit — only shown when adding into a specific group */}
+          {pendingGroup?.groupId && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                  "{pendingGroup.groupName}" Group
+                </span>
+                <span className={`text-xs font-semibold ${groupCount >= GROUP_ACCOUNT_LIMIT ? "text-red-600" : "text-slate-500"}`}>
+                  {groupCount} / {GROUP_ACCOUNT_LIMIT} used
+                </span>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    groupCount >= GROUP_ACCOUNT_LIMIT ? "bg-red-500" : "bg-teal-500"
+                  }`}
+                  style={{ width: `${Math.min(100, Math.round((groupCount / GROUP_ACCOUNT_LIMIT) * 100))}%` }}
+                />
+              </div>
+              {groupCount >= GROUP_ACCOUNT_LIMIT && (
+                <p className="text-xs text-red-600 mt-1 font-medium">
+                  This group is full — each group can hold a maximum of {GROUP_ACCOUNT_LIMIT} accounts.
+                </p>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
@@ -644,6 +723,7 @@ const logoutAccount = async () => {
               >
                 <option value="gmail">Gmail</option>
                 <option value="gsuite">G Suite</option>
+                <option value="yahoo">Yahoo Mail</option>
                 <option value="redff">Rediff Mail</option>
                 <option value="amazon">Amazon WorkMail</option>
               </select>
@@ -815,7 +895,9 @@ const logoutAccount = async () => {
                 {form.provider === "redff" && (
                   <>RedFF uses your normal email password (no app password needed).</>
                 )}
-
+                {form.provider === "yahoo" && (
+                  <>Yahoo requires an <b>App Password</b> generated from your Yahoo Account Security settings.</>
+                )}
 
               </p>
             </div>
@@ -831,9 +913,19 @@ const logoutAccount = async () => {
               <button
                 type="submit"
                 className="px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-md hover:from-sky-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={loading || totalCount >= 80}
+                disabled={
+                  loading ||
+                  totalCount >= TOTAL_ACCOUNT_LIMIT ||
+                  (pendingGroup?.groupId && groupCount >= GROUP_ACCOUNT_LIMIT)
+                }
               >
-                {loading ? "Adding..." : totalCount >= 80 ? "Limit Reached (80/80)" : "Add Account"}
+                {loading
+                  ? "Adding..."
+                  : totalCount >= TOTAL_ACCOUNT_LIMIT
+                  ? `Limit Reached (${TOTAL_ACCOUNT_LIMIT}/${TOTAL_ACCOUNT_LIMIT})`
+                  : pendingGroup?.groupId && groupCount >= GROUP_ACCOUNT_LIMIT
+                  ? `Group Full (${GROUP_ACCOUNT_LIMIT}/${GROUP_ACCOUNT_LIMIT})`
+                  : "Add Account"}
               </button>
             </div>
           </form>
