@@ -1199,6 +1199,29 @@ export const getFollowupPreview = async (req, res) => {
     if (!campaign) {
       return res.status(404).json({ success: false, message: "Campaign not found" });
     }
+        // From-addresses: normal campaigns keep the ids on the campaign, follow-ups
+    // write fromAccountIds: "[]" and carry the sender per recipient instead.
+    let declaredIds = [];
+    try { declaredIds = JSON.parse(campaign.fromAccountIds || "[]").map(Number); } catch {}
+
+    const assigned = await prisma.campaignRecipient.findMany({
+      where:    { campaignId: id, accountId: { not: null } },
+      select:   { accountId: true },
+      distinct: ["accountId"],
+    });
+
+    const fromAccountIdList = [...new Set([...declaredIds, ...assigned.map(a => a.accountId)])]
+      .filter(Number.isInteger);
+
+    const accounts = fromAccountIdList.length
+      ? await prisma.emailAccount.findMany({
+          where:  { id: { in: fromAccountIdList } },
+          select: { id: true, email: true, smtpUser: true },
+        })
+      : [];
+
+    // Mirror processAccountBatched: fromEmail = smtpUser || email
+    const fromAccounts = accounts.map(a => ({ id: a.id, email: a.smtpUser || a.email }));
 
     const [sentCount, previewRecipients] = await Promise.all([
       prisma.campaignRecipient.count({ where: { campaignId: id, status: "sent" } }),
@@ -1406,7 +1429,7 @@ export const getCampaignRecipientEmails = async (req, res) => {
     const recipients = await prisma.campaignRecipient.findMany({
       where:   { campaignId: id, ...statusFilter },
       orderBy: { id: "asc" },
-      select:  { id: true, email: true, accountId: true, status: true },
+      select:  { id: true, email: true, accountId: true, status: true, sentFromEmail: true },
     });
 
     return res.json({ success: true, data: recipients, count: recipients.length });

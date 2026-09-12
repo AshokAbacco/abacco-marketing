@@ -346,7 +346,7 @@ function extractBaseStyles(html) {
 }
 
 const BATCH_SIZE  = 10;
-const CONCURRENCY = 2; // FIX: defined at module level, not inside a loop
+const CONCURRENCY = 1; // FIX: defined at module level, not inside a loop
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -395,7 +395,7 @@ function createTransporter(account, smtpPassword) {
     secure:  Number(account.smtpPort) === 465,
     name:    domain,
     pool: true,              // ✅ ADD
-    maxConnections: 2,       // ✅ ADD
+    maxConnections: 1,       // ✅ ADD
     maxMessages: 50,         // ✅ ADD
     auth: {
       user: account.smtpUser || account.email,
