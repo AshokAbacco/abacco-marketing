@@ -290,8 +290,22 @@ const logoutAccount = async () => {
     await api.delete(`${API_BASE_URL}/api/accounts/${accountToLogout}`);
 
     // Update UI immediately
+    const removed = accounts.find((a) => a.id === accountToLogout);
     const updatedAccounts = accounts.filter((a) => a.id !== accountToLogout);
     setAccounts(updatedAccounts);
+
+    // ✅ Free the slot in the counters right away. fetchAccounts() below only
+    // runs after a 2s delay (so the success message stays readable), and until
+    // it landed the submit button was still stuck on "Group Full (8/8)" even
+    // though the group was back down to 7/8.
+    setTotalCount((c) => Math.max(0, c - 1));
+    if (
+      pendingGroup?.groupId &&
+      removed &&
+      String(removed.groupId) === String(pendingGroup.groupId)
+    ) {
+      setGroupCount((c) => Math.max(0, c - 1));
+    }
 
     if (selectedAccountId === accountToLogout) {
       if (updatedAccounts.length > 0) {
@@ -500,7 +514,9 @@ const logoutAccount = async () => {
               </div>
               {groupCount >= GROUP_ACCOUNT_LIMIT && (
                 <p className="text-xs text-red-600 mt-1 font-medium">
-                  This group is full — each group can hold a maximum of {GROUP_ACCOUNT_LIMIT} accounts.
+                  This group is full ({GROUP_ACCOUNT_LIMIT}/{GROUP_ACCOUNT_LIMIT}) — each group can hold a
+                  maximum of {GROUP_ACCOUNT_LIMIT} accounts. Remove one from the list below to free a
+                  slot, then add a new account.
                 </p>
               )}
             </div>
