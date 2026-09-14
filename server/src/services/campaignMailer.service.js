@@ -1101,9 +1101,14 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
          to { emailAccountId_messageId: { emailAccountId: account.id,
          messageId: newMessageId } }. Dedupe existing rows before migrating. */
     try {
-      const newMessageId = `campaign-${campaign.id}-${recipient.id}`;
-      await prisma.emailMessage.upsert({
-        where:  { messageId: newMessageId },
+        const newMessageId = `campaign-${campaign.id}-${recipient.id}`;
+        await prisma.emailMessage.upsert({
+          where: {
+            emailAccountId_messageId: {
+              emailAccountId: account.id,
+              messageId: newMessageId,
+            },
+          },
         update: {
           subject,
           body:   html,
@@ -1321,7 +1326,12 @@ async function runOneBatchCycle({ campaignId, accountId, account, userId, limit,
     try {
       const newMessageId = `campaign-${campaign.id}-${recipient.id}`;
       await prisma.emailMessage.upsert({
-        where:  { messageId: newMessageId },
+        where: {
+          emailAccountId_messageId: {
+            emailAccountId: actualAccount.id,    // sendOneNormal
+            messageId: newMessageId,
+          },
+        },
         update: {
           subject,
           body:   html,
