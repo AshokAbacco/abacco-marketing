@@ -1,8 +1,8 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+// Shared client — `new PrismaClient()` here opened an extra connection pool.
+import prisma from "../../prismaClient.js";
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // =======================================================
 // GET all custom lead statuses
@@ -11,7 +11,7 @@ router.get("/", async (req, res) => {
   try {
     const statuses = await prisma.customLeadStatus.findMany({
       orderBy: { createdAt: "desc" },
-    });  
+    });
 
     res.json({ success: true, data: statuses });
   } catch (error) {

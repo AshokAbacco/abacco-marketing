@@ -1,60 +1,155 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import AppLayout from "./components/layout/AppLayout";
-import {  } from "react-router-dom";
-
-import Dashboard from "./pages/dashboard/Dashboard";
-import LeadsList from "./pages/lead/LeadsList";
-import PitchList from "./pages/pitches/PitchList";
-import CampaignList from "./pages/campaigns/CampaignList";
-import AnalyticsDashboard from "./pages/analytics/AnalyticsDashboard";
-import FollowUpRules from "./pages/followup/FollowUpRules";
-import MainInbox from "./pages/campaigns/MainInbox.jsx";
 import Login from "./pages/auth/Login.jsx";
-import Users from "./pages/admin/Users.jsx";
-import AdminDailyOverview from "./pages/admin/AdmindailyLimits.jsx";
+
+// Route-level code splitting: each page is downloaded only when visited,
+// so the login screen and first page load far less JavaScript.
+const Dashboard = lazy(() => import("./pages/dashboard/Dashboard"));
+const LeadsList = lazy(() => import("./pages/lead/LeadsList"));
+const PitchList = lazy(() => import("./pages/pitches/PitchList"));
+const CampaignList = lazy(() => import("./pages/campaigns/CampaignList"));
+const AnalyticsDashboard = lazy(
+  () => import("./pages/analytics/AnalyticsDashboard"),
+);
+const FollowUpRules = lazy(() => import("./pages/followup/FollowUpRules"));
+const MainInbox = lazy(() => import("./pages/campaigns/MainInbox.jsx"));
+const Users = lazy(() => import("./pages/admin/Users.jsx"));
+const AdminDailyOverview = lazy(
+  () => import("./pages/admin/AdmindailyLimits.jsx"),
+);
+
+function PageLoader() {
+  return (
+    <div
+      className="flex items-center justify-center h-[60vh]"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="h-8 w-8 rounded-full border-4 border-sky-200 border-t-sky-500 animate-spin" />
+      <span className="sr-only">Loading…</span>
+    </div>
+  );
+}
+
+function readUser() {
+  try {
+    const raw = localStorage.getItem("user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Role Guard ───────────────────────────────────────────────────────────────
 // Redirects to /dashboard if the user's jobRole is not in `allowedRoles`.
+// (The server enforces the same roles; this only hides the page.)
 function RoleGuard({ allowedRoles, children }) {
-  try {
-    const raw = localStorage.getItem("user");
-    if (!raw) return <Navigate to="/login" replace />;
-    const user = JSON.parse(raw);
-    const role = String(user?.jobRole || "").toLowerCase().trim();
-    if (!allowedRoles.includes(role)) return <Navigate to="/dashboard" replace />;
-  } catch {
-    return <Navigate to="/login" replace />;
-  }
+  const user = readUser();
+  if (!user) return <Navigate to="/login" replace />;
+  const role = String(user?.jobRole || "")
+    .toLowerCase()
+    .trim();
+  if (!allowedRoles.includes(role)) return <Navigate to="/dashboard" replace />;
   return children;
+}
+
+// Wraps a lazy page in the app layout; the layout (sidebar/navbar) renders
+// immediately while the page chunk loads.
+function Page({ children }) {
+  return (
+    <AppLayout>
+      <Suspense fallback={<PageLoader />}>{children}</Suspense>
+    </AppLayout>
+  );
 }
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/login" />} />
+      <Route path="/login" element={<Login />} />
 
-      <Route path="/dashboard" element={<AppLayout><Dashboard /></AppLayout>} />
-      <Route path="/leads" element={<AppLayout><LeadsList /></AppLayout>} />
-      <Route path="/pitches" element={<AppLayout><PitchList /></AppLayout>} />
+      <Route
+        path="/dashboard"
+        element={
+          <Page>
+            <Dashboard />
+          </Page>
+        }
+      />
+      <Route
+        path="/leads"
+        element={
+          <Page>
+            <LeadsList />
+          </Page>
+        }
+      />
+      <Route
+        path="/pitches"
+        element={
+          <Page>
+            <PitchList />
+          </Page>
+        }
+      />
+      <Route
+        path="/campaigns"
+        element={
+          <Page>
+            <CampaignList />
+          </Page>
+        }
+      />
+      <Route
+        path="/inbox"
+        element={
+          <Page>
+            <MainInbox />
+          </Page>
+        }
+      />
+      <Route
+        path="/analytics"
+        element={
+          <Page>
+            <AnalyticsDashboard />
+          </Page>
+        }
+      />
+      <Route
+        path="/followups"
+        element={
+          <Page>
+            <FollowUpRules />
+          </Page>
+        }
+      />
 
-      <Route path="/campaigns" element={<AppLayout><CampaignList /></AppLayout>} />
-      <Route path="/inbox" element={<AppLayout><MainInbox /></AppLayout>} />
-      <Route path="/admin" element={<AppLayout><Users /></AppLayout>} />
-
-      <Route path="/analytics" element={<AppLayout><AnalyticsDashboard /></AppLayout>} />
-
-      {/* ── Protected: Admin & HR only ── */}
+      {/* ── Protected: Admin & HR only (matches server-side requireAdmin) ── */}
+      <Route
+        path="/admin"
+        element={
+          <RoleGuard allowedRoles={["admin", "hr"]}>
+            <Page>
+              <Users />
+            </Page>
+          </RoleGuard>
+        }
+      />
       <Route
         path="/daily-overview"
         element={
           <RoleGuard allowedRoles={["admin", "hr"]}>
-            <AppLayout><AdminDailyOverview /></AppLayout>
+            <Page>
+              <AdminDailyOverview />
+            </Page>
           </RoleGuard>
         }
       />
 
-      <Route path="/login" element={<Login />} />
-      <Route path="/followups" element={<AppLayout><FollowUpRules /></AppLayout>} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

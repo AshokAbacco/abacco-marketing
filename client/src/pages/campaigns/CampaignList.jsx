@@ -6,7 +6,7 @@ import {
   UserPlus,
   Users,
   TrendingUp,
-  Mail, 
+  Mail,
   Calendar,
   Activity,
   BarChart3,
@@ -24,7 +24,7 @@ import {
   StopCircle,
   PauseCircle,
   RotateCcw,
-  AlertTriangle 
+  AlertTriangle,
 } from "lucide-react";
 import CreateCampaign from "./campaignPages/CreateCampaign";
 import CampaignDetail from "./campaignPages/CampaignDetail";
@@ -32,6 +32,7 @@ import CampaignView from "./campaignPages/Schedulemodal";
 import DailyLimitBanner from "./campaignPages/DailyLimitBanner";
 
 import { api } from "../utils/api";
+import { startVisiblePolling } from "../utils/polling";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 export default function CampaignList() {
@@ -41,8 +42,14 @@ export default function CampaignList() {
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 relative overflow-hidden">
       {/* Animated Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4s'}}></div>
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '6s', animationDelay: '1s'}}></div>
+        <div
+          className="absolute top-0 left-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDuration: "4s" }}
+        ></div>
+        <div
+          className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDuration: "6s", animationDelay: "1s" }}
+        ></div>
       </div>
 
       {/* Maintenance Notice Banner */}
@@ -72,23 +79,26 @@ export default function CampaignList() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent">
                   Campaign Manager
                 </h1>
-                <p className="text-xs text-slate-600 font-medium mt-0.5">Manage & optimize your email campaigns</p>
+                <p className="text-xs text-slate-600 font-medium mt-0.5">
+                  Manage & optimize your email campaigns
+                </p>
               </div>
             </div>
-            
+
             {/* Quick Stats Badge */}
             <div className="hidden md:flex items-center gap-3 bg-gradient-to-r from-sky-50 to-blue-50 px-4 py-1 rounded-xl border border-sky-200/50">
               <div className="flex items-center gap-1.5">
                 <Zap className="text-slate-600" size={16} />
-                <span className="text-xs font-semibold text-sky-700">Active</span>
+                <span className="text-xs font-semibold text-sky-700">
+                  Active
+                </span>
               </div>
               <div className="w-px h-4 bg-sky-200"></div>
-              
+
               <DailyLimitBanner />
             </div>
           </div>
-       
-          
+
           {/* Enhanced Tab Navigation */}
           <div className="flex gap-2 -mb-px">
             <TabButton
@@ -119,7 +129,6 @@ export default function CampaignList() {
         {activeTab === "campaign" && <CreateCampaign />}
         {activeTab === "followup" && <CampaignDetail />}
       </div>
-      
     </div>
   );
 }
@@ -129,13 +138,15 @@ const CampaignProgress = ({ campaignId }) => {
 
   useEffect(() => {
     fetchProgress();
-    const i = setInterval(fetchProgress, 5000);
-    return () => clearInterval(i);
+    // 10 s is plenty for a progress bar; paused in background tabs.
+    return startVisiblePolling(fetchProgress, 10000);
   }, [campaignId]);
 
   const fetchProgress = async () => {
     try {
-      const res = await api.get(`${API_BASE_URL}/api/campaigns/${campaignId}/progress`);
+      const res = await api.get(
+        `${API_BASE_URL}/api/campaigns/${campaignId}/progress`,
+      );
       if (res.data.success) setRows(res.data.data);
     } catch (error) {
       console.error("Failed to fetch progress:", error);
@@ -148,25 +159,46 @@ const CampaignProgress = ({ campaignId }) => {
         <div className="p-1.5 bg-sky-100 rounded-lg">
           <Activity className="text-slate-600" size={16} />
         </div>
-        <h4 className="text-sm font-bold text-sky-900">Live Progress Tracking</h4>
-        <span className="ml-auto text-xs bg-sky-100 text-sky-700 px-2 py-1 rounded-full font-medium">Real-time</span>
+        <h4 className="text-sm font-bold text-sky-900">
+          Live Progress Tracking
+        </h4>
+        <span className="ml-auto text-xs bg-sky-100 text-sky-700 px-2 py-1 rounded-full font-medium">
+          Real-time
+        </span>
       </div>
       <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-sky-100 overflow-hidden shadow-sm">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gradient-to-r from-sky-50 to-blue-50 border-b border-sky-100">
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Email</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Domain</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Processing</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Completed</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">Sending IP</th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">ETA</th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                Email
+              </th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                Domain
+              </th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                Processing
+              </th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                Completed
+              </th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                Sending IP
+              </th>
+              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
+                ETA
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-sky-100">
-            {rows.map(r => (
-              <tr key={r.email} className="hover:bg-sky-50/50 transition-colors">
-                <td className="px-4 py-3.5 text-slate-800 font-medium">{r.email}</td>
+            {rows.map((r) => (
+              <tr
+                key={r.email}
+                className="hover:bg-sky-50/50 transition-colors"
+              >
+                <td className="px-4 py-3.5 text-slate-800 font-medium">
+                  {r.email}
+                </td>
                 <td className="px-4 py-3.5 text-slate-600">{r.domain}</td>
                 <td className="px-4 py-3.5">
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-200">
@@ -182,12 +214,9 @@ const CampaignProgress = ({ campaignId }) => {
                 <td className="px-4 py-3.5">
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-semibold border border-purple-200">
                     <Clock size={12} />
-                    {r.processing > 0
-                        ? `Sending  • ETA ${r.eta}`
-                        : `Completed`}
+                    {r.processing > 0 ? `Sending  • ETA ${r.eta}` : `Completed`}
                   </span>
                 </td>
-                
               </tr>
             ))}
           </tbody>
@@ -206,18 +235,24 @@ const CampaignTiming = ({ campaign }) => {
   const isActive = campaign.status === "sending";
 
   const timing = useMemo(() => {
-    const isCompleted = campaign.status === "completed" || campaign.status === "completed_with_errors";
+    const isCompleted =
+      campaign.status === "completed" ||
+      campaign.status === "completed_with_errors";
     if (!isActive && !isCompleted) {
-      return { startTime: null, endTime: null, estimatedCompletion: null, duration: null };
+      return {
+        startTime: null,
+        endTime: null,
+        estimatedCompletion: null,
+        duration: null,
+      };
     }
 
     // Use campaign.createdAt as start time — always available and never stale.
     const startTime = campaign.createdAt ? new Date(campaign.createdAt) : null;
 
     // End time: from recipients for completed campaigns
-    const endTime = isCompleted && campaign.lastSentAt
-      ? new Date(campaign.lastSentAt)
-      : null;
+    const endTime =
+      isCompleted && campaign.lastSentAt ? new Date(campaign.lastSentAt) : null;
 
     // ✅ Always use the DB-stored estimatedCompletion — fixed at creation, never drifts.
     const estimatedCompletion = campaign.estimatedCompletion
@@ -250,7 +285,9 @@ const CampaignTiming = ({ campaign }) => {
               <div className="p-1 bg-sky-100 rounded-lg">
                 <Play className="text-slate-600" size={14} />
               </div>
-              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">Start Time</span>
+              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">
+                Start Time
+              </span>
             </div>
             <p className="text-sm font-bold text-slate-900">
               {timing.startTime.toLocaleString("en-US", {
@@ -258,19 +295,21 @@ const CampaignTiming = ({ campaign }) => {
                 day: "numeric",
                 hour: "numeric",
                 minute: "2-digit",
-                hour12: true
+                hour12: true,
               })}
             </p>
           </div>
         )}
-        
+
         {timing.endTime && (
           <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-sky-200/50 shadow-sm hover:shadow-md transition-all hover:border-sky-300">
             <div className="flex items-center gap-2 mb-2">
               <div className="p-1 bg-sky-100 rounded-lg">
                 <CheckCircle2 className="text-slate-600" size={14} />
               </div>
-              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">End Time</span>
+              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">
+                End Time
+              </span>
             </div>
             <p className="text-sm font-bold text-slate-900">
               {timing.endTime.toLocaleString("en-US", {
@@ -278,17 +317,20 @@ const CampaignTiming = ({ campaign }) => {
                 day: "numeric",
                 hour: "numeric",
                 minute: "2-digit",
-                hour12: true
+                hour12: true,
               })}
             </p>
           </div>
         )}
-        
+
         {timing.estimatedCompletion && (
           <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-amber-200/50 shadow-sm hover:shadow-md transition-all hover:border-amber-300">
             <div className="flex items-center gap-2 mb-2">
               <div className="p-1 bg-amber-100 rounded-lg">
-                <Activity className={`text-amber-600 ${isActive ? "animate-pulse" : ""}`} size={14} />
+                <Activity
+                  className={`text-amber-600 ${isActive ? "animate-pulse" : ""}`}
+                  size={14}
+                />
               </div>
               <span className="text-xs font-bold text-amber-700 uppercase tracking-wide">
                 {isActive ? "Est. Completion" : "Was Est. At"}
@@ -300,13 +342,11 @@ const CampaignTiming = ({ campaign }) => {
                 day: "numeric",
                 hour: "numeric",
                 minute: "2-digit",
-                hour12: true
+                hour12: true,
               })}
             </p>
           </div>
         )}
-        
-         
       </div>
     </div>
   );
@@ -316,13 +356,11 @@ const TabButton = ({ active, onClick, icon, label }) => (
   <button
     onClick={onClick}
     className={`group relative flex items-center gap-2 px-6 py-3 text-sm font-semibold transition-all
-      ${
-        active
-          ? "text-sky-700"
-          : "text-slate-600 hover:text-slate-600"
-      }`}
+      ${active ? "text-sky-700" : "text-slate-600 hover:text-slate-600"}`}
   >
-    <span className={`transition-transform ${active ? 'scale-110' : 'group-hover:scale-105'}`}>
+    <span
+      className={`transition-transform ${active ? "scale-110" : "group-hover:scale-105"}`}
+    >
       {icon}
     </span>
     <span>{label}</span>
@@ -335,7 +373,11 @@ const TabButton = ({ active, onClick, icon, label }) => (
 const getCampaignLabel = (campaign) => {
   if (campaign.status === "sending") return "Sending";
   if (campaign.status === "stopped") return "Stopped";
-  if (campaign.status === "completed" || campaign.status === "completed_with_errors") return "Completed";
+  if (
+    campaign.status === "completed" ||
+    campaign.status === "completed_with_errors"
+  )
+    return "Completed";
   if (campaign.status === "scheduled") return "Scheduled";
   if (campaign.sendType === "immediate") return "Immediate";
   return "Draft";
@@ -367,7 +409,9 @@ const DashboardTab = () => {
       if (f) params.append("range", f);
       if (d) params.append("date", d);
 
-      const res = await api.get(`${API_BASE_URL}/api/campaigns/dashboard?${params.toString()}`);
+      const res = await api.get(
+        `${API_BASE_URL}/api/campaigns/dashboard?${params.toString()}`,
+      );
 
       if (res.data.success) {
         setCampaigns(res.data.data?.recentCampaigns || []);
@@ -385,8 +429,7 @@ const DashboardTab = () => {
   useEffect(() => {
     // Pass filter/date explicitly so the 30s interval never uses stale closure values
     fetchCampaigns(filter, customDate, true);
-    const interval = setInterval(() => fetchCampaigns(filter, customDate), 30000);
-    return () => clearInterval(interval);
+    return startVisiblePolling(() => fetchCampaigns(filter, customDate), 30000);
   }, [filter, customDate]);
 
   const toggleRow = (id) => {
@@ -400,17 +443,23 @@ const DashboardTab = () => {
   };
 
   const handleDelete = async (campaignId) => {
-    if (!window.confirm("Are you sure you want to delete this campaign? This action cannot be undone.")) {
+    if (
+      !window.confirm(
+        "Are you sure you want to delete this campaign? This action cannot be undone.",
+      )
+    ) {
       return;
     }
 
     try {
       setDeleting(campaignId);
-      const res = await api.delete(`${API_BASE_URL}/api/campaigns/${campaignId}`);
-      
+      const res = await api.delete(
+        `${API_BASE_URL}/api/campaigns/${campaignId}`,
+      );
+
       if (res.data.success) {
         // ✅ PERF FIX: Update local state directly — no need for a second full API call
-        setCampaigns(prev => prev.filter(c => c.id !== campaignId));
+        setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
       }
     } catch (err) {
       console.error("Error deleting campaign:", err);
@@ -420,57 +469,53 @@ const DashboardTab = () => {
     }
   };
 
-const stopCampaign = async (id) => {
-  try {
-    const confirmStop = window.confirm(
-      "Are you sure you want to stop this campaign?"
-    );
-    if (!confirmStop) return;
+  const stopCampaign = async (id) => {
+    try {
+      const confirmStop = window.confirm(
+        "Are you sure you want to stop this campaign?",
+      );
+      if (!confirmStop) return;
 
-    const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/stop`);
+      const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/stop`);
 
-    if (res.data.success) {
-      alert("Campaign stopped successfully!");
-      fetchCampaigns(filter, customDate);
-    } else {
-      alert(res.data.message || "Failed to stop campaign");
+      if (res.data.success) {
+        alert("Campaign stopped successfully!");
+        fetchCampaigns(filter, customDate);
+      } else {
+        alert(res.data.message || "Failed to stop campaign");
+      }
+    } catch (error) {
+      console.error("Stop campaign error:", error);
+      alert(error.response?.data?.message || "Network or server error");
     }
+  };
 
-  } catch (error) {
-    console.error("Stop campaign error:", error);
-    alert(error.response?.data?.message || "Network or server error");
-  }
-};
+  // Resumes a paused ("stopped") campaign from where it left off — the
+  // backend only ever re-selects "pending" recipients, so completed sends
+  // are never repeated.
+  const resendCampaign = async (id) => {
+    try {
+      const confirmResend = window.confirm(
+        "Resend this campaign? It will pick up exactly where it left off — recipients who already received it won't be emailed again.",
+      );
+      if (!confirmResend) return;
 
-// Resumes a paused ("stopped") campaign from where it left off — the
-// backend only ever re-selects "pending" recipients, so completed sends
-// are never repeated.
-const resendCampaign = async (id) => {
-  try {
-    const confirmResend = window.confirm(
-      "Resend this campaign? It will pick up exactly where it left off — recipients who already received it won't be emailed again."
-    );
-    if (!confirmResend) return;
+      setResending(id);
+      const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/resend`);
 
-    setResending(id);
-    const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/resend`);
-
-    if (res.data.success) {
-      alert(res.data.message || "Campaign resumed successfully!");
-      fetchCampaigns(filter, customDate);
-    } else {
-      alert(res.data.message || "Failed to resend campaign");
+      if (res.data.success) {
+        alert(res.data.message || "Campaign resumed successfully!");
+        fetchCampaigns(filter, customDate);
+      } else {
+        alert(res.data.message || "Failed to resend campaign");
+      }
+    } catch (error) {
+      console.error("Resend campaign error:", error);
+      alert(error.response?.data?.message || "Network or server error");
+    } finally {
+      setResending(null);
     }
-
-  } catch (error) {
-    console.error("Resend campaign error:", error);
-    alert(error.response?.data?.message || "Network or server error");
-  } finally {
-    setResending(null);
-  }
-};
-
-
+  };
 
   const manualRefresh = async () => {
     await fetchCampaigns(filter, customDate);
@@ -484,7 +529,10 @@ const resendCampaign = async (id) => {
         {/* Skeleton stat cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-white/70 rounded-2xl p-6 border border-sky-100 h-32">
+            <div
+              key={i}
+              className="bg-white/70 rounded-2xl p-6 border border-sky-100 h-32"
+            >
               <div className="w-12 h-12 bg-sky-100 rounded-xl mb-4" />
               <div className="h-3 bg-sky-100 rounded w-3/4 mb-2" />
               <div className="h-6 bg-sky-100 rounded w-1/2" />
@@ -494,7 +542,10 @@ const resendCampaign = async (id) => {
         {/* Skeleton table rows */}
         <div className="bg-white/70 rounded-2xl border border-sky-100 overflow-hidden">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="flex gap-4 px-6 py-4 border-b border-sky-50">
+            <div
+              key={i}
+              className="flex gap-4 px-6 py-4 border-b border-sky-50"
+            >
               <div className="h-4 bg-sky-100 rounded flex-1" />
               <div className="h-4 bg-sky-100 rounded w-20" />
               <div className="h-4 bg-sky-100 rounded w-24" />
@@ -521,7 +572,7 @@ const resendCampaign = async (id) => {
       </div>
     );
   }
-  
+
   return (
     <div>
       {/* Enhanced Stats Cards */}
@@ -581,8 +632,7 @@ const resendCampaign = async (id) => {
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
-            
- 
+
             {/* Date Picker */}
             <div className="relative">
               {/* Custom Calendar Icon */}
@@ -613,25 +663,24 @@ const resendCampaign = async (id) => {
                           transition-colors"
               />
             </div>
-
           </div>
 
           {/* Search & Refresh */}
           <div className="flex gap-3 items-center w-full lg:w-auto">
-          <div className="relative w-full lg:w-72">
-            <Search
-              size={18}
-              className="absolute left-4 top-1/2 -translate-y-1/2 
+            <div className="relative w-full lg:w-72">
+              <Search
+                size={18}
+                className="absolute left-4 top-1/2 -translate-y-1/2 
                         text-sky-600 opacity-70 
                         pointer-events-none"
-            />
+              />
 
-            <input
-              type="text"
-              placeholder="Search campaigns..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-11 pr-4 py-3
+              <input
+                type="text"
+                placeholder="Search campaigns..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-11 pr-4 py-3
                         rounded-xl
                         border-2 border-sky-500
                         text-sm font-semibold
@@ -640,8 +689,8 @@ const resendCampaign = async (id) => {
                         placeholder-sky-400
                         focus:outline-none
                         focus:ring-2 focus:ring-sky-400/40"
-            />
-          </div>
+              />
+            </div>
 
             <button
               onClick={manualRefresh}
@@ -649,7 +698,10 @@ const resendCampaign = async (id) => {
               className="p-2.5 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
               title="Refresh campaigns"
             >
-              <RefreshCw size={20} className={isRefreshing ? "animate-spin" : ""} />
+              <RefreshCw
+                size={20}
+                className={isRefreshing ? "animate-spin" : ""}
+              />
             </button>
           </div>
         </div>
@@ -663,8 +715,12 @@ const resendCampaign = async (id) => {
               <div className="absolute inset-0 bg-sky-200 rounded-full blur-2xl opacity-30"></div>
               <Mail className="relative mx-auto text-sky-300" size={64} />
             </div>
-            <p className="text-sky-600 text-xl font-bold mb-2">No campaigns found</p>
-            <p className="text-slate-600 text-sm">Create your first campaign to get started</p>
+            <p className="text-sky-600 text-xl font-bold mb-2">
+              No campaigns found
+            </p>
+            <p className="text-slate-600 text-sm">
+              Create your first campaign to get started
+            </p>
           </div>
         ) : (
           <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-sky-200/50 shadow-lg overflow-hidden">
@@ -673,287 +729,334 @@ const resendCampaign = async (id) => {
                 <thead className="sticky top-0 bg-gradient-to-r from-sky-50 via-blue-50 to-blue-50 z-10">
                   <tr className="border-b border-sky-200">
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Campaign</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">
+                        Campaign
+                      </span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Type</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">
+                        Type
+                      </span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Recipients</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">
+                        Recipients
+                      </span>
                     </th>
                     <th className="px-6 py-4 text-left">
-                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Date</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">
+                        Date
+                      </span>
                     </th>
-                
+
                     <th className="px-6 py-4 text-center">
-                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Actions</span>
+                      <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">
+                        Actions
+                      </span>
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-100 bg-white">
                   {campaigns
-                  .filter(campaign =>
-                    campaign.name?.toLowerCase().includes(search.toLowerCase())
-                  )
-                  .map((campaign) => {
-                  const isScheduled = campaign.status === "scheduled";
-                  const isCompleted = campaign.status === "completed";
-                  const isSending = campaign.status === "sending";
+                    .filter((campaign) =>
+                      campaign.name
+                        ?.toLowerCase()
+                        .includes(search.toLowerCase()),
+                    )
+                    .map((campaign) => {
+                      const isScheduled = campaign.status === "scheduled";
+                      const isCompleted = campaign.status === "completed";
+                      const isSending = campaign.status === "sending";
 
-                  const type =
-                    campaign.sendType === "followup"
-                      ? "Follow-up"
-                      : isScheduled
-                      ? "Scheduled"
-                      : isCompleted
-                      ? "Completed"
-                      : isSending
-                      ? "Sending"
-                      : "Draft";
+                      const type =
+                        campaign.sendType === "followup"
+                          ? "Follow-up"
+                          : isScheduled
+                            ? "Scheduled"
+                            : isCompleted
+                              ? "Completed"
+                              : isSending
+                                ? "Sending"
+                                : "Draft";
 
-                  const date = isScheduled && campaign.scheduledAt
-                      ? (() => {
-                          const d = new Date(campaign.scheduledAt);
+                      const date =
+                        isScheduled && campaign.scheduledAt
+                          ? (() => {
+                              const d = new Date(campaign.scheduledAt);
 
-                          const datePart = d.toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          });
+                              const datePart = d.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              });
 
-                          const timePart = d.toLocaleTimeString("en-US", {
-                            hour: "numeric",
-                            minute: "2-digit",
-                            hour12: true,
-                          });
+                              const timePart = d.toLocaleTimeString("en-US", {
+                                hour: "numeric",
+                                minute: "2-digit",
+                                hour12: true,
+                              });
 
-                          return `${datePart} at ${timePart}`;
-                        })()
-                      : campaign.createdAt
-                      ? new Date(campaign.createdAt).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })
-                      : "—";
+                              return `${datePart} at ${timePart}`;
+                            })()
+                          : campaign.createdAt
+                            ? new Date(campaign.createdAt).toLocaleDateString(
+                                "en-US",
+                                {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                },
+                              )
+                            : "—";
 
-                  const isExpanded = expandedRows.has(campaign.id);
+                      const isExpanded = expandedRows.has(campaign.id);
 
-                  const statusConfig = {
-                    sending: {
-                      bg: "bg-gradient-to-br from-blue-50 to-indigo-50",
-                      text: "text-blue-700",
-                      border: "border-blue-200",
-                      icon: <Activity size={14} className="animate-pulse" />
-                    },
-                    stopped: {
-                      bg: "bg-gradient-to-br from-red-50 to-orange-50",
-                      text: "text-red-700",
-                      border: "border-red-200",
-                      icon: <StopCircle size={14} />
-                    },
-                    scheduled: {
-                      bg: "bg-gradient-to-br from-indigo-50 to-purple-50",
-                      text: "text-indigo-700",
-                      border: "border-indigo-200",
-                      icon: <Calendar size={14} />
-                    },
-                    completed: {
-                      bg: "bg-gradient-to-br from-sky-50 to-blue-50",
-                      text: "text-sky-700",
-                      border: "border-sky-200",
-                      icon: <TrendingUp size={14} />
-                    },
-                    completed_with_errors: {
-                      bg: "bg-gradient-to-br from-amber-50 to-orange-50",
-                      text: "text-amber-700",
-                      border: "border-amber-200",
-                      icon: <TrendingUp size={14} />
-                    },
-                    draft: {
-                      bg: "bg-gradient-to-br from-slate-50 to-gray-50",
-                      text: "text-sky-600",
-                      border: "border-slate-200",
-                      icon: <Mail size={14} />
-                    },
-                  };
+                      const statusConfig = {
+                        sending: {
+                          bg: "bg-gradient-to-br from-blue-50 to-indigo-50",
+                          text: "text-blue-700",
+                          border: "border-blue-200",
+                          icon: (
+                            <Activity size={14} className="animate-pulse" />
+                          ),
+                        },
+                        stopped: {
+                          bg: "bg-gradient-to-br from-red-50 to-orange-50",
+                          text: "text-red-700",
+                          border: "border-red-200",
+                          icon: <StopCircle size={14} />,
+                        },
+                        scheduled: {
+                          bg: "bg-gradient-to-br from-indigo-50 to-purple-50",
+                          text: "text-indigo-700",
+                          border: "border-indigo-200",
+                          icon: <Calendar size={14} />,
+                        },
+                        completed: {
+                          bg: "bg-gradient-to-br from-sky-50 to-blue-50",
+                          text: "text-sky-700",
+                          border: "border-sky-200",
+                          icon: <TrendingUp size={14} />,
+                        },
+                        completed_with_errors: {
+                          bg: "bg-gradient-to-br from-amber-50 to-orange-50",
+                          text: "text-amber-700",
+                          border: "border-amber-200",
+                          icon: <TrendingUp size={14} />,
+                        },
+                        draft: {
+                          bg: "bg-gradient-to-br from-slate-50 to-gray-50",
+                          text: "text-sky-600",
+                          border: "border-slate-200",
+                          icon: <Mail size={14} />,
+                        },
+                      };
 
-                  const config = statusConfig[campaign.status] || statusConfig.draft;
+                      const config =
+                        statusConfig[campaign.status] || statusConfig.draft;
 
-                  return (
-                    <>
-                      <tr key={campaign.id} className="hover:bg-sky-50/50 transition-all group">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className={`relative w-11 h-11 rounded-xl ${config.bg} flex items-center justify-center flex-shrink-0 border ${config.border} shadow-sm group-hover:scale-105 transition-transform`}>
-                              <Mail className={config.text} size={20} />
-                            </div>
-                            <div>
-                              <h3 className="font-bold text-slate-900 text-sm">
-                                {campaign.name?.replace(/\s*\(\d+\)\s*$/, "")}
-                              </h3>
-                              {/* {campaign.fromNames?.length > 0 && (
+                      return (
+                        <>
+                          <tr
+                            key={campaign.id}
+                            className="hover:bg-sky-50/50 transition-all group"
+                          >
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className={`relative w-11 h-11 rounded-xl ${config.bg} flex items-center justify-center flex-shrink-0 border ${config.border} shadow-sm group-hover:scale-105 transition-transform`}
+                                >
+                                  <Mail className={config.text} size={20} />
+                                </div>
+                                <div>
+                                  <h3 className="font-bold text-slate-900 text-sm">
+                                    {campaign.name?.replace(
+                                      /\s*\(\d+\)\s*$/,
+                                      "",
+                                    )}
+                                  </h3>
+                                  {/* {campaign.fromNames?.length > 0 && (
                                 <p className="text-xs text-slate-600 mt-0.5 font-medium">
                                   {campaign.fromNames.join(", ")}
                                 </p>
                               )} */}
-                            </div>
-                          </div>
-                        </td>
-                       <td className="px-6 py-4">
-                          <span
-                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold text-xs shadow-sm
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold text-xs shadow-sm
                               ${
                                 getCampaignLabel(campaign) === "Immediate"
                                   ? "bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200"
                                   : getCampaignLabel(campaign) === "Scheduled"
-                                  ? "bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200"
-                                  : getCampaignLabel(campaign) === "Sending"
-                                  ? "bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 border-blue-200"
-                                  : getCampaignLabel(campaign) === "Stopped"
-                                  ? "bg-gradient-to-br from-red-50 to-orange-50 text-red-700 border-red-200"
-                                  : "bg-gradient-to-br from-sky-50 to-blue-50 text-sky-700 border-sky-200"
+                                    ? "bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200"
+                                    : getCampaignLabel(campaign) === "Sending"
+                                      ? "bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 border-blue-200"
+                                      : getCampaignLabel(campaign) === "Stopped"
+                                        ? "bg-gradient-to-br from-red-50 to-orange-50 text-red-700 border-red-200"
+                                        : "bg-gradient-to-br from-sky-50 to-blue-50 text-sky-700 border-sky-200"
                               }
                             `}
-                          >
-                            {getCampaignLabel(campaign)}
-                          </span>
-                        </td>
-
-                        <td className="px-6 py-1">
-                          <div className="flex items-center">
-                            
-                            {/* Left Side - Icon + Count */}
-                            <div className="flex items-center gap-2">
-                              <div className="p-1 bg-sky-100 rounded-lg">
-                                <Users size={16} className="text-slate-600" />
-                              </div>
-
-                              <span className="text-sm font-bold text-slate-900">
-                                {(campaign.recipientCount ?? 0).toLocaleString()}
-                              </span>
-
-                              <span className="text-xs text-slate-600 font-medium">
-                                recipients
-                              </span>
-                            </div>
-
-                            {/* Right Side - View Button */}
-                            <button
-                              onClick={() => setSelectedCampaignId(campaign.id)}
-                              className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline ml-3"
-                            >
-                              View
-                            </button>
-
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <Calendar size={16} className="text-slate-600" />
-                            <span className="text-sm text-slate-700 font-medium">{date}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex gap-2 justify-center">
-
-                            {(campaign.status === "sending" ||
-                              campaign.status === "completed" ||
-                              campaign.status === "completed_with_errors") && (
-                              <button
-                                onClick={() => toggleRow(campaign.id)}
-                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-100 to-blue-100 hover:from-sky-200 hover:to-blue-200 text-sky-700 rounded-xl transition-all text-xs font-bold border border-sky-200 shadow-sm transform hover:scale-105"
                               >
-                                {isExpanded ? (
-                                  <>
-                                    <ChevronUp size={14} />
-                                    Hide
-                                  </>
-                                ) : (
-                                  <>
-                                    <ChevronDown size={14} />
-                                    Details
-                                  </>
+                                {getCampaignLabel(campaign)}
+                              </span>
+                            </td>
+
+                            <td className="px-6 py-1">
+                              <div className="flex items-center">
+                                {/* Left Side - Icon + Count */}
+                                <div className="flex items-center gap-2">
+                                  <div className="p-1 bg-sky-100 rounded-lg">
+                                    <Users
+                                      size={16}
+                                      className="text-slate-600"
+                                    />
+                                  </div>
+
+                                  <span className="text-sm font-bold text-slate-900">
+                                    {(
+                                      campaign.recipientCount ?? 0
+                                    ).toLocaleString()}
+                                  </span>
+
+                                  <span className="text-xs text-slate-600 font-medium">
+                                    recipients
+                                  </span>
+                                </div>
+
+                                {/* Right Side - View Button */}
+                                <button
+                                  onClick={() =>
+                                    setSelectedCampaignId(campaign.id)
+                                  }
+                                  className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline ml-3"
+                                >
+                                  View
+                                </button>
+                              </div>
+                            </td>
+
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-2">
+                                <Calendar
+                                  size={16}
+                                  className="text-slate-600"
+                                />
+                                <span className="text-sm text-slate-700 font-medium">
+                                  {date}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <div className="flex gap-2 justify-center">
+                                {(campaign.status === "sending" ||
+                                  campaign.status === "completed" ||
+                                  campaign.status ===
+                                    "completed_with_errors") && (
+                                  <button
+                                    onClick={() => toggleRow(campaign.id)}
+                                    className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-100 to-blue-100 hover:from-sky-200 hover:to-blue-200 text-sky-700 rounded-xl transition-all text-xs font-bold border border-sky-200 shadow-sm transform hover:scale-105"
+                                  >
+                                    {isExpanded ? (
+                                      <>
+                                        <ChevronUp size={14} />
+                                        Hide
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ChevronDown size={14} />
+                                        Details
+                                      </>
+                                    )}
+                                  </button>
                                 )}
-                              </button>
-                            )}
 
-                            <button
-                              onClick={() => handleDelete(campaign.id)}
-                              disabled={deleting === campaign.id}
-                              className="px-4 py-2 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl text-xs hover:shadow-lg shadow-red-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 font-bold transform hover:scale-105"
-                            >
-                              {deleting === campaign.id ? (
-                                <>
-                                  <Loader2 size={12} className="animate-spin" />
-                                  Deleting...
-                                </>
-                              ) : (
-                                "Delete"
-                              )}
-                            </button>
+                                <button
+                                  onClick={() => handleDelete(campaign.id)}
+                                  disabled={deleting === campaign.id}
+                                  className="px-4 py-2 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl text-xs hover:shadow-lg shadow-red-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 font-bold transform hover:scale-105"
+                                >
+                                  {deleting === campaign.id ? (
+                                    <>
+                                      <Loader2
+                                        size={12}
+                                        className="animate-spin"
+                                      />
+                                      Deleting...
+                                    </>
+                                  ) : (
+                                    "Delete"
+                                  )}
+                                </button>
 
-                            {/* 🔥 PAUSE BUTTON — stops the send immediately;
+                                {/* 🔥 PAUSE BUTTON — stops the send immediately;
                                 already-sent recipients are untouched and the
                                 rest stay "pending" for Resend to pick up. */}
-                            {campaign.status === "sending" && (
-                              <button
-                                onClick={() => stopCampaign(campaign.id)}
-                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all font-bold transform hover:scale-105"
-                              >
-                                <PauseCircle size={14} />
-                                Pause
-                              </button>
-                            )}
-
-                            {/* 🔄 RESEND BUTTON — resumes a paused campaign
-                                from where it stopped, no duplicate sends. */}
-                            {campaign.status === "stopped" && (
-                              <button
-                                onClick={() => resendCampaign(campaign.id)}
-                                disabled={resending === campaign.id}
-                                className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
-                              >
-                                {resending === campaign.id ? (
-                                  <>
-                                    <Loader2 size={12} className="animate-spin" />
-                                    Resending...
-                                  </>
-                                ) : (
-                                  <>
-                                    <RotateCcw size={14} />
-                                    Resend
-                                  </>
+                                {campaign.status === "sending" && (
+                                  <button
+                                    onClick={() => stopCampaign(campaign.id)}
+                                    className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all font-bold transform hover:scale-105"
+                                  >
+                                    <PauseCircle size={14} />
+                                    Pause
+                                  </button>
                                 )}
-                              </button>
+
+                                {/* 🔄 RESEND BUTTON — resumes a paused campaign
+                                from where it stopped, no duplicate sends. */}
+                                {campaign.status === "stopped" && (
+                                  <button
+                                    onClick={() => resendCampaign(campaign.id)}
+                                    disabled={resending === campaign.id}
+                                    className="inline-flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
+                                  >
+                                    {resending === campaign.id ? (
+                                      <>
+                                        <Loader2
+                                          size={12}
+                                          className="animate-spin"
+                                        />
+                                        Resending...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <RotateCcw size={14} />
+                                        Resend
+                                      </>
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded &&
+                            (campaign.status === "sending" ||
+                              campaign.status === "completed" ||
+                              campaign.status === "completed_with_errors") && (
+                              <tr>
+                                <td
+                                  colSpan={5}
+                                  className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30"
+                                >
+                                  <div className="py-5 space-y-4">
+                                    <CampaignTiming campaign={campaign} />
+                                    {campaign.status === "sending" && (
+                                      <CampaignProgress
+                                        campaignId={campaign.id}
+                                      />
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
                             )}
-
-                          </div>
-                        </td>
-
-                      </tr>
-                      {isExpanded && (campaign.status === "sending" || campaign.status === "completed" || campaign.status === "completed_with_errors") && (
-                        <tr>
-                          <td colSpan={5} className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30">
-                            <div className="py-5 space-y-4">
-                              <CampaignTiming campaign={campaign} />
-                              {campaign.status === "sending" && (
-                                <CampaignProgress campaignId={campaign.id} />
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </>
-                  );
-                })}
-                
-              </tbody>
-            </table>
+                        </>
+                      );
+                    })}
+                </tbody>
+              </table>
             </div>
           </div>
-
         )}
         {selectedCampaignId && (
           <CampaignView
@@ -961,7 +1064,6 @@ const resendCampaign = async (id) => {
             onClose={() => setSelectedCampaignId(null)}
           />
         )}
-
       </div>
     </div>
   );
@@ -969,16 +1071,24 @@ const resendCampaign = async (id) => {
 
 const StatCard = ({ icon, label, value, iconBg, iconColor, accentColor }) => (
   <div className="group relative">
-    <div className={`absolute inset-0 bg-${accentColor}-200/30 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
+    <div
+      className={`absolute inset-0 bg-${accentColor}-200/30 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
+    ></div>
     <div className="relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-sky-200/50 hover:border-sky-300/70 transition-all shadow-sm hover:shadow-lg transform hover:scale-105 duration-300">
       <div className="flex items-start justify-between mb-5">
-        <div className={`relative w-14 h-14 ${iconBg} rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform duration-300`}>
+        <div
+          className={`relative w-14 h-14 ${iconBg} rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform duration-300`}
+        >
           <div className={iconColor}>{icon}</div>
         </div>
       </div>
       <div>
-        <p className="text-[16px] font-bold text-sky-600 mb-2 tracking-wide">{label}</p>
-        <p className="text-3xl font-black text-slate-900 tracking-tight">{value}</p>
+        <p className="text-[16px] font-bold text-sky-600 mb-2 tracking-wide">
+          {label}
+        </p>
+        <p className="text-3xl font-black text-slate-900 tracking-tight">
+          {value}
+        </p>
       </div>
     </div>
   </div>

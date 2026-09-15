@@ -1,31 +1,31 @@
 import express from "express";
-import { 
-  registerUser, 
-  loginUser, 
-  getCurrentUser,  // ✅ NEW: Import getCurrentUser
-  getAllUsers, 
-  updateUser, 
-  deleteUser, 
-  toggleUserStatus 
+import {
+  registerUser,
+  loginUser,
+  getCurrentUser,
+  getAllUsers,
+  updateUser,
+  deleteUser,
+  toggleUserStatus,
 } from "../controllers/userController.js";
-
-// ✅ Import your auth middleware (adjust path as needed)
-import { protect } from "../middlewares/authMiddleware.js";
-
+import { protect, requireAdmin } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
-
-// ✅ Public routes (no auth required)
-router.post("/register", registerUser);
+// Public
 router.post("/login", loginUser);
 
-// ✅ Protected routes (auth required)
-router.get("/me", protect, getCurrentUser);           // ✅ NEW: Get current user profile
-router.get("/all", protect, getAllUsers);             // ✅ Protected: Only authenticated users
-router.put("/:id", protect, updateUser);              // ✅ Protected
-router.delete("/:id", protect, deleteUser);           // ✅ Protected
-router.put("/:id/status", protect, toggleUserStatus); // ✅ Protected
+// Any logged-in user
+router.get("/me", protect, getCurrentUser);
 
+// User management — Admin / HR only.
+// These were previously open to every logged-in user, and /register was
+// completely public (anyone could create an admin account). The admin
+// "Add Employee" screen already sends the auth token, so it keeps working.
+router.post("/register", protect, requireAdmin, registerUser);
+router.get("/all", protect, requireAdmin, getAllUsers);
+router.put("/:id/status", protect, requireAdmin, toggleUserStatus);
+router.put("/:id", protect, requireAdmin, updateUser);
+router.delete("/:id", protect, requireAdmin, deleteUser);
 
 export default router;

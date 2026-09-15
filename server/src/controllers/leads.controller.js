@@ -1,33 +1,31 @@
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
-
+// Shared client — a `new PrismaClient()` here opened a second connection pool.
+import prisma from "../prismaClient.js";
 
 // ================= CREATE OR UPDATE LEAD FROM INBOX =================
 export const createLeadFromInbox = async (req, res) => {
   try {
-      const {
-        email,
-        name,
-        subject,
-        fromName,
-        fromEmail,
-        toEmail,
-        ccEmail,
-        bccEmail,
-        phone,
-        country,
-        website,
-        leadLink,
-        contactDate,
-        emailPitch,
-        headerText,
-        conversationId,
-        totalMessages,
-        thread,
-        leadType,
-        sentAt,
-      } = req.body;
+    const {
+      email,
+      name,
+      subject,
+      fromName,
+      fromEmail,
+      toEmail,
+      ccEmail,
+      bccEmail,
+      phone,
+      country,
+      website,
+      leadLink,
+      contactDate,
+      emailPitch,
+      headerText,
+      conversationId,
+      totalMessages,
+      thread,
+      leadType,
+      sentAt,
+    } = req.body;
 
     // 🔒 STRICT duplicate check (NO UPDATE)
     const existingLead = await prisma.lead.findFirst({
@@ -87,13 +85,11 @@ export const createLeadFromInbox = async (req, res) => {
       },
     });
 
-
-  res.status(201).json({
-    success: true,
-    message: "Lead saved successfully",
-    lead,
-  });
-
+    res.status(201).json({
+      success: true,
+      message: "Lead saved successfully",
+      lead,
+    });
   } catch (error) {
     console.error("❌ Save lead error:", error);
     return res.status(500).json({
@@ -102,8 +98,6 @@ export const createLeadFromInbox = async (req, res) => {
     });
   }
 };
-
-
 
 // ================= GET ALL LEADS =================
 export const getAllLeads = async (req, res) => {
@@ -134,15 +128,16 @@ export const getLeadById = async (req, res) => {
     const id = Number(req.params.id);
 
     const lead = await prisma.lead.findUnique({
-      where: { 
+      where: {
         id: id,
         userId: req.user.id,
       },
-
     });
 
     if (!lead) {
-      return res.status(404).json({ success: false, message: "Lead not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Lead not found" });
     }
 
     res.json({ success: true, lead });
@@ -220,16 +215,13 @@ export const updateLead = async (req, res) => {
   }
 };
 
-
-
-
 // ================= DELETE LEAD =================
 export const deleteLead = async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     await prisma.lead.delete({
-      where: { 
+      where: {
         id: id,
         userId: req.user.id, // ✅ Add this
       },

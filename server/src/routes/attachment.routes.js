@@ -1,8 +1,8 @@
 // server/src/routes/attachment.routes.js
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+// Shared client — `new PrismaClient()` here opened an extra connection pool.
+import prisma from "../prismaClient.js";
 
-const prisma = new PrismaClient();
 const router = express.Router();
 
 router.get("/:id", async (req, res) => {
@@ -17,7 +17,7 @@ router.get("/:id", async (req, res) => {
   res.setHeader("Content-Type", attachment.mimeType);
   res.setHeader(
     "Content-Disposition",
-    `inline; filename="${attachment.filename}"`
+    `inline; filename="${attachment.filename}"`,
   );
 
   res.send(Buffer.from(attachment.data));

@@ -2,16 +2,24 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../prismaClient.js";
+import { invalidateUserCache } from "../middlewares/authMiddleware.js";
 
+// ⚠ SECURITY NOTE: passwords are stored and compared in plain text because
+// the admin Users page displays them. Move to bcrypt (already a dependency)
+// and drop the "show password" feature as soon as the business allows it.
 
-const generateToken = (id) => {
-    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-};
+const generateToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
+const normalizeEmail = (email) =>
+  String(email || "")
+    .trim()
+    .toLowerCase();
 
 export const registerUser = async (req, res) => {
   try {
-    const { email, password, empId, name, jobRole, location } = req.body;
+    const { password, empId, name, jobRole, location } = req.body;
+    const email = normalizeEmail(req.body.email);
 
     if (!email || !password || !name || !jobRole) {
       return res.status(400).json({
@@ -19,7 +27,10 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    const exists = await prisma.user.findUnique({ where: { email } });
+    const exists = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
     if (exists) {
       return res.status(400).json({ error: "User already exists" });
     }
@@ -32,7 +43,7 @@ export const registerUser = async (req, res) => {
         name,
         jobRole,
         location,
-        isActive: true
+        isActive: true,
       },
     });
 
@@ -43,100 +54,72 @@ export const registerUser = async (req, res) => {
       name: user.name,
       jobRole: user.jobRole,
     });
-
   } catch (err) {
+    if (err.code === "P2002") {
+      return res
+        .status(400)
+        .json({ error: "Email or Employee ID already exists" });
+    }
     console.error("Register error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error during registration" });
   }
 };
 
-
 export const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body.email || "").trim();
+    const { password } = req.body;
 
-    // ✅ Validate input
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
 
-    // ✅ Find user by email
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        jobRole: true,
-        empId: true,
-        password: true,
-        isActive: true,
-      }
-    });
+    const select = {
+      id: true,
+      email: true,
+      name: true,
+      jobRole: true,
+      empId: true,
+      password: true,
+      isActive: true,
+    };
 
-    if (!user) {
+    // Exact match uses the unique index. The case-insensitive fallback only
+    // runs on a miss, for accounts created before emails were lower-cased.
+    const user =
+      (await prisma.user.findUnique({ where: { email }, select })) ||
+      (await prisma.user.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+        select,
+      }));
+
+    // Same message for "no user" and "wrong password" — don't reveal which.
+    if (!user || typeof password !== "string" || password !== user.password) {
       return res.status(400).json({ error: "Invalid email or password" });
     }
 
-    // 🔍 DEBUG: Log user data
-    console.log("===== LOGIN DEBUG =====");
-    console.log("User found:", email);
-    console.log("User ID:", user.id);
-    console.log("User name:", user.name);
-    console.log("User jobRole:", user.jobRole);
-    console.log("User isActive:", user.isActive);
-    console.log("Type of isActive:", typeof user.isActive);
-    console.log("======================");
-
-    // ✅ Check if account is active
-    if (user.isActive === false || user.isActive === 0 || user.isActive === "false" || user.isActive === "0" || !user.isActive) {
-      console.log("❌ User account is inactive");
+    if (!user.isActive) {
       return res.status(403).json({
         error: "Your account is inactive. Please contact admin.",
       });
     }
 
-    console.log("✅ Account is active");
-
-    // ✅ Password check (plain text comparison)
-    const isMatch = password === user.password;
-    if (!isMatch) {
-      console.log("❌ Password mismatch");
-      return res.status(400).json({ error: "Invalid email or password" });
-    }
-
-    console.log("✅ Password matched");
-
-    // ✅ Generate JWT token
     const token = generateToken(user.id);
 
-    console.log("✅ Token generated, sending response");
-    console.log("Response will include:");
-    console.log("- id:", user.id);
-    console.log("- email:", user.email);
-    console.log("- name:", user.name);
-    console.log("- jobRole:", user.jobRole);
-
-    // ✅ CRITICAL: Return ALL user fields at root level
-    // This ensures frontend receives complete user data
-    res.json({
+    return res.json({
       token,
       id: user.id,
       email: user.email,
-      name: user.name || email.split('@')[0],           // ✅ Fallback to email prefix if name is null
-      jobRole: String(user.jobRole || "user").trim(),   // ✅ Ensure it's always a string, default to "user"
+      name: user.name || user.email.split("@")[0],
+      jobRole: String(user.jobRole || "user").trim(),
       empId: user.empId,
       message: "Login successful",
     });
-
-    console.log("✅ Response sent successfully");
-
   } catch (err) {
     console.error("❌ Login error:", err);
     res.status(500).json({ error: "Server error during login" });
   }
 };
-
 
 // ✅ NEW: Get current logged-in user details
 export const getCurrentUser = async (req, res) => {
@@ -168,18 +151,16 @@ export const getCurrentUser = async (req, res) => {
     res.json({
       id: user.id,
       email: user.email,
-      name: user.name || user.email.split('@')[0],
+      name: user.name || user.email.split("@")[0],
       jobRole: String(user.jobRole || "user").trim(),
       empId: user.empId,
       isActive: user.isActive,
     });
-
   } catch (err) {
     console.error("Get current user error:", err);
     res.status(500).json({ error: "Server error" });
   }
 };
-
 
 export const getAllUsers = async (req, res) => {
   try {
@@ -197,24 +178,23 @@ export const getAllUsers = async (req, res) => {
         updatedAt: true,
       },
       orderBy: {
-        createdAt: 'desc'
-      }
+        createdAt: "desc",
+      },
     });
 
     // ✅ Format users for frontend
-    const formattedUsers = users.map(user => ({
+    const formattedUsers = users.map((user) => ({
       ...user,
       jobRole: String(user.jobRole || "user").trim(),
-      name: user.name || user.email.split('@')[0],
+      name: user.name || user.email.split("@")[0],
     }));
 
     res.json(formattedUsers);
   } catch (err) {
     console.error("Get all users error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error" });
   }
 };
-
 
 export const updateUser = async (req, res) => {
   try {
@@ -224,7 +204,8 @@ export const updateUser = async (req, res) => {
       return res.status(400).json({ error: "User ID is missing" });
     }
 
-    const { name, email, password, empId, jobRole, location } = req.body;
+    const { name, password, empId, jobRole, location } = req.body;
+    const email = req.body.email ? normalizeEmail(req.body.email) : undefined;
 
     // ✅ Check if user exists
     const existingUser = await prisma.user.findUnique({
@@ -239,10 +220,13 @@ export const updateUser = async (req, res) => {
     if (email && email !== existingUser.email) {
       const emailExists = await prisma.user.findUnique({
         where: { email },
+        select: { id: true },
       });
 
       if (emailExists) {
-        return res.status(400).json({ error: "Email already in use by another user" });
+        return res
+          .status(400)
+          .json({ error: "Email already in use by another user" });
       }
     }
 
@@ -271,10 +255,10 @@ export const updateUser = async (req, res) => {
         location: true,
         empId: true,
         isActive: true,
-      }
+      },
     });
 
-    console.log("✅ User updated:", user.email);
+    invalidateUserCache(id);
 
     res.json({
       message: "User updated successfully",
@@ -284,11 +268,15 @@ export const updateUser = async (req, res) => {
       },
     });
   } catch (error) {
+    if (error.code === "P2002") {
+      return res
+        .status(400)
+        .json({ error: "Email or Employee ID already in use" });
+    }
     console.error("Update user error:", error);
     res.status(500).json({ error: "Server error during update" });
   }
 };
-
 
 export const deleteUser = async (req, res) => {
   try {
@@ -299,67 +287,43 @@ export const deleteUser = async (req, res) => {
     }
 
     // ✅ Check if user exists
-    const existingUser = await prisma.user.findUnique({ 
+    const existingUser = await prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
         email: true,
         name: true,
-      }
+      },
     });
 
     if (!existingUser) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // ✅ Find all email accounts belonging to this user
-    const emailAccounts = await prisma.emailAccount.findMany({
-      where: { userId: id },
-      select: { id: true }
-    });
+    // EmailAccount, Campaign, Lead, ScheduledMessage, EmailAccountGroup all
+    // cascade from User in schema.prisma. EmailMessage cascades from
+    // EmailAccount. Tags do NOT cascade, so remove them explicitly.
+    // One transaction: either everything goes or nothing does.
+    await prisma.$transaction([
+      prisma.tag.deleteMany({ where: { userId: id } }),
+      prisma.user.delete({ where: { id } }),
+    ]);
 
-    const emailAccountIds = emailAccounts.map(acc => acc.id);
+    invalidateUserCache(id);
 
-    // ✅ Delete related records in correct order (to respect foreign key constraints)
-    if (emailAccountIds.length > 0) {
-      // 1. Delete all email messages associated with these email accounts
-      await prisma.emailMessage.deleteMany({
-        where: {
-          emailAccountId: { in: emailAccountIds }
-        }
-      });
-      console.log(`🗑️ Deleted email messages for ${emailAccountIds.length} email account(s)`);
-
-      // 2. Delete all email accounts
-      await prisma.emailAccount.deleteMany({
-        where: { userId: id }
-      });
-      console.log(`🗑️ Deleted ${emailAccountIds.length} email account(s)`);
-    }
-
-    // 3. Delete any other related records (add more if needed based on your schema)
-    // Example: If you have other tables with userId foreign key
-    // await prisma.otherTable.deleteMany({ where: { userId: id } });
-
-    // 4. Finally, delete the user
-    await prisma.user.delete({ where: { id } });
-
-    console.log("✅ User deleted:", existingUser.email);
-
-    res.json({ 
+    res.json({
       message: "User and all related data deleted successfully",
       deletedUser: {
         id: existingUser.id,
         email: existingUser.email,
         name: existingUser.name,
-      }
+      },
     });
   } catch (err) {
     console.error("Delete user error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error during delete" });
   }
 };
-
 
 export const toggleUserStatus = async (req, res) => {
   try {
@@ -370,14 +334,14 @@ export const toggleUserStatus = async (req, res) => {
     }
 
     // ✅ Find user
-    const user = await prisma.user.findUnique({ 
+    const user = await prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
         email: true,
         name: true,
         isActive: true,
-      }
+      },
     });
 
     if (!user) {
@@ -397,20 +361,20 @@ export const toggleUserStatus = async (req, res) => {
         jobRole: true,
         empId: true,
         isActive: true,
-      }
+      },
     });
 
-    console.log(`✅ User status toggled: ${updatedUser.email} - isActive: ${updatedUser.isActive}`);
+    invalidateUserCache(id);
 
     res.json({
-      message: `User ${updatedUser.isActive ? 'activated' : 'deactivated'} successfully`,
+      message: `User ${updatedUser.isActive ? "activated" : "deactivated"} successfully`,
       user: {
         ...updatedUser,
         jobRole: String(updatedUser.jobRole || "user").trim(),
-      }
+      },
     });
   } catch (err) {
     console.error("Toggle status error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error" });
   }
 };

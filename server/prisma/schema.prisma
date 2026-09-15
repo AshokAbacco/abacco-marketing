@@ -135,7 +135,7 @@ model Conversation {
   scheduled       ScheduledMessage[]
   ConversationTag ConversationTag[]
 
-  @@index([emailAccountId])
+  @@index([emailAccountId, lastMessageAt])
 }
 
 model EmailMessage {
@@ -185,6 +185,9 @@ model EmailMessage {
   // Opening a thread (GET /conversations/:id/messages) filters by
   // conversationId alone, which the composite index above can't serve
   @@index([conversationId, sentAt])
+  // Follow-up threading lookup (one query per follow-up email):
+  //   WHERE emailAccountId = ? AND toEmail = ? ORDER BY sentAt ASC
+  @@index([emailAccountId, toEmail, sentAt])
 }
 
 model Attachment {
@@ -227,6 +230,9 @@ model ScheduledMessage {
 
   @@index([conversationId])
   @@index([emailAccountId])
+  // Due-message polling: WHERE status = 'pending' AND sendAt <= now
+  @@index([status, sendAt])
+  @@index([userId])
 }
 
 model SyncState {
@@ -238,7 +244,9 @@ model SyncState {
 
   account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  @@index([accountId])
+  // IMAP sync reads/writes lastUid by (accountId, folder) for every folder
+  // of every account, every tick.
+  @@index([accountId, folder])
 }
 
 model EmailFolder {
@@ -347,6 +355,16 @@ model Campaign {
   user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([name, userId])
+  // ── Performance indexes ──
+  // Worker resume tick + locked-account checks: WHERE status = 'sending'
+  @@index([status])
+  // Scheduler: WHERE status = 'scheduled' AND scheduledAt <= now
+  @@index([status, scheduledAt])
+  // Campaign list / dashboard: WHERE userId = ? ORDER BY createdAt DESC
+  @@index([userId, createdAt])
+  // Follow-up chain lookups + cleanup job
+  @@index([parentCampaignId])
+  @@index([sendType, status])
 }
 
 model CampaignRecipient {
@@ -365,11 +383,22 @@ model CampaignRecipient {
   lastTriedAt   DateTime?
   updatedAt     DateTime?
   campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // NOTE: the old @@index([campaignId]) was removed — it is a prefix of
+  // @@unique([campaignId, email]) and @@index([campaignId, status]), so it
+  // only cost write time on every insert/update.
 
   @@unique([campaignId, email])
-  @@index([campaignId])
   @@index([campaignId, status])
   @@index([status, sentAt])
+  // Sender loop: per-batch count + fetch
+  //   WHERE campaignId = ? AND accountId = ? AND status = 'pending' ORDER BY id
+  // Also serves the progress groupBy (campaignId, accountId, status).
+  @@index([campaignId, accountId, status, id])
+  // Stuck-email recovery sweep (every 2 min):
+  //   WHERE status = 'processing' AND updatedAt < ?
+  @@index([status, updatedAt])
+  // Busy-account lookup: DISTINCT accountId for sending campaigns
+  @@index([accountId])
 }
 
 model PitchTemplate {
@@ -380,6 +409,8 @@ model PitchTemplate {
   bodyHtml  String
   type      String
   createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Lead {
@@ -423,6 +454,9 @@ model Lead {
   headerText String?   @db.Text
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([email])
 }
 
 enum LeadType {
@@ -443,6 +477,8 @@ model DailyEmailLog {
   createdAt DateTime @default(now())
   userId    String
 
+  // The unique constraint already creates a (userId, sentAt) index; the old
+  // duplicate @@index was removed because every send updates this row.
   @@unique([userId, sentAt])
-  @@index([userId, sentAt])
+  @@index([sentAt])
 }

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useDailyLimit } from "./DailyLimitBanner";
+import { useDailyLimit } from "./dailyLimitStore";
+import { startVisiblePolling } from "../../utils/polling";
 import { AlertTriangle } from "lucide-react";
 import {
   Send,
@@ -28,7 +29,7 @@ import {
   Zap,
   Users,
   Target,
-  Sparkles
+  Sparkles,
 } from "lucide-react";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -60,28 +61,72 @@ const FONT_SIZES = [
 const COLOR_FAMILIES = [
   {
     name: "Black",
-    colors: ["#000000", "#1a1a1a", "#333333", "#4d4d4d", "#666666", "#808080", "#999999", "#b3b3b3"]
+    colors: [
+      "#000000",
+      "#1a1a1a",
+      "#333333",
+      "#4d4d4d",
+      "#666666",
+      "#808080",
+      "#999999",
+      "#b3b3b3",
+    ],
   },
   {
     name: "Blue",
-    colors: ["#35516e", "#0d2741", "#007dfa", "#2189f1", "#1a8cff", "#1364b6", "#07437a", "#032442"]
+    colors: [
+      "#35516e",
+      "#0d2741",
+      "#007dfa",
+      "#2189f1",
+      "#1a8cff",
+      "#1364b6",
+      "#07437a",
+      "#032442",
+    ],
   },
   {
     name: "Yellow",
-    colors: ["#ffffe6", "#ffffcc", "#ffffb3", "#ffff99", "#ffff80", "#ffff66", "#ffff4d", "#ffff33"]
+    colors: [
+      "#ffffe6",
+      "#ffffcc",
+      "#ffffb3",
+      "#ffff99",
+      "#ffff80",
+      "#ffff66",
+      "#ffff4d",
+      "#ffff33",
+    ],
   },
   {
     name: "Red",
-    colors: ["#521212", "#a04949", "#da8c8c", "#c25454", "#fa4f4f", "#e92424", "#e60e0e", "#920303"]
+    colors: [
+      "#521212",
+      "#a04949",
+      "#da8c8c",
+      "#c25454",
+      "#fa4f4f",
+      "#e92424",
+      "#e60e0e",
+      "#920303",
+    ],
   },
   {
     name: "Green",
-    colors: ["#e6ffe6", "#ccffcc", "#b3ffb3", "#99ff99", "#80ff80", "#66ff66", "#4dff4d", "#33ff33"]
-  }
+    colors: [
+      "#e6ffe6",
+      "#ccffcc",
+      "#b3ffb3",
+      "#99ff99",
+      "#80ff80",
+      "#66ff66",
+      "#4dff4d",
+      "#33ff33",
+    ],
+  },
 ];
 
-const LIMIT_OPTIONS = [10,20, 30, 40, 50,60, 70, 80, 100, 150, 200];
-
+const LIMIT_OPTIONS = [10, 20, 30, 40, 50, 60, 70, 80, 100, 150, 200];
 
 export default function CreateCampaign() {
   const [accounts, setAccounts] = useState([]);
@@ -101,12 +146,12 @@ export default function CreateCampaign() {
   const [nameError, setNameError] = useState("");
   const [showFromDropdown, setShowFromDropdown] = useState(false);
   const [showPitchDropdown, setShowPitchDropdown] = useState(false);
-  const [lockedAccounts, setLockedAccounts] = useState([]);          // busy (campaign sending)
-  const [lockedLoading, setLockedLoading] = useState(true);         // true until first fetch completes
-  const fetchLockedRef = useRef(null);                               // stable ref so dropdown can trigger it
+  const [lockedAccounts, setLockedAccounts] = useState([]); // busy (campaign sending)
+  const [lockedLoading, setLockedLoading] = useState(true); // true until first fetch completes
+  const fetchLockedRef = useRef(null); // stable ref so dropdown can trigger it
   const [customLimits, setCustomLimits] = useState({});
   const [customLimitEditing, setCustomLimitEditing] = useState({}); // accountId -> boolean, shows manual number input
-  const [customLimitDraft, setCustomLimitDraft] = useState({});     // accountId -> string, raw text while typing
+  const [customLimitDraft, setCustomLimitDraft] = useState({}); // accountId -> string, raw text while typing
 
   const [campaignType, setCampaignType] = useState("immediate");
   const [subject, setSubject] = useState("");
@@ -133,7 +178,6 @@ export default function CreateCampaign() {
   // ── Daily limit ────────────────────────────────────────────
   const dailyLimit = useDailyLimit();
 
-
   const formatText = (command, value = null) => {
     document.execCommand(command, false, value);
     editorRef.current?.focus();
@@ -152,19 +196,19 @@ export default function CreateCampaign() {
 
     const range = selection.getRangeAt(0);
     const selectedContent = range.extractContents();
-    
-    const span = document.createElement('span');
+
+    const span = document.createElement("span");
     span.style.fontSize = size;
     span.appendChild(selectedContent);
-    
+
     range.insertNode(span);
-    
+
     editorRef.current?.focus();
   };
 
   const applyColor = (color) => {
     setCurrentColor(color);
-    
+
     const selection = window.getSelection();
     if (!selection.rangeCount) {
       if (editorRef.current) {
@@ -174,19 +218,19 @@ export default function CreateCampaign() {
       return;
     }
 
-    document.execCommand('foreColor', false, color);
-    
+    document.execCommand("foreColor", false, color);
+
     if (!selection.isCollapsed) {
       const range = selection.getRangeAt(0);
       const selectedContent = range.extractContents();
-      
-      const span = document.createElement('span');
+
+      const span = document.createElement("span");
       span.style.color = color;
       span.appendChild(selectedContent);
-      
+
       range.insertNode(span);
     }
-    
+
     setShowColorPicker(false);
     editorRef.current?.focus();
   };
@@ -213,9 +257,12 @@ export default function CreateCampaign() {
     const fetchLocked = async () => {
       try {
         const token = localStorage.getItem("token");
-        const res = await fetch(`${API_BASE_URL}/api/campaigns/accounts/locked`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(
+          `${API_BASE_URL}/api/campaigns/accounts/locked`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
         if (!res.ok) {
           console.error("Failed to fetch locked accounts:", res.status);
           return;
@@ -242,17 +289,20 @@ export default function CreateCampaign() {
     // Run immediately on mount — no initial delay
     fetchLocked();
 
-    // Then poll every 5 seconds
-    const timer = setInterval(fetchLocked, 5000);
+    // Then poll every 15 seconds while the tab is visible. The dropdown
+    // also refreshes on open (fetchLockedRef), so this can be relaxed.
+    const stopPolling = startVisiblePolling(fetchLocked, 15000);
     return () => {
       isMounted = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, []);
 
   useEffect(() => {
     if (campaignType === "immediate") {
-      setSelectedFroms(prev => prev.filter(id => !lockedAccounts.includes(id)));
+      setSelectedFroms((prev) =>
+        prev.filter((id) => !lockedAccounts.includes(id)),
+      );
     }
   }, [lockedAccounts, campaignType]);
 
@@ -286,7 +336,9 @@ export default function CreateCampaign() {
           setAccountGroups(data.data || []);
           // Default: expand all groups so user sees accounts immediately
           const expanded = {};
-          (data.data || []).forEach(g => { expanded[g.id] = true; });
+          (data.data || []).forEach((g) => {
+            expanded[g.id] = true;
+          });
           setExpandedGroupsInDropdown(expanded);
         }
       } catch (err) {
@@ -305,7 +357,7 @@ export default function CreateCampaign() {
         });
         const data = await res.json();
         if (data.success) {
-          const freshPitches = data.data.filter(p => p.type === "fresh");
+          const freshPitches = data.data.filter((p) => p.type === "fresh");
           setPitches(freshPitches);
         }
       } catch (err) {
@@ -325,7 +377,7 @@ export default function CreateCampaign() {
         const data = await res.json();
         if (data.success) {
           const names = (data.data || [])
-            .map(c => c.name?.toLowerCase())
+            .map((c) => c.name?.toLowerCase())
             .filter(Boolean);
           setExistingNames(names);
         }
@@ -349,24 +401,17 @@ export default function CreateCampaign() {
     setEditingRole(false);
   };
 
- 
-
   useEffect(() => {
+    const nowIST = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+    );
 
-  const nowIST = new Date(
+    const hours = String(nowIST.getHours()).padStart(2, "0");
 
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    const minutes = String(nowIST.getMinutes()).padStart(2, "0");
 
-  );
- 
-  const hours = String(nowIST.getHours()).padStart(2, "0");
-
-  const minutes = String(nowIST.getMinutes()).padStart(2, "0");
- 
-  setScheduleTime(`${hours}:${minutes}`);
-
-}, []);
- 
+    setScheduleTime(`${hours}:${minutes}`);
+  }, []);
 
   const handleSend = async () => {
     try {
@@ -378,7 +423,7 @@ export default function CreateCampaign() {
       if (!campaignName.trim()) {
         return setErrorMsg("Campaign name is required");
       }
-      const subjectList = subject.split("\n").filter(s => s.trim());
+      const subjectList = subject.split("\n").filter((s) => s.trim());
       if (!subjectList.length) {
         return setErrorMsg("At least one subject is required");
       }
@@ -391,13 +436,16 @@ export default function CreateCampaign() {
         if (parsedEmails.length > dailyLimit.remaining) {
           return setErrorMsg(
             `⚠️ Daily quota reached. You only have ${dailyLimit.remaining.toLocaleString()} email credits remaining today (limit: ${dailyLimit.dailyLimit.toLocaleString()}/day). ` +
-            `This campaign needs ${parsedEmails.length.toLocaleString()} recipients. Please reduce recipients or try again tomorrow.`
+              `This campaign needs ${parsedEmails.length.toLocaleString()} recipients. Please reduce recipients or try again tomorrow.`,
           );
         }
       }
       // ───────────────────────────────────────────────────────
 
-      if (!editorRef.current?.innerHTML?.trim() && selectedPitchIds.length === 0) {
+      if (
+        !editorRef.current?.innerHTML?.trim() &&
+        selectedPitchIds.length === 0
+      ) {
         return setErrorMsg("Email content is empty");
       }
       if (campaignType === "scheduled" && (!scheduleDate || !scheduleTime)) {
@@ -421,9 +469,12 @@ export default function CreateCampaign() {
           fromAccountIds: selectedFroms,
           pitchIds: selectedPitchIds,
           sendType: campaignType,
-          scheduledAt: campaignType === "scheduled" ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null,
+          scheduledAt:
+            campaignType === "scheduled"
+              ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString()
+              : null,
           customLimits: customLimits,
-          senderRole, 
+          senderRole,
         }),
       });
 
@@ -432,7 +483,11 @@ export default function CreateCampaign() {
         throw new Error(data.message || "Failed to create campaign");
       }
 
-      alert(campaignType === "immediate" ? "Campaign sent successfully! It will continue sending automatically." : "Campaign scheduled successfully!");
+      alert(
+        campaignType === "immediate"
+          ? "Campaign sent successfully! It will continue sending automatically."
+          : "Campaign scheduled successfully!",
+      );
       window.location.href = "/campaigns";
       setSubject("");
       setManualEmails("");
@@ -442,10 +497,9 @@ export default function CreateCampaign() {
       setCampaignName("");
       setCustomLimits({});
       if (editorRef.current) editorRef.current.innerHTML = "";
-
     } catch (err) {
-        console.error(err);
-        setErrorMsg(err.message || "Something went wrong");
+      console.error(err);
+      setErrorMsg(err.message || "Something went wrong");
     } finally {
       setSending(false);
     }
@@ -500,7 +554,7 @@ export default function CreateCampaign() {
     gsuite: 80,
     rediff: 40,
     amazon: 60,
-    custom: 60
+    custom: 60,
   };
 
   const getDefaultLimit = (provider) => {
@@ -512,14 +566,14 @@ export default function CreateCampaign() {
     if (customLimits[accountId]) {
       return customLimits[accountId];
     }
-    const acc = accounts.find(a => a.id === accountId);
+    const acc = accounts.find((a) => a.id === accountId);
     if (!acc) return 60;
     return getDefaultLimit(acc.provider);
   };
 
   const getCapacity = () => {
     let total = 0;
-    selectedFroms.forEach(id => {
+    selectedFroms.forEach((id) => {
       total += getActualLimit(id);
     });
     return total;
@@ -528,26 +582,22 @@ export default function CreateCampaign() {
   const availableAccounts =
     campaignType === "scheduled"
       ? accounts
-      : accounts.filter(
-          acc => !lockedAccounts.includes(Number(acc.id))
-        );
+      : accounts.filter((acc) => !lockedAccounts.includes(Number(acc.id)));
 
   const lockedAccountsList =
     campaignType === "scheduled"
       ? []
-      : accounts.filter(acc => lockedAccounts.includes(Number(acc.id)));
+      : accounts.filter((acc) => lockedAccounts.includes(Number(acc.id)));
 
   const lockedAccountsCount = lockedAccountsList.length;
 
   const subjectCount = subject
     .split("\n")
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean).length;
-
 
   useEffect(() => {
     const handleClickOutside = (event) => {
-
       // Close From Dropdown
       if (
         fromDropdownRef.current &&
@@ -572,17 +622,17 @@ export default function CreateCampaign() {
     };
   }, []);
 
-
-
-
-
-
-
   return (
     <div className="space-y-6 p-6 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 min-h-screen relative overflow-hidden">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 right-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '5s'}}></div>
-        <div className="absolute bottom-20 left-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse" style={{animationDuration: '7s', animationDelay: '2s'}}></div>
+        <div
+          className="absolute top-20 right-1/4 w-96 h-96 bg-sky-200/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDuration: "5s" }}
+        ></div>
+        <div
+          className="absolute bottom-20 left-1/4 w-96 h-96 bg-blue-200/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDuration: "7s", animationDelay: "2s" }}
+        ></div>
       </div>
 
       <div className="relative z-10 flex justify-between items-center">
@@ -597,7 +647,9 @@ export default function CreateCampaign() {
             <h1 className="text-4xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent py-2">
               Create Campaign
             </h1>
-            <p className="text-sm text-sky-600 mt-1 font-semibold">Send immediate or scheduled email campaigns (continuous sending)</p>
+            <p className="text-sm text-sky-600 mt-1 font-semibold">
+              Send immediate or scheduled email campaigns (continuous sending)
+            </p>
           </div>
         </div>
       </div>
@@ -612,7 +664,10 @@ export default function CreateCampaign() {
           }`}
         >
           <div className="flex items-center gap-2">
-            <Zap className={`${campaignType === "immediate" ? "animate-pulse" : ""}`} size={18} />
+            <Zap
+              className={`${campaignType === "immediate" ? "animate-pulse" : ""}`}
+              size={18}
+            />
             Immediate Campaign
           </div>
         </button>
@@ -646,7 +701,9 @@ export default function CreateCampaign() {
                   const value = e.target.value;
                   setCampaignName(value);
                   if (existingNames.includes(value.trim().toLowerCase())) {
-                    setNameError("Campaign name already exists. Please use another name.");
+                    setNameError(
+                      "Campaign name already exists. Please use another name.",
+                    );
                   } else {
                     setNameError("");
                   }
@@ -654,7 +711,11 @@ export default function CreateCampaign() {
                 placeholder="Association Name Outreach"
                 className="w-full border border-sky-200 rounded-xl p-3.5 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 font-medium hover:border-sky-300 transition-colors"
               />
-              {nameError && <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded-lg border border-red-200 font-semibold">{nameError}</p>}
+              {nameError && (
+                <p className="text-xs text-red-600 mt-2 bg-red-50 p-2 rounded-lg border border-red-200 font-semibold">
+                  {nameError}
+                </p>
+              )}
             </div>
 
             <div ref={fromDropdownRef} className="relative">
@@ -688,7 +749,7 @@ export default function CreateCampaign() {
 
               <button
                 type="button"
-                 onClick={() => {
+                onClick={() => {
                   const opening = !showFromDropdown;
                   setShowFromDropdown(opening);
                   setShowPitchDropdown(false);
@@ -697,16 +758,18 @@ export default function CreateCampaign() {
                     setLockedLoading(true);
                     fetchLockedRef.current?.();
                   }
-                 }}
-                
+                }}
                 className="w-full border border-sky-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-sky-300 transition-all font-medium"
               >
                 <span className="text-slate-700">
-                  {selectedFroms.length > 0 
-                    ? `${selectedFroms.length} account(s) selected` 
+                  {selectedFroms.length > 0
+                    ? `${selectedFroms.length} account(s) selected`
                     : "Select From Emails"}
                 </span>
-                <ChevronDown size={18} className={`text-sky-600 transition-transform ${showFromDropdown ? 'rotate-180' : ''}`} />
+                <ChevronDown
+                  size={18}
+                  className={`text-sky-600 transition-transform ${showFromDropdown ? "rotate-180" : ""}`}
+                />
               </button>
 
               {showFromDropdown && (
@@ -714,11 +777,15 @@ export default function CreateCampaign() {
                   {(() => {
                     // Build grouped view mirroring the sidebar structure
                     const ungrouped = availableAccounts.filter(
-                      a => !a.groupId || !accountGroups.find(g => g.id === a.groupId)
+                      (a) =>
+                        !a.groupId ||
+                        !accountGroups.find((g) => g.id === a.groupId),
                     );
-                    const groupsWithAccounts = accountGroups.map(group => ({
+                    const groupsWithAccounts = accountGroups.map((group) => ({
                       ...group,
-                      accounts: availableAccounts.filter(a => a.groupId === group.id),
+                      accounts: availableAccounts.filter(
+                        (a) => a.groupId === group.id,
+                      ),
                     }));
 
                     const renderAccountRow = (acc) => (
@@ -733,7 +800,9 @@ export default function CreateCampaign() {
                             if (e.target.checked) {
                               setSelectedFroms([...selectedFroms, acc.id]);
                             } else {
-                              setSelectedFroms(selectedFroms.filter(id => id !== acc.id));
+                              setSelectedFroms(
+                                selectedFroms.filter((id) => id !== acc.id),
+                              );
                             }
                           }}
                           className="w-4 h-4 text-sky-600 border-sky-300 rounded focus:ring-sky-500"
@@ -742,25 +811,42 @@ export default function CreateCampaign() {
                           {acc.email.charAt(0).toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-slate-900 truncate">{acc.email}</p>
+                          <p className="text-sm font-semibold text-slate-900 truncate">
+                            {acc.email}
+                          </p>
                           <p className="text-xs text-sky-600 font-medium">
-                            {acc.provider?.toUpperCase()} • Limit: {getActualLimit(acc.id)}/hr
+                            {acc.provider?.toUpperCase()} • Limit:{" "}
+                            {getActualLimit(acc.id)}/hr
                           </p>
                         </div>
                         {(() => {
                           const currentVal = customLimits[acc.id];
-                          const isPreset = currentVal != null && LIMIT_OPTIONS.includes(currentVal);
-                          const isCustomActive = !!customLimitEditing[acc.id] || (currentVal != null && !isPreset);
-                          const selectValue = isCustomActive ? "custom" : (currentVal || "");
+                          const isPreset =
+                            currentVal != null &&
+                            LIMIT_OPTIONS.includes(currentVal);
+                          const isCustomActive =
+                            !!customLimitEditing[acc.id] ||
+                            (currentVal != null && !isPreset);
+                          const selectValue = isCustomActive
+                            ? "custom"
+                            : currentVal || "";
 
                           const commitCustomValue = () => {
                             const raw = customLimitDraft[acc.id];
                             const parsed = parseInt(raw, 10);
                             const newLimits = { ...customLimits };
-                            if (raw === "" || raw === undefined || isNaN(parsed) || parsed <= 0) {
+                            if (
+                              raw === "" ||
+                              raw === undefined ||
+                              isNaN(parsed) ||
+                              parsed <= 0
+                            ) {
                               // nothing valid typed — drop back to default
                               delete newLimits[acc.id];
-                              setCustomLimitEditing({ ...customLimitEditing, [acc.id]: false });
+                              setCustomLimitEditing({
+                                ...customLimitEditing,
+                                [acc.id]: false,
+                              });
                             } else {
                               // clamp to a sane range so no one fat-fingers 99999/hr
                               newLimits[acc.id] = Math.min(parsed, 999);
@@ -769,17 +855,31 @@ export default function CreateCampaign() {
                           };
 
                           return (
-                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <div
+                              className="flex items-center gap-1.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               <select
                                 value={selectValue}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === "custom") {
-                                    setCustomLimitDraft({ ...customLimitDraft, [acc.id]: currentVal ? String(currentVal) : "" });
-                                    setCustomLimitEditing({ ...customLimitEditing, [acc.id]: true });
+                                    setCustomLimitDraft({
+                                      ...customLimitDraft,
+                                      [acc.id]: currentVal
+                                        ? String(currentVal)
+                                        : "",
+                                    });
+                                    setCustomLimitEditing({
+                                      ...customLimitEditing,
+                                      [acc.id]: true,
+                                    });
                                     return;
                                   }
-                                  setCustomLimitEditing({ ...customLimitEditing, [acc.id]: false });
+                                  setCustomLimitEditing({
+                                    ...customLimitEditing,
+                                    [acc.id]: false,
+                                  });
                                   const newLimits = { ...customLimits };
                                   if (val) {
                                     newLimits[acc.id] = parseInt(val);
@@ -790,9 +890,13 @@ export default function CreateCampaign() {
                                 }}
                                 className="text-xs border border-sky-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-sky-500 bg-sky-50 font-semibold"
                               >
-                                <option value="">Default ({getDefaultLimit(acc.provider)})</option>
-                                {LIMIT_OPTIONS.map(opt => (
-                                  <option key={opt} value={opt}>{opt}/hr</option>
+                                <option value="">
+                                  Default ({getDefaultLimit(acc.provider)})
+                                </option>
+                                {LIMIT_OPTIONS.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}/hr
+                                  </option>
                                 ))}
                                 <option value="custom">Custom…</option>
                               </select>
@@ -804,9 +908,15 @@ export default function CreateCampaign() {
                                   max={999}
                                   autoFocus
                                   placeholder="e.g. 25"
-                                  value={customLimitDraft[acc.id] ?? (currentVal || "")}
+                                  value={
+                                    customLimitDraft[acc.id] ??
+                                    (currentVal || "")
+                                  }
                                   onChange={(e) =>
-                                    setCustomLimitDraft({ ...customLimitDraft, [acc.id]: e.target.value })
+                                    setCustomLimitDraft({
+                                      ...customLimitDraft,
+                                      [acc.id]: e.target.value,
+                                    })
                                   }
                                   onBlur={commitCustomValue}
                                   onKeyDown={(e) => {
@@ -827,44 +937,69 @@ export default function CreateCampaign() {
                     return (
                       <div className="p-2">
                         {/* Grouped accounts — only show groups that have at least one available account */}
-                        {groupsWithAccounts.filter(group => group.accounts.length > 0).map(group => {
-                          const isExpanded = expandedGroupsInDropdown[group.id] !== false;
-                          const groupSelectedCount = group.accounts.filter(a => selectedFroms.includes(a.id)).length;
-                          return (
-                            <div key={group.id} className="mb-1">
-                              {/* Group header row */}
-                              <button
-                                type="button"
-                                onClick={() => setExpandedGroupsInDropdown(prev => ({ ...prev, [group.id]: !isExpanded }))}
-                                className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sky-50 transition"
-                              >
-                                <span
-                                  className="w-5 h-5 rounded flex items-center justify-center text-white flex-shrink-0"
-                                  style={{ backgroundColor: group.color || "#10b981" }}
+                        {groupsWithAccounts
+                          .filter((group) => group.accounts.length > 0)
+                          .map((group) => {
+                            const isExpanded =
+                              expandedGroupsInDropdown[group.id] !== false;
+                            const groupSelectedCount = group.accounts.filter(
+                              (a) => selectedFroms.includes(a.id),
+                            ).length;
+                            return (
+                              <div key={group.id} className="mb-1">
+                                {/* Group header row */}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedGroupsInDropdown((prev) => ({
+                                      ...prev,
+                                      [group.id]: !isExpanded,
+                                    }))
+                                  }
+                                  className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sky-50 transition"
                                 >
-                                  <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.764c.958 0 1.76.56 2.09 1.328L9 4H13.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z"/></svg>
-                                </span>
-                                <span className="text-xs font-bold text-slate-700 flex-1 text-left">{group.name}</span>
-                                {groupSelectedCount > 0 && (
-                                  <span className="text-[10px] bg-sky-100 text-sky-700 font-bold px-1.5 py-0.5 rounded-full">
-                                    {groupSelectedCount} selected
+                                  <span
+                                    className="w-5 h-5 rounded flex items-center justify-center text-white flex-shrink-0"
+                                    style={{
+                                      backgroundColor: group.color || "#10b981",
+                                    }}
+                                  >
+                                    <svg
+                                      width="11"
+                                      height="11"
+                                      viewBox="0 0 16 16"
+                                      fill="currentColor"
+                                    >
+                                      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.764c.958 0 1.76.56 2.09 1.328L9 4H13.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+                                    </svg>
                                   </span>
-                                )}
-                                <span className="text-slate-400 text-xs">{isExpanded ? "▾" : "▸"}</span>
-                              </button>
-                              {/* Accounts under this group */}
-                              {isExpanded && (
-                                <div className="ml-4 pl-2 border-l-2 border-sky-100 space-y-0.5">
-                                  {group.accounts.length === 0 ? (
-                                    <p className="text-xs text-slate-400 px-3 py-2">No accounts in this group</p>
-                                  ) : (
-                                    group.accounts.map(renderAccountRow)
+                                  <span className="text-xs font-bold text-slate-700 flex-1 text-left">
+                                    {group.name}
+                                  </span>
+                                  {groupSelectedCount > 0 && (
+                                    <span className="text-[10px] bg-sky-100 text-sky-700 font-bold px-1.5 py-0.5 rounded-full">
+                                      {groupSelectedCount} selected
+                                    </span>
                                   )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
+                                  <span className="text-slate-400 text-xs">
+                                    {isExpanded ? "▾" : "▸"}
+                                  </span>
+                                </button>
+                                {/* Accounts under this group */}
+                                {isExpanded && (
+                                  <div className="ml-4 pl-2 border-l-2 border-sky-100 space-y-0.5">
+                                    {group.accounts.length === 0 ? (
+                                      <p className="text-xs text-slate-400 px-3 py-2">
+                                        No accounts in this group
+                                      </p>
+                                    ) : (
+                                      group.accounts.map(renderAccountRow)
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
 
                         {/* Ungrouped accounts */}
                         {ungrouped.length > 0 && (
@@ -872,7 +1007,9 @@ export default function CreateCampaign() {
                             {accountGroups.length > 0 && (
                               <div className="flex items-center gap-2 px-2 py-1 mb-1">
                                 <div className="flex-1 h-px bg-slate-100" />
-                                <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Ungrouped</span>
+                                <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                                  Ungrouped
+                                </span>
                                 <div className="flex-1 h-px bg-slate-100" />
                               </div>
                             )}
@@ -881,7 +1018,9 @@ export default function CreateCampaign() {
                         )}
 
                         {availableAccounts.length === 0 && (
-                          <p className="text-xs text-slate-400 text-center py-4">No available accounts</p>
+                          <p className="text-xs text-slate-400 text-center py-4">
+                            No available accounts
+                          </p>
                         )}
                       </div>
                     );
@@ -894,8 +1033,11 @@ export default function CreateCampaign() {
                         <div className="w-3 h-3 rounded-full bg-slate-200 animate-pulse" />
                         <div className="h-3 w-40 bg-slate-200 rounded animate-pulse" />
                       </div>
-                      {[1, 2].map(i => (
-                        <div key={i} className="flex items-center gap-3 p-3 rounded-lg mb-2 bg-slate-50">
+                      {[1, 2].map((i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-3 p-3 rounded-lg mb-2 bg-slate-50"
+                        >
                           <div className="w-4 h-4 rounded-full bg-slate-200 animate-pulse flex-shrink-0" />
                           <div className="flex-1 space-y-1.5">
                             <div className="h-3 w-48 bg-slate-200 rounded animate-pulse" />
@@ -914,15 +1056,19 @@ export default function CreateCampaign() {
                             <Lock size={12} />
                             Currently In Use (Unavailable)
                           </h4>
-                          {lockedAccountsList.map(acc => (
+                          {lockedAccountsList.map((acc) => (
                             <div
                               key={acc.id}
                               className="flex items-center gap-3 p-3 bg-red-50/50 rounded-lg opacity-60 mb-2"
                             >
                               <Lock size={14} className="text-red-500" />
                               <div className="flex-1">
-                                <p className="text-sm font-semibold text-slate-700">{acc.email}</p>
-                                <p className="text-xs text-red-600 font-medium">Busy sending another campaign</p>
+                                <p className="text-sm font-semibold text-slate-700">
+                                  {acc.email}
+                                </p>
+                                <p className="text-xs text-red-600 font-medium">
+                                  Busy sending another campaign
+                                </p>
                               </div>
                             </div>
                           ))}
@@ -937,7 +1083,9 @@ export default function CreateCampaign() {
             {campaignType === "scheduled" && (
               <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-br from-sky-50 to-blue-50 rounded-xl border border-sky-200">
                 <div>
-                  <label className="block text-sm font-bold text-sky-600 mb-2">Schedule Date (IST)</label>
+                  <label className="block text-sm font-bold text-sky-600 mb-2">
+                    Schedule Date (IST)
+                  </label>
                   <input
                     type="date"
                     value={scheduleDate}
@@ -946,7 +1094,9 @@ export default function CreateCampaign() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-sky-600 mb-2">Schedule Time (IST)</label>
+                  <label className="block text-sm font-bold text-sky-600 mb-2">
+                    Schedule Time (IST)
+                  </label>
                   <input
                     type="time"
                     value={scheduleTime}
@@ -977,21 +1127,26 @@ export default function CreateCampaign() {
             </div>
 
             <div ref={pitchDropdownRef} className="relative">
-              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide">Pitch Templates (Optional)</label>
+              <label className="block text-sm font-bold text-sky-600 mb-2 uppercase tracking-wide">
+                Pitch Templates (Optional)
+              </label>
               <button
                 type="button"
-                 onClick={() => {
-                    setShowPitchDropdown(!showPitchDropdown); // open/close pitch dropdown
-                    setShowFromDropdown(false);               // close from dropdown
-                  }}
+                onClick={() => {
+                  setShowPitchDropdown(!showPitchDropdown); // open/close pitch dropdown
+                  setShowFromDropdown(false); // close from dropdown
+                }}
                 className="w-full border border-sky-200 rounded-xl p-3.5 text-left flex justify-between items-center bg-white hover:border-sky-300 transition-all font-medium"
               >
                 <span className="text-slate-700">
-                  {selectedPitchIds.length > 0 
-                    ? `${selectedPitchIds.length} template(s) selected` 
+                  {selectedPitchIds.length > 0
+                    ? `${selectedPitchIds.length} template(s) selected`
                     : "Select Pitch Templates"}
                 </span>
-                <ChevronDown size={18} className={`text-sky-600 transition-transform ${showPitchDropdown ? 'rotate-180' : ''}`} />
+                <ChevronDown
+                  size={18}
+                  className={`text-sky-600 transition-transform ${showPitchDropdown ? "rotate-180" : ""}`}
+                />
               </button>
 
               {showPitchDropdown && (
@@ -1007,13 +1162,19 @@ export default function CreateCampaign() {
                           checked={selectedPitchIds.includes(pitch.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
-                              setSelectedPitchIds([...selectedPitchIds, pitch.id]);
+                              setSelectedPitchIds([
+                                ...selectedPitchIds,
+                                pitch.id,
+                              ]);
                               if (editorRef.current) {
-                                editorRef.current.innerHTML = pitch.bodyHtml || "";
+                                editorRef.current.innerHTML =
+                                  pitch.bodyHtml || "";
                               }
                             } else {
                               setSelectedPitchIds(
-                                selectedPitchIds.filter((id) => id !== pitch.id)
+                                selectedPitchIds.filter(
+                                  (id) => id !== pitch.id,
+                                ),
                               );
                             }
                           }}
@@ -1036,7 +1197,9 @@ export default function CreateCampaign() {
 
           <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl overflow-visible shadow-lg relative z-[1]">
             <div className="border-b border-sky-200 bg-gradient-to-r from-sky-50 to-blue-50 p-3">
-              <h3 className="text-sm font-bold text-sky-600 uppercase tracking-wide">Email Content Editor</h3>
+              <h3 className="text-sm font-bold text-sky-600 uppercase tracking-wide">
+                Email Content Editor
+              </h3>
             </div>
 
             <div className="flex flex-wrap gap-2 p-3 border-b border-sky-100 bg-white/50">
@@ -1045,8 +1208,10 @@ export default function CreateCampaign() {
                 onChange={(e) => applyFontFamily(e.target.value)}
                 className="px-3 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white font-medium"
               >
-                {FONT_FAMILIES.map(f => (
-                  <option key={f.value} value={f.value}>{f.label}</option>
+                {FONT_FAMILIES.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
                 ))}
               </select>
 
@@ -1055,17 +1220,35 @@ export default function CreateCampaign() {
                 onChange={(e) => applyFontSize(e.target.value)}
                 className="px-3 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white font-medium"
               >
-                {FONT_SIZES.map(s => (
-                  <option key={s.value} value={s.value}>{s.label}</option>
+                {FONT_SIZES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
                 ))}
               </select>
 
               <div className="w-px h-7 bg-sky-300 mx-1" />
 
-              <ToolbarButton icon={<Bold size={16} />} onClick={() => formatText("bold")} title="Bold" />
-              <ToolbarButton icon={<Italic size={16} />} onClick={() => formatText("italic")} title="Italic" />
-              <ToolbarButton icon={<Underline size={16} />} onClick={() => formatText("underline")} title="Underline" />
-              <ToolbarButton icon={<Strikethrough size={16} />} onClick={() => formatText("strikeThrough")} title="Strikethrough" />
+              <ToolbarButton
+                icon={<Bold size={16} />}
+                onClick={() => formatText("bold")}
+                title="Bold"
+              />
+              <ToolbarButton
+                icon={<Italic size={16} />}
+                onClick={() => formatText("italic")}
+                title="Italic"
+              />
+              <ToolbarButton
+                icon={<Underline size={16} />}
+                onClick={() => formatText("underline")}
+                title="Underline"
+              />
+              <ToolbarButton
+                icon={<Strikethrough size={16} />}
+                onClick={() => formatText("strikeThrough")}
+                title="Strikethrough"
+              />
 
               <div className="w-px h-7 bg-sky-300 mx-1" />
 
@@ -1075,13 +1258,28 @@ export default function CreateCampaign() {
                   className="p-2 hover:bg-sky-100 rounded-lg transition border border-sky-200"
                   title="Text Color"
                 >
-                  <div className="w-5 h-5 rounded" style={{ backgroundColor: currentColor }} />
+                  <div
+                    className="w-5 h-5 rounded"
+                    style={{ backgroundColor: currentColor }}
+                  />
                 </button>
                 {showColorPicker && (
-                  <div className="absolute z-50 mt-2 p-3 bg-white border border-sky-200 rounded-xl shadow-xl" style={{ width: "280px" }}>
+                  <div
+                    className="absolute z-50 mt-2 p-3 bg-white border border-sky-200 rounded-xl shadow-xl"
+                    style={{ width: "280px" }}
+                  >
                     {COLOR_FAMILIES.map((family, familyIndex) => (
-                      <div key={family.name} className={familyIndex > 0 ? "mt-3 pt-3 border-t border-sky-200" : ""}>
-                        <div className="text-xs font-medium text-slate-600 mb-2">{family.name}</div>
+                      <div
+                        key={family.name}
+                        className={
+                          familyIndex > 0
+                            ? "mt-3 pt-3 border-t border-sky-200"
+                            : ""
+                        }
+                      >
+                        <div className="text-xs font-medium text-slate-600 mb-2">
+                          {family.name}
+                        </div>
                         <div className="grid grid-cols-8 gap-1">
                           {family.colors.map((color, colorIndex) => (
                             <button
@@ -1101,37 +1299,67 @@ export default function CreateCampaign() {
 
               <div className="w-px h-7 bg-sky-300 mx-1" />
 
-              <ToolbarButton icon={<AlignLeft size={16} />} onClick={() => formatText("justifyLeft")} title="Align Left" />
-              <ToolbarButton icon={<AlignCenter size={16} />} onClick={() => formatText("justifyCenter")} title="Center" />
-              <ToolbarButton icon={<AlignRight size={16} />} onClick={() => formatText("justifyRight")} title="Align Right" />
-              <ToolbarButton icon={<AlignJustify size={16} />} onClick={() => formatText("justifyFull")} title="Justify" />
+              <ToolbarButton
+                icon={<AlignLeft size={16} />}
+                onClick={() => formatText("justifyLeft")}
+                title="Align Left"
+              />
+              <ToolbarButton
+                icon={<AlignCenter size={16} />}
+                onClick={() => formatText("justifyCenter")}
+                title="Center"
+              />
+              <ToolbarButton
+                icon={<AlignRight size={16} />}
+                onClick={() => formatText("justifyRight")}
+                title="Align Right"
+              />
+              <ToolbarButton
+                icon={<AlignJustify size={16} />}
+                onClick={() => formatText("justifyFull")}
+                title="Justify"
+              />
 
               <div className="w-px h-7 bg-sky-300 mx-1" />
 
-              <ToolbarButton icon={<List size={16} />} onClick={() => formatText("insertUnorderedList")} title="Bullet List" />
-              <ToolbarButton icon={<ListOrdered size={16} />} onClick={() => formatText("insertOrderedList")} title="Numbered List" />
+              <ToolbarButton
+                icon={<List size={16} />}
+                onClick={() => formatText("insertUnorderedList")}
+                title="Bullet List"
+              />
+              <ToolbarButton
+                icon={<ListOrdered size={16} />}
+                onClick={() => formatText("insertOrderedList")}
+                title="Numbered List"
+              />
 
               <div className="w-px h-7 bg-sky-300 mx-1" />
 
-              <ToolbarButton icon={<Link size={16} />} onClick={insertLink} title="Insert Link" />
+              <ToolbarButton
+                icon={<Link size={16} />}
+                onClick={insertLink}
+                title="Insert Link"
+              />
             </div>
 
             <div
               ref={editorRef}
               contentEditable
               className="min-h-[300px] max-h-[500px] overflow-y-auto p-5 outline-none bg-white"
-              style={{ 
-                fontFamily: currentFont, 
+              style={{
+                fontFamily: currentFont,
                 fontSize: currentSize,
                 lineHeight: "1.6",
-                color: currentColor
+                color: currentColor,
               }}
               suppressContentEditableWarning
             />
 
             {attachments.length > 0 && (
               <div className="border-t border-sky-100 p-4 bg-sky-50/50">
-                <p className="text-xs text-sky-600 font-bold mb-3 uppercase tracking-wide">Attachments:</p>
+                <p className="text-xs text-sky-600 font-bold mb-3 uppercase tracking-wide">
+                  Attachments:
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {attachments.map((file, index) => (
                     <div
@@ -1139,8 +1367,13 @@ export default function CreateCampaign() {
                       className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-sky-200 shadow-sm"
                     >
                       <Paperclip size={14} className="text-sky-600" />
-                      <span className="text-xs text-slate-700 font-medium">{file.name}</span>
-                      <button onClick={() => removeAttachment(index)} className="p-1 hover:bg-red-100 rounded-full transition">
+                      <span className="text-xs text-slate-700 font-medium">
+                        {file.name}
+                      </span>
+                      <button
+                        onClick={() => removeAttachment(index)}
+                        className="p-1 hover:bg-red-100 rounded-full transition"
+                      >
                         <X size={12} className="text-red-500" />
                       </button>
                     </div>
@@ -1154,7 +1387,10 @@ export default function CreateCampaign() {
                 {!editingRole ? (
                   <>
                     <p className="text-sm font-semibold text-gray-700">
-                      Sender: <span className="text-sky-600">{senderRole || "Not Set"}</span>
+                      Sender:{" "}
+                      <span className="text-sky-600">
+                        {senderRole || "Not Set"}
+                      </span>
                     </p>
 
                     <button
@@ -1187,7 +1423,6 @@ export default function CreateCampaign() {
                 )}
               </div>
 
-
               {selectedPitchIds.length > 0 && (
                 <button
                   onClick={savePitchTemplate}
@@ -1209,12 +1444,20 @@ export default function CreateCampaign() {
 
           {showPreview && (
             <div className="bg-white/80 backdrop-blur-sm border border-sky-200/50 rounded-2xl p-6 shadow-lg">
-              <h3 className="text-sm font-bold text-sky-600 mb-4 uppercase tracking-wide">Email Preview</h3>
+              <h3 className="text-sm font-bold text-sky-600 mb-4 uppercase tracking-wide">
+                Email Preview
+              </h3>
               <div className="border border-sky-200 rounded-xl p-5 min-h-32 max-h-96 overflow-y-auto bg-white">
                 <div className="mb-4 pb-4 border-b border-sky-200">
-                  <p className="text-xs text-sky-600 font-semibold">From: {selectedFroms.length} account(s) selected</p>
-                  <p className="text-xs text-sky-600 font-semibold">To: {parsedEmails.length} recipient(s)</p>
-                  <p className="text-base font-bold text-slate-900 mt-3">{subject || "No subject"}</p>
+                  <p className="text-xs text-sky-600 font-semibold">
+                    From: {selectedFroms.length} account(s) selected
+                  </p>
+                  <p className="text-xs text-sky-600 font-semibold">
+                    To: {parsedEmails.length} recipient(s)
+                  </p>
+                  <p className="text-base font-bold text-slate-900 mt-3">
+                    {subject || "No subject"}
+                  </p>
                   {campaignType === "scheduled" && scheduleDate && (
                     <p className="text-xs text-sky-600 font-semibold mt-2">
                       Scheduled: {scheduleDate} at {scheduleTime}
@@ -1223,7 +1466,9 @@ export default function CreateCampaign() {
                 </div>
                 <div
                   dangerouslySetInnerHTML={{
-                    __html: editorRef.current?.innerHTML || "<p>No content yet...</p>"
+                    __html:
+                      editorRef.current?.innerHTML ||
+                      "<p>No content yet...</p>",
                   }}
                 />
               </div>
@@ -1326,7 +1571,10 @@ export default function CreateCampaign() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Clock size={14} className="text-sky-600" />
-                    Est. time: {Math.ceil(parsedEmails.length / getCapacity())} hour(s)
+                    Est. time: {Math.ceil(
+                      parsedEmails.length / getCapacity(),
+                    )}{" "}
+                    hour(s)
                   </div>
                 </div>
               )}
@@ -1334,26 +1582,40 @@ export default function CreateCampaign() {
           </div>
 
           {/* ── Daily Limit Warning ─────────────────────────────── */}
-          {dailyLimit && parsedEmails.length > 0 && parsedEmails.length > dailyLimit.remaining && (
-            <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-              <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-bold text-red-700">Daily Quota Exceeded</p>
-                <p className="text-xs text-red-600 mt-0.5 leading-relaxed">
-                  You have only <strong>{dailyLimit.remaining.toLocaleString()}</strong> credits remaining today (out of{" "}
-                  {dailyLimit.dailyLimit.toLocaleString()}). This campaign needs{" "}
-                  <strong>{parsedEmails.length.toLocaleString()}</strong> recipients.
-                  Please reduce recipients or try again tomorrow.
-                </p>
+          {dailyLimit &&
+            parsedEmails.length > 0 &&
+            parsedEmails.length > dailyLimit.remaining && (
+              <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
+                <AlertTriangle
+                  size={18}
+                  className="text-red-500 mt-0.5 shrink-0"
+                />
+                <div>
+                  <p className="text-sm font-bold text-red-700">
+                    Daily Quota Exceeded
+                  </p>
+                  <p className="text-xs text-red-600 mt-0.5 leading-relaxed">
+                    You have only{" "}
+                    <strong>{dailyLimit.remaining.toLocaleString()}</strong>{" "}
+                    credits remaining today (out of{" "}
+                    {dailyLimit.dailyLimit.toLocaleString()}). This campaign
+                    needs{" "}
+                    <strong>{parsedEmails.length.toLocaleString()}</strong>{" "}
+                    recipients. Please reduce recipients or try again tomorrow.
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           <button
             onClick={handleSend}
-            disabled={sending || (dailyLimit && parsedEmails.length > dailyLimit.remaining)}
+            disabled={
+              sending ||
+              (dailyLimit && parsedEmails.length > dailyLimit.remaining)
+            }
             className={`w-full px-6 py-4 text-white rounded-xl font-black text-base transition-all flex items-center justify-center gap-3 shadow-lg transform hover:scale-105 ${
-              sending || (dailyLimit && parsedEmails.length > dailyLimit.remaining)
+              sending ||
+              (dailyLimit && parsedEmails.length > dailyLimit.remaining)
                 ? "opacity-60 cursor-not-allowed"
                 : ""
             } ${
@@ -1366,14 +1628,22 @@ export default function CreateCampaign() {
               "Processing..."
             ) : (
               <>
-                {campaignType === "immediate" ? <Zap size={20} /> : <Calendar size={20} />}
-                {campaignType === "immediate" ? "Send Campaign Now" : "Schedule Campaign"}
+                {campaignType === "immediate" ? (
+                  <Zap size={20} />
+                ) : (
+                  <Calendar size={20} />
+                )}
+                {campaignType === "immediate"
+                  ? "Send Campaign Now"
+                  : "Schedule Campaign"}
               </>
             )}
           </button>
 
           {errorMsg && (
-            <p className="text-sm text-red-600 font-semibold mt-2 bg-red-50 p-4 rounded-xl border border-red-200">{errorMsg}</p>
+            <p className="text-sm text-red-600 font-semibold mt-2 bg-red-50 p-4 rounded-xl border border-red-200">
+              {errorMsg}
+            </p>
           )}
         </div>
       </div>
@@ -1382,9 +1652,9 @@ export default function CreateCampaign() {
 }
 
 const ToolbarButton = ({ icon, onClick, title }) => (
-  <button 
-    onClick={onClick} 
-    className="p-2 hover:bg-sky-100 rounded-lg transition border border-transparent hover:border-sky-200" 
+  <button
+    onClick={onClick}
+    className="p-2 hover:bg-sky-100 rounded-lg transition border border-transparent hover:border-sky-200"
     title={title}
   >
     {icon}

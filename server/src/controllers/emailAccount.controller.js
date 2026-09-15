@@ -1,8 +1,8 @@
-import { PrismaClient } from "@prisma/client";
 import { encrypt } from "../utils/crypto.js";
 import { ImapFlow } from "imapflow";
+import prisma from "../prismaClient.js";
 
-const prisma = new PrismaClient();
+// Shared client — a `new PrismaClient()` here opened a second connection pool.
 
 async function testImapConnection({ host, port, user, pass }) {
   const client = new ImapFlow({
@@ -49,8 +49,6 @@ export const addAccount = async (req, res) => {
       smtpPort = 465;
       imapUser = email;
     }
-
-
 
     // ============================
     // 1. Validate required fields
@@ -117,7 +115,6 @@ export const addAccount = async (req, res) => {
     });
 
     return res.json({ success: true, account });
-
   } catch (err) {
     console.error("Add account failed:", err);
     res.status(500).json({
@@ -127,7 +124,6 @@ export const addAccount = async (req, res) => {
     });
   }
 };
-
 
 // ===============================
 // Other functions unchanged

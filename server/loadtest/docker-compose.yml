@@ -1,0 +1,62 @@
+# Local load-test environment. Nothing here touches production.
+#
+#   docker compose -f loadtest/docker-compose.yml up -d
+#   docker compose -f loadtest/docker-compose.yml down -v   (wipe everything)
+#
+# Postgres is deliberately SMALL (1 GB RAM, 40 connections) to mimic a
+# small managed plan — if the app survives here, it has headroom in prod.
+# Raise the limits to match your real plan if you want a like-for-like test.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: lt-postgres
+    environment:
+      POSTGRES_USER: loadtest
+      POSTGRES_PASSWORD: loadtest
+      POSTGRES_DB: abacco_loadtest
+    ports:
+      - "5433:5432"
+    command:
+      - postgres
+      - -c
+      - max_connections=40
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - log_min_duration_statement=500
+    mem_limit: 1g
+    cpus: 1.0
+    volumes:
+      - lt-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loadtest -d abacco_loadtest"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Fake SMTP server: accepts every email, delivers nothing.
+  # Web UI: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: lt-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      MP_MAX_MESSAGES: "0"        # 0 = keep all (needed for the duplicate check)
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - lt-mailpit:/data
+
+volumes:
+  lt-pgdata:
+  lt-mailpit:

@@ -28,7 +28,7 @@ const DELETE_SPEED_PER_MIN = 1200;
 // GROUP_ACCOUNT_LIMIT: max mail accounts allowed inside any one group.
 // Kept in one place so the API check and the numbers shown in the UI
 // (AddEmailAccount.jsx, GroupSelectModal.jsx) always agree.
-const TOTAL_ACCOUNT_LIMIT = 50;
+const TOTAL_ACCOUNT_LIMIT = 70;
 const GROUP_ACCOUNT_LIMIT = 8;
 
 // accounts:{userId}:all and accounts:{userId}:group:{groupId} are both used
