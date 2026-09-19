@@ -6,10 +6,33 @@
 
 import nodemailer from "nodemailer";
 import prisma, { isDbUnavailableError } from "../prismaClient.js";
-import { decrypt } from "../utils/crypto.js";
+import { resolveSecret } from "../utils/crypto.js";
 import { delByPrefix } from "../utils/cache.js";
 import dns from "dns/promises";
 import pLimit from "p-limit";
+import { convert as htmlToText } from "html-to-text";
+import {
+  FEATURES,
+  getSuppression,
+  skipSuppressedRecipients,
+  buildUnsubscribeParts,
+} from "./suppression.service.js";
+import {
+  pauseAccount,
+  onAccountPauseChange,
+} from "./inboundProcessor.service.js";
+import {
+  hasMergeFields,
+  renderMergeFields,
+  mergeVarsFor,
+} from "./automation.service.js";
+import {
+  getSendingDayStart,
+  getAccountSentToday,
+  getAccountCap,
+  recordAccountSend,
+  flushAccountSends,
+} from "./sendingLimits.service.js";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SECTION 1 — GLOBAL DAILY LIMIT HELPERS
@@ -43,21 +66,9 @@ export function getTodayKey(userId) {
   return `mail_limit:${userId}:${dateLabel}`;
 }
 
-function getTodayStart() {
-  const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-  );
-  const resetToday = new Date(now);
-  resetToday.setHours(17, 0, 0, 0);
-
-  const start =
-    now < resetToday
-      ? new Date(resetToday.getTime() - 24 * 60 * 60 * 1000)
-      : resetToday;
-
-  start.setMilliseconds(0);
-  return start;
-}
+// The 5 PM → 5 PM sending window (shared with the per-mailbox caps, so
+// company totals and mailbox totals always refer to the same day).
+const getTodayStart = getSendingDayStart;
 
 /* ── Daily-count cache ─────────────────────────────────────────────────────
    getDailyCount() used to run a SUM aggregate for every batch of every
@@ -602,14 +613,10 @@ function createSenderCache() {
 }
 
 function decryptPassword(account) {
-  let pass = account.encryptedPass;
-  if (typeof pass === "string" && pass.includes(":")) {
-    pass = decrypt(pass);
-  }
-  return pass;
+  return resolveSecret(account.encryptedPass);
 }
 
-async function resolveOriginalCampaignId(startId) {
+export async function resolveOriginalCampaignId(startId) {
   let currentId = startId;
   const MAX_LEVELS = 10;
 
@@ -628,7 +635,7 @@ async function resolveOriginalCampaignId(startId) {
   return currentId;
 }
 
-function buildNormalEmailHtml(body, signature, baseStyles) {
+function buildNormalEmailHtml(body, signature, baseStyles, footerHtml = "") {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -662,6 +669,7 @@ function buildNormalEmailHtml(body, signature, baseStyles) {
         ">
           ${body}
           ${signature}
+          ${footerHtml}
         </div>
       </td>
     </tr>
@@ -747,6 +755,107 @@ function isTemporaryError(err) {
  * Permanent errors (bad recipient, auth failure, etc.) fail fast — no point
  * retrying those.
  */
+/**
+ * The PROVIDER refused because this ACCOUNT hit a sending limit (e.g. Gmail
+ * "550 5.4.5 Daily user sending quota exceeded"). The recipient is fine —
+ * the account must rest. Checked before isPermanentError(), which would
+ * otherwise fail every remaining recipient with a 5xx.
+ */
+const QUOTA_RE =
+  /(5\.4\.5|sending (quota|limit)|user sending quota|daily (user )?sending|too many (messages|emails|recipients)|message rate limit|rate[- ]limit(ed)?|4\.7\.28|exceeded (the )?(daily|hourly|sending) (limit|quota))/i;
+
+export function isQuotaError(err) {
+  const text = `${err?.response || ""} ${err?.message || ""}`;
+  return QUOTA_RE.test(text);
+}
+
+/** The account's own login/config is broken — no recipient can succeed. */
+export function isAccountAuthError(err) {
+  const text =
+    `${err?.code || ""} ${err?.response || ""} ${err?.message || ""}`.toLowerCase();
+  return (
+    err?.code === "EAUTH" ||
+    /\b(eauth|authentication failed|invalid login|invalid credentials|bad credentials|username and password not accepted|application-specific password required|535[ -]5\.7\.8)\b/.test(
+      text,
+    ) ||
+    text.includes("stored password uses the v2 format")
+  );
+}
+
+const QUOTA_PAUSE_HOURS = Number(process.env.QUOTA_PAUSE_HOURS) || 24;
+// How often a loop waiting on a paused account re-checks it.
+const PAUSED_RECHECK_MS =
+  Number(process.env.PAUSED_ACCOUNT_RECHECK_MS) || 60_000;
+// How often a mailbox that hit its daily cap re-checks (in case an admin
+// raises the cap before the window resets).
+const CAP_RECHECK_MS = Number(process.env.CAP_RECHECK_MS) || 15 * 60_000;
+
+/* ── Account pause cache ──────────────────────────────────────────────── */
+const PAUSE_TTL_MS = Number(process.env.ACCOUNT_PAUSE_CACHE_MS) || 15_000;
+const pauseCache = new Map(); // accountId → { paused, reason, at }
+onAccountPauseChange((accountId) => {
+  if (accountId === null || accountId === undefined) pauseCache.clear();
+  else pauseCache.delete(Number(accountId));
+});
+
+async function getAccountPause(accountId) {
+  const hit = pauseCache.get(accountId);
+  if (hit && Date.now() - hit.at < PAUSE_TTL_MS) return hit;
+  const row = await prisma.emailAccount.findUnique({
+    where: { id: accountId },
+    select: {
+      sendingPausedAt: true,
+      sendingPausedReason: true,
+      sendingPausedUntil: true,
+    },
+  });
+  const expired =
+    row?.sendingPausedUntil && row.sendingPausedUntil <= new Date();
+  const value = {
+    paused: Boolean(row?.sendingPausedAt) && !expired,
+    reason: row?.sendingPausedReason || null,
+    at: Date.now(),
+  };
+  pauseCache.set(accountId, value);
+  return value;
+}
+
+async function pauseForAccountError(accountId, err) {
+  const detail = String(err?.response || err?.message || "").slice(0, 160);
+  if (isAccountAuthError(err)) {
+    // No automatic resume: the password has to be fixed first.
+    await pauseAccount(accountId, `Login failed: ${detail}`, 0).catch(() => {});
+  } else {
+    await pauseAccount(
+      accountId,
+      `Provider sending limit: ${detail}`,
+      QUOTA_PAUSE_HOURS,
+    ).catch(() => {});
+  }
+  pauseCache.set(accountId, {
+    paused: true,
+    reason: "account",
+    at: Date.now(),
+  });
+}
+
+/** Plain-text alternative part (improves deliverability). */
+function toPlainText(html) {
+  if (!FEATURES.textAlternative) return undefined;
+  try {
+    return htmlToText(html, {
+      wordwrap: 100,
+      selectors: [
+        { selector: "img", format: "skip" },
+        { selector: "style", format: "skip" },
+        { selector: "a", options: { hideLinkHrefIfSameAsText: true } },
+      ],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 async function sendWithRetry(
   sendFn,
   { retries = 3, attemptTimeoutMs = 20000 } = {},
@@ -768,7 +877,9 @@ async function sendWithRetry(
       lastError = err;
       console.warn(`⚠️ SMTP attempt ${i}/${retries} failed:`, err.message);
 
-      if (isPermanentError(err)) throw err; // fail fast, don't burn retries
+      // Fail fast, don't burn retries.
+      if (isQuotaError(err) || isAccountAuthError(err) || isPermanentError(err))
+        throw err;
 
       if (i < retries) {
         const backoff = Math.min(2000 * 2 ** (i - 1), 15000);
@@ -864,6 +975,23 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     return { action: "stop" };
   }
 
+  // [A2] Sending account paused (bounce spike, quota, login failure)?
+  try {
+    const pause = await getAccountPause(accountId);
+    if (pause.paused) {
+      if (!ctx.pauseLogged) {
+        console.warn(
+          `⏸️  ${account.email} is paused (${pause.reason || "no reason"}) — its recipients wait`,
+        );
+        ctx.pauseLogged = true;
+      }
+      return { action: "wait", ms: PAUSED_RECHECK_MS };
+    }
+    ctx.pauseLogged = false;
+  } catch (err) {
+    return { action: "wait", ms: 5000 };
+  }
+
   // [B] Global daily limit
   let dailyCount;
   try {
@@ -891,6 +1019,33 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     return { action: "wait", ms: waitMs };
   }
 
+  // [B2] This mailbox's own daily cap (warm-up / provider / manual)
+  let capRoom = Infinity;
+  try {
+    const [{ cap, source, warmupDay }, sentToday] = await Promise.all([
+      getAccountCap(accountId),
+      getAccountSentToday(accountId),
+    ]);
+    capRoom = cap - sentToday;
+    if (capRoom <= 0) {
+      const waitMs = msUntilNextWindow();
+      if (!ctx.capLogged) {
+        console.log(
+          `📵 ${account.email} reached its daily cap (${sentToday}/${cap}` +
+            `${source === "warmup" ? `, warm-up day ${warmupDay}` : `, ${source}`}) — resuming in ${Math.ceil(waitMs / 60000)} min`,
+        );
+        ctx.capLogged = true;
+      }
+      return { action: "wait", ms: Math.min(waitMs, CAP_RECHECK_MS) };
+    }
+    ctx.capLogged = false;
+  } catch (err) {
+    console.error(
+      `⚠️ [${account.email}] daily cap check failed (${err.message}) — retrying in 5s`,
+    );
+    return { action: "wait", ms: 5000 };
+  }
+
   // [C] Pace + [D] atomic claim
   try {
     const remaining = await prisma.campaignRecipient.count({
@@ -903,7 +1058,11 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       remainingEmails: remaining,
       estimatedCompletion: ctx.campaign.estimatedCompletion,
     });
-    const take = claimSizeFor(ctx.delayPerEmail);
+    // Never claim more than the mailbox may still send today.
+    const take = Math.max(
+      1,
+      Math.min(claimSizeFor(ctx.delayPerEmail), capRoom),
+    );
 
     /* ONE statement, safe across processes:
        • FOR UPDATE SKIP LOCKED — two senders never pick the same rows
@@ -1017,17 +1176,47 @@ async function processRecipient(recipient, ctx) {
     return { outcome: "failed" };
   }
 
+  // Do-not-contact list — checked at the last moment, so an opt-out that
+  // arrived while the campaign was running is still honoured.
+  const suppression = await getSuppression(recipient.email);
+  if (suppression.suppressed) {
+    await markSkipped(recipient.id, `Suppressed: ${suppression.reason}`);
+    return { outcome: "suppressed" };
+  }
+
   try {
     const sent =
       campaign.sendType === "followup"
         ? await sendOneFollowup({ recipient, ctx, assignment })
         : await sendOneNormal({ recipient, ctx, assignment });
+    if (sent === "skipped") return { outcome: "suppressed" };
     return { outcome: sent ? "sent" : "failed" };
   } catch (err) {
     if (err?.alreadySent) {
       // SMTP accepted the email but the status write kept failing. Leave
       // the row as-is; never retry an email that already went out.
       return { outcome: "sent" };
+    }
+
+    if (err?.accountPaused || isQuotaError(err) || isAccountAuthError(err)) {
+      // The ACCOUNT can't send right now. The recipient did nothing wrong:
+      // put it back in the queue untouched and rest the account.
+      const accountId = err?.accountId || ctx.account.id;
+      console.warn(
+        `⏸️  ${recipient.email} requeued — account ${accountId} can't send: ${err.message}`,
+      );
+      await pauseForAccountError(accountId, err);
+      await prisma.campaignRecipient
+        .updateMany({
+          where: { id: recipient.id, status: "processing" },
+          data: {
+            status: "pending",
+            updatedAt: new Date(),
+            error: `Waiting: ${String(err.message).slice(0, 200)}`,
+          },
+        })
+        .catch(() => {});
+      return { outcome: "account_paused" };
     }
 
     console.error(`❌ Failed → ${recipient.email}: ${err.message}`);
@@ -1095,7 +1284,7 @@ async function runBatch(batch, ctx) {
       continue;
     }
 
-    if (result.outcome === "stop") {
+    if (result.outcome === "stop" || result.outcome === "account_paused") {
       // Return the rest of this batch to the queue.
       const rest = batch.slice(i + 1).map((r) => r.id);
       if (rest.length) {
@@ -1106,13 +1295,15 @@ async function runBatch(batch, ctx) {
           })
           .catch(() => {});
       }
-      return "stop";
+      // A paused account goes back to the claim loop, which waits.
+      return result.outcome === "stop" ? "stop" : "continue";
     }
 
     if (result.retryDelayMs) await sleep(result.retryDelayMs);
 
     // Pacing only after a real send attempt.
-    if (result.outcome !== "skipped") await sleep(ctx.delayPerEmail);
+    if (!["skipped", "suppressed"].includes(result.outcome))
+      await sleep(ctx.delayPerEmail);
   }
   return "continue";
 }
@@ -1243,6 +1434,17 @@ async function logSentMessage({
   }
 }
 
+async function markSkipped(recipientId, reason) {
+  await prisma.campaignRecipient.updateMany({
+    where: { id: recipientId, status: { in: ["processing", "pending"] } },
+    data: {
+      status: "skipped",
+      error: String(reason).slice(0, 300),
+      updatedAt: new Date(),
+    },
+  });
+}
+
 async function markSent(recipientId, data) {
   try {
     await writeWithRetry(
@@ -1270,10 +1472,19 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
   const { account, transporter, fromEmail, campaign, smtpIp } = ctx;
   const { subject: rawSubject, pitchBody: rawBody } = assignment;
 
-  const label = getDomainLabel(recipient.email);
-  const subject = `${label} - ${rawSubject}`;
+  // Personalisation: {{firstName}}, {{company|your team}} … (Phase 3)
+  const needsVars = hasMergeFields(rawSubject) || hasMergeFields(rawBody);
+  const vars = needsVars ? await mergeVarsFor(recipient.email) : null;
+  const personalSubject = needsVars
+    ? renderMergeFields(rawSubject || "", vars, { html: false })
+    : rawSubject;
 
-  let body = normalizeHtmlForEmail(rawBody || "");
+  const label = getDomainLabel(recipient.email);
+  const subject = `${label} - ${personalSubject}`;
+
+  let body = normalizeHtmlForEmail(
+    needsVars ? renderMergeFields(rawBody || "", vars) : rawBody || "",
+  );
   const baseStyles = extractBaseStyles(body);
 
   const unsafeColors = ["#fff", "#ffffff", "white", "transparent"];
@@ -1290,7 +1501,19 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
     body = `<span style="color:${baseStyles.color};">${body}</span>`;
   }
 
-  const html = buildNormalEmailHtml(body, signature, baseStyles);
+  const unsub = buildUnsubscribeParts({
+    email: recipient.email,
+    campaignId: campaign.id,
+    recipientId: recipient.id,
+    fromEmail,
+  });
+  const html = buildNormalEmailHtml(
+    body,
+    signature,
+    baseStyles,
+    unsub.footerHtml,
+  );
+  const text = toPlainText(html);
   const messageId = buildCampaignMessageId(
     campaign.id,
     recipient.id,
@@ -1306,18 +1529,23 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
         to: recipient.email,
         subject,
         html,
+        ...(text ? { text } : {}),
         messageId,
-        headers: { [CAMPAIGN_HEADER]: `${campaign.id}-${recipient.id}` },
+        headers: {
+          [CAMPAIGN_HEADER]: `${campaign.id}-${recipient.id}`,
+          ...unsub.headers,
+        },
       }),
     { retries: 3, attemptTimeoutMs: 20000 },
   );
 
   // The email is out. Record that FIRST — if this failed and we threw, the
   // row would go back to "pending" and the person would get it twice.
+  recordAccountSend(account.id);
   await markSent(recipient.id, {
     accountId: account.id,
     sentBodyHtml: html,
-    sentSubject: rawSubject,
+    sentSubject: personalSubject,
     sentFromEmail: fromEmail,
     sendingIp: smtpIp,
   });
@@ -1379,7 +1607,14 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
   const { account, campaign, originalCampaignId } = ctx;
   const { subject: fallbackSubject, pitchBody: rawFollowupBody } = assignment;
 
-  const followupBody = normalizeHtmlForEmail(rawFollowupBody || "");
+  const followupVars = hasMergeFields(rawFollowupBody)
+    ? await mergeVarsFor(recipient.email)
+    : null;
+  const followupBody = normalizeHtmlForEmail(
+    followupVars
+      ? renderMergeFields(rawFollowupBody || "", followupVars)
+      : rawFollowupBody || "",
+  );
   if (!followupBody || followupBody.trim() === "") {
     throw Object.assign(new Error("Follow-up body is empty"), {
       responseCode: 550,
@@ -1402,6 +1637,8 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
           sentSubject: true,
           sentFromEmail: true,
           sentAt: true,
+          repliedAt: true,
+          bounceType: true,
         },
       })
     : null;
@@ -1416,6 +1653,30 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
       },
     });
     return false;
+  }
+
+  // Never follow up with someone who already answered, or whose address
+  // hard-bounced.
+  if (prevEmail.repliedAt) {
+    await markSkipped(recipient.id, "Replied");
+    return "skipped";
+  }
+  if (prevEmail.bounceType === "hard") {
+    await markSkipped(recipient.id, "Original email bounced");
+    return "skipped";
+  }
+  if (FEATURES.replyDetection && prevEmail.sentAt) {
+    const replied = await prisma.replyEvent.findFirst({
+      where: {
+        email: recipient.email.toLowerCase(),
+        receivedAt: { gte: prevEmail.sentAt },
+      },
+      select: { id: true },
+    });
+    if (replied) {
+      await markSkipped(recipient.id, "Replied");
+      return "skipped";
+    }
   }
 
   // Follow-ups go out from the account that sent the original.
@@ -1438,13 +1699,30 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     fromEmail: actualFromEmail,
   } = sender;
 
+  if (
+    actualAccount.id !== account.id &&
+    (await getAccountPause(actualAccount.id)).paused
+  ) {
+    throw Object.assign(new Error(`Sender ${actualAccount.email} is paused`), {
+      accountPaused: true,
+      accountId: actualAccount.id,
+    });
+  }
+
+  const unsub = buildUnsubscribeParts({
+    email: recipient.email,
+    campaignId: campaign.id,
+    recipientId: recipient.id,
+    fromEmail: actualFromEmail,
+  });
+
   const baseStyles = extractBaseStyles(followupBody);
   const signature = buildSignature(
     actualAccount,
     campaign.senderRole,
     baseStyles,
   );
-  const followupWithSignature = followupBody + signature;
+  const followupWithSignature = followupBody + signature + unsub.footerHtml;
 
   let originalBody = extractBodyContent(prevEmail.sentBodyHtml);
   if (!originalBody && prevEmail.sentBodyHtml) {
@@ -1497,7 +1775,11 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     recipient.id,
     actualFromEmail,
   );
-  const headers = { [CAMPAIGN_HEADER]: `${campaign.id}-${recipient.id}` };
+  const text = toPlainText(html);
+  const headers = {
+    [CAMPAIGN_HEADER]: `${campaign.id}-${recipient.id}`,
+    ...unsub.headers,
+  };
   if (parentId) {
     headers["In-Reply-To"] = parentId;
     headers["References"] = parentId;
@@ -1513,12 +1795,17 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
           to: recipient.email,
           subject,
           html,
+          ...(text ? { text } : {}),
           messageId,
           headers,
         }),
       { retries: 3, attemptTimeoutMs: 20000 },
     );
   } catch (err) {
+    if (isQuotaError(err) || isAccountAuthError(err)) {
+      err.accountId = actualAccount.id;
+      throw err;
+    }
     console.error("❌ FOLLOW-UP SEND ERROR:", {
       email: recipient.email,
       account: actualAccount.email,
@@ -1529,6 +1816,7 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     throw err;
   }
 
+  recordAccountSend(actualAccount.id);
   await markSent(recipient.id, {
     sentBodyHtml: html,
     sentSubject: prevEmail.sentSubject ?? fallbackSubject,
@@ -1682,7 +1970,42 @@ async function _sendBulkCampaignInner(campaignId) {
     );
   }
 
-  // ── 5. Load pending recipients (narrow columns) ────────────────────────
+  // ── 5a. Skip suppressed / already-replied recipients in bulk ───────────
+  const suppressedCount = await skipSuppressedRecipients(campaignId);
+  if (suppressedCount > 0) {
+    console.log(
+      `🚫 Campaign ${campaignId}: ${suppressedCount} recipient(s) on the do-not-contact list skipped`,
+    );
+  }
+  if (campaign.sendType === "followup" && FEATURES.replyDetection) {
+    const repliedCount = await prisma.$executeRaw`
+      UPDATE "CampaignRecipient" cr
+      SET "status" = 'skipped', "error" = 'Replied', "updatedAt" = NOW()
+      WHERE cr."campaignId" = ${campaignId}
+        AND cr."status" = 'pending'
+        AND EXISTS (
+          SELECT 1 FROM "CampaignRecipient" o
+          WHERE o."campaignId" = ${originalCampaignId}
+            AND o."email" = cr."email"
+            AND o."status" = 'sent'
+            AND (
+              o."repliedAt" IS NOT NULL
+              OR EXISTS (
+                SELECT 1 FROM "ReplyEvent" e
+                WHERE e."email" = lower(o."email")
+                  AND e."receivedAt" >= o."sentAt"
+              )
+            )
+        )
+    `;
+    if (repliedCount > 0) {
+      console.log(
+        `💬 Campaign ${campaignId}: ${repliedCount} recipient(s) already replied — follow-up skipped`,
+      );
+    }
+  }
+
+  // ── 5b. Load pending recipients (narrow columns) ───────────────────────
   let pendingRecipients;
   if (campaign.sendType === "followup") {
     // Was: load every sent address of the original campaign into Node,
@@ -1801,7 +2124,10 @@ async function _sendBulkCampaignInner(campaignId) {
   );
 
   // ── 8. Final status ────────────────────────────────────────────────────
-  await flushDailyLog().catch(() => {});
+  await Promise.all([
+    flushDailyLog().catch(() => {}),
+    flushAccountSends().catch(() => {}),
+  ]);
   await updateCampaignStatus(campaignId);
 
   console.log(`✅ Campaign ${campaignId} send loop finished`);

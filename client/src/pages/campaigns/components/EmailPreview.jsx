@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   ChevronLeft,
-  Reply, 
+  Reply,
   ReplyAll,
   Forward,
   MoreVertical,
@@ -36,14 +36,25 @@ import {
   Minus,
   Quote,
   ArrowUpDown,
-  Pencil, 
+  Pencil,
   FileEdit,
 } from "lucide-react";
 import DOMPurify from "dompurify";
-import { api } from "../../utils/api"; 
+import { api } from "../../utils/api";
 import { toast } from "react-hot-toast";
-import axios from 'axios';
+import rawAxios from "axios";
 import AddLeadModal from "../../lead/AddLead.jsx";
+
+// Sending mail requires login. This file used plain axios (no token) for
+// /api/smtp/send; this instance adds the token like the shared `api`
+// client does, but without its JSON default header, so FormData uploads
+// (attachments) keep their multipart encoding.
+const axios = rawAxios.create();
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 // import {
 //   replacePlaceholders,
 //   buildSignature,
@@ -165,7 +176,7 @@ const LINE_HEIGHTS = [
   { value: "2.5", label: "2.5" },
   { value: "3.0", label: "3.0" },
 ];
- 
+
 export default function MessageView({
   selectedAccount,
   selectedConversation,
@@ -228,7 +239,7 @@ export default function MessageView({
     try {
       setLoading(true);
       const response = await api.get(
-        `${API_BASE_URL}/api/scheduled-messages/${scheduledMessageId}/conversation`
+        `${API_BASE_URL}/api/scheduled-messages/${scheduledMessageId}/conversation`,
       );
       if (response.data.success) {
         setMessages(response.data.conversationMessages);
@@ -241,39 +252,36 @@ export default function MessageView({
     }
   };
 
-const fetchMessages = async () => {
-  if (!selectedConversation || !selectedAccount) return;
+  const fetchMessages = async () => {
+    if (!selectedConversation || !selectedAccount) return;
 
-  try {
-    setLoading(true);
+    try {
+      setLoading(true);
 
-    const res = await api.get(
-      `${API_BASE_URL}/api/inbox/conversations/${encodeURIComponent(selectedConversation.conversationId)}/messages`
-    );
+      const res = await api.get(
+        `${API_BASE_URL}/api/inbox/conversations/${encodeURIComponent(selectedConversation.conversationId)}/messages`,
+      );
 
-    if (res.data.success) {
-      setMessages(res.data.data || []);
-    } else {
+      if (res.data.success) {
+        setMessages(res.data.data || []);
+      } else {
+        setMessages([]);
+      }
+    } catch (err) {
+      console.error("Failed to load messages:", err);
       setMessages([]);
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    console.error("Failed to load messages:", err);
-    setMessages([]);
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   const markConversationAsRead = async () => {
     if (!selectedConversation?.conversationId) return;
 
     await api.patch(
-      `${API_BASE_URL}/api/inbox/conversations/${encodeURIComponent(selectedConversation.conversationId)}/read`
+      `${API_BASE_URL}/api/inbox/conversations/${encodeURIComponent(selectedConversation.conversationId)}/read`,
     );
   };
-
-
 
   const handleMoveToInbox = async () => {
     if (!selectedConversation || !selectedAccount) return;
@@ -302,7 +310,7 @@ const fetchMessages = async () => {
     try {
       const response = await api.get(
         `${API_BASE_URL}/api/inbox/conversation/${email}/country`,
-        { params: { emailAccountId: selectedAccount.id } }
+        { params: { emailAccountId: selectedAccount.id } },
       );
       if (response.data.success && response.data.country) {
         setCountry(response.data.country);
@@ -316,7 +324,7 @@ const fetchMessages = async () => {
     if (!selectedAccount?.id) return;
     try {
       const response = await api.get(
-        `${API_BASE_URL}/api/inbox/accounts/${selectedAccount.id}/user`
+        `${API_BASE_URL}/api/inbox/accounts/${selectedAccount.id}/user`,
       );
       if (response.data.success && response.data.userName) {
         setAccountUserName(response.data.userName);
@@ -348,7 +356,7 @@ const fetchMessages = async () => {
     // 2️⃣ Remove style & script blocks
     const cleaned = withoutImages.replace(
       /<(style|script)[^>]*>[\s\S]*?<\/\1>/gi,
-      ""
+      "",
     );
 
     // 3️⃣ Convert HTML → text
@@ -450,7 +458,7 @@ const fetchMessages = async () => {
       // 2. Fetch Lead Data
       // Using the route from leadRoutes.js: router.get("/by-email/:email", ...)
       const res = await api.get(
-        `${API_BASE_URL}/api/leads/by-email/${cleanEmail}`
+        `${API_BASE_URL}/api/leads/by-email/${cleanEmail}`,
       );
 
       if (res.data.success && res.data.data) {
@@ -458,14 +466,14 @@ const fetchMessages = async () => {
         setShowLeadEditModal(true);
       } else {
         alert(
-          "No existing lead profile found for this email. Please create one in the Leads section first."
+          "No existing lead profile found for this email. Please create one in the Leads section first.",
         );
       }
     } catch (error) {
       console.error("Error fetching lead for edit:", error);
       if (error.response && error.response.status === 404) {
         alert(
-          "No existing lead profile found for this email. Please create one in the Leads section first."
+          "No existing lead profile found for this email. Please create one in the Leads section first.",
         );
       } else {
         alert("Failed to fetch lead details.");
@@ -487,7 +495,7 @@ const fetchMessages = async () => {
       // Using route from leadRoutes.js: router.put("/update/:id", ...)
       const res = await api.put(
         `${API_BASE_URL}/api/leads/update/${leadEditForm.id}`,
-        leadEditForm
+        leadEditForm,
       );
 
       if (res.data.success) {
@@ -544,7 +552,7 @@ const fetchMessages = async () => {
     if (!startBlock && !endBlock) {
       document.execCommand("formatBlock", false, "div");
       const newBlock = findBlock(
-        window.getSelection().getRangeAt(0).startContainer
+        window.getSelection().getRangeAt(0).startContainer,
       );
       if (newBlock) newBlock.style.lineHeight = value;
       setShowLineHeightPicker(false);
@@ -727,10 +735,9 @@ const fetchMessages = async () => {
     }
   };
 
-const fetchTemplates = async () => {
-  setTemplates([]);
-};
-
+  const fetchTemplates = async () => {
+    setTemplates([]);
+  };
 
   const applyTemplateWithAccount = (template, account) => {
     if (!template || !account) return;
@@ -739,7 +746,7 @@ const fetchTemplates = async () => {
 
     const recipientName = extractRecipientName(
       message.fromEmail,
-      message.fromName
+      message.fromName,
     );
 
     // Replace placeholders
@@ -778,7 +785,7 @@ const fetchTemplates = async () => {
     // Preserve quoted message
     const currentContent = editorRef.current?.innerHTML || "";
     const quotedStart = currentContent.indexOf(
-      '<hr style="border:none;border-top:1px solid #e5e7eb'
+      '<hr style="border:none;border-top:1px solid #e5e7eb',
     );
 
     let quotedText = "";
@@ -886,7 +893,7 @@ const fetchTemplates = async () => {
       // If the draft HAS an account ID, pre-select it
       if (scheduledDraft.accountId) {
         const linkedAccount = accounts.find(
-          (a) => a.id === scheduledDraft.accountId
+          (a) => a.id === scheduledDraft.accountId,
         );
         if (linkedAccount) {
           setSelectedFromAccount(linkedAccount);
@@ -926,7 +933,7 @@ const fetchTemplates = async () => {
 
   const handleTrashClick = async () => {
     const confirmed = window.confirm(
-      "Are you sure you want to move this conversation to Trash?"
+      "Are you sure you want to move this conversation to Trash?",
     );
     if (!confirmed) return;
     try {
@@ -935,7 +942,7 @@ const fetchTemplates = async () => {
         {
           conversationId: selectedConversation.conversationId,
           accountId: selectedAccount.id,
-        }
+        },
       );
       if (response.data.success) {
         alert("Conversation moved to Trash.");
@@ -953,7 +960,7 @@ const fetchTemplates = async () => {
       {
         conversationId: selectedConversation.conversationId,
         accountId: selectedAccount.id,
-      }
+      },
     );
     if (res.data.success) onBack();
   };
@@ -961,7 +968,7 @@ const fetchTemplates = async () => {
   const handlePermanentDelete = async () => {
     if (
       !window.confirm(
-        "WARNING: Once deleted, this message cannot be restored. Proceed?"
+        "WARNING: Once deleted, this message cannot be restored. Proceed?",
       )
     )
       return;
@@ -970,7 +977,7 @@ const fetchTemplates = async () => {
       {
         conversationId: selectedConversation.conversationId,
         accountId: selectedAccount.id,
-      }
+      },
     );
     if (res.data.success) onBack();
   };
@@ -984,7 +991,7 @@ const fetchTemplates = async () => {
           conversationId: selectedConversation.conversationId,
           accountId: selectedAccount.id,
           messageId,
-        }
+        },
       );
       if (res.data.success) {
         // Remove the message from local state; if no messages left, go back
@@ -1082,10 +1089,10 @@ const fetchTemplates = async () => {
   <div style="font-family: Calibri, sans-serif; font-size: 11pt; color: #000000;">
     <b style="font-weight: bold;">From:</b> ${formatSender(
       message.fromName,
-      message.fromEmail
+      message.fromEmail,
     )}<br/>
     <b style="font-weight: bold;">Sent:</b> ${formatLongDate(
-      message.sentAt
+      message.sentAt,
     )}<br/>
     <b style="font-weight: bold;">To:</b> ${message.toEmail}<br/>
     ${
@@ -1103,7 +1110,7 @@ const fetchTemplates = async () => {
 
     // 🔥 Set default account
     const defaultAccount = accounts.find(
-      (acc) => acc.id === selectedAccount?.id
+      (acc) => acc.id === selectedAccount?.id,
     );
     setSelectedFromAccount(defaultAccount);
 
@@ -1188,7 +1195,7 @@ const fetchTemplates = async () => {
 
     // 🔥 Set default account
     const defaultAccount = accounts.find(
-      (acc) => acc.id === selectedAccount?.id
+      (acc) => acc.id === selectedAccount?.id,
     );
     setSelectedFromAccount(defaultAccount);
 
@@ -1262,7 +1269,7 @@ const fetchTemplates = async () => {
 
     // 🔥 Set default account
     const defaultAccount = accounts.find(
-      (acc) => acc.id === selectedAccount?.id
+      (acc) => acc.id === selectedAccount?.id,
     );
     setSelectedFromAccount(defaultAccount);
 
@@ -1300,7 +1307,7 @@ const fetchTemplates = async () => {
 
     const response = await api.patch(
       `${API_BASE_URL}/api/scheduled-messages/${editingScheduledId}`,
-      payload
+      payload,
     );
 
     if (response.data.success) {
@@ -1309,7 +1316,6 @@ const fetchTemplates = async () => {
       closeReplyModal();
     }
   };
-
 
   const sendNormalReply = async (bodyHtml) => {
     if (!activeReplyMessage) {
@@ -1325,20 +1331,12 @@ const fetchTemplates = async () => {
       payload.append("subject", replyData.subject);
       payload.append("body", bodyHtml);
       payload.append("emailAccountId", selectedFromAccount.id);
-      payload.append(
-        "conversationId",
-        selectedConversation.conversationId
-      );
-      payload.append(
-        "inReplyToId",
-        activeReplyMessage.messageId
-      );
+      payload.append("conversationId", selectedConversation.conversationId);
+      payload.append("inReplyToId", activeReplyMessage.messageId);
 
-      await axios.post(
-        `${API_BASE_URL}/api/smtp/send`,
-        payload,
-        { headers: { "Content-Type": "multipart/form-data" } }
-      );
+      await axios.post(`${API_BASE_URL}/api/smtp/send`, payload, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
       toast.success("Reply sent successfully");
       closeReplyModal();
@@ -1356,7 +1354,7 @@ const fetchTemplates = async () => {
       activeReplyMessage.fromEmail,
       ...(activeReplyMessage.ccEmail?.split(",") || []),
     ]
-      .map(e => e.trim())
+      .map((e) => e.trim())
       .filter(Boolean)
       .join(",");
 
@@ -1369,11 +1367,9 @@ const fetchTemplates = async () => {
     payload.append("conversationId", selectedConversation.conversationId);
     payload.append("inReplyToId", activeReplyMessage.messageId);
 
-    await axios.post(
-      `${API_BASE_URL}/api/smtp/send`,
-      payload,
-      { headers: { "Content-Type": "multipart/form-data" } }
-    );
+    await axios.post(`${API_BASE_URL}/api/smtp/send`, payload, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
 
     toast.success("Reply all sent successfully");
     closeReplyModal();
@@ -1394,16 +1390,13 @@ const fetchTemplates = async () => {
     payload.append("body", bodyHtml);
     payload.append("emailAccountId", selectedFromAccount.id);
 
-    await axios.post(
-      `${API_BASE_URL}/api/smtp/send`,
-      payload,
-      { headers: { "Content-Type": "multipart/form-data" } }
-    );
+    await axios.post(`${API_BASE_URL}/api/smtp/send`, payload, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
 
     toast.success("Forward sent successfully");
     closeReplyModal();
   };
-
 
   const sendForward = async () => {
     const payload = new FormData();
@@ -1411,13 +1404,12 @@ const fetchTemplates = async () => {
     payload.append("subject", `Fwd: ${selectedEmail.subject}`);
     payload.append(
       "body",
-      `<br/><br/>---------- Forwarded message ----------<br/>${selectedEmail.body}`
+      `<br/><br/>---------- Forwarded message ----------<br/>${selectedEmail.body}`,
     );
     payload.append("emailAccountId", selectedAccount.id);
 
-    await axios.post("/api/smtp/send", payload);
+    await axios.post(`${API_BASE_URL}/api/smtp/send`, payload);
   };
-
 
   const handleSendReply = async () => {
     const bodyContent = editorRef.current?.innerHTML || "";
@@ -1460,7 +1452,7 @@ const fetchTemplates = async () => {
       // CREATE a new draft message
       if (replyMode && editorRef.current) {
         const draftBody = editorRef.current?.innerHTML || "";
-        
+
         if (!replyData.to && !draftBody) {
           toast.error("Cannot save empty draft");
           return;
@@ -1479,7 +1471,7 @@ const fetchTemplates = async () => {
 
         const response = await api.post(
           `${API_BASE_URL}/api/inbox/save-draft`,
-          draftData
+          draftData,
         );
 
         if (response.data.success) {
@@ -1492,22 +1484,25 @@ const fetchTemplates = async () => {
             subject: "",
             body: "",
           });
-          
+
           if (onMessageSent) {
             onMessageSent();
           }
         }
-      } 
+      }
       // Case 2: If viewing a message - MOVE entire conversation to draft folder
       else if (selectedConversation?.conversationId) {
-        console.log("📁 Moving conversation to draft folder:", selectedConversation.conversationId);
+        console.log(
+          "📁 Moving conversation to draft folder:",
+          selectedConversation.conversationId,
+        );
 
         const response = await api.patch(
           `${API_BASE_URL}/api/inbox/move-to-draft`,
           {
             conversationId: selectedConversation.conversationId,
             accountId: selectedAccount.id,
-          }
+          },
         );
 
         if (response.data.success) {
@@ -1520,12 +1515,12 @@ const fetchTemplates = async () => {
       }
     } catch (error) {
       console.error("❌ Error saving draft:", error);
-      toast.error("Failed to save draft: " + (error.response?.data?.message || error.message));
+      toast.error(
+        "Failed to save draft: " +
+          (error.response?.data?.message || error.message),
+      );
     }
   };
-
-
-
 
   const closeReplyModal = () => {
     setReplyMode(null);
@@ -1652,8 +1647,8 @@ const fetchTemplates = async () => {
             )}
 
             {/* 🗑️ TRASH ACTIONS */}
-             
-           {selectedFolder === "trash" ? (
+
+            {selectedFolder === "trash" ? (
               <>
                 {/* Restore */}
                 <button
@@ -1742,19 +1737,19 @@ const fetchTemplates = async () => {
         ) : (
           <div className="max-w-4xl mx-auto py-6 px-6 space-y-4">
             {messages
-                .filter((msg) => {
-                  // If we are in Sent folder, show only sent items
-                  if (selectedFolder === "sent") return true;
+              .filter((msg) => {
+                // If we are in Sent folder, show only sent items
+                if (selectedFolder === "sent") return true;
 
-                  // If we are in Draft folder, show drafts
-                  if (selectedFolder === "draft") return msg.folder === "draft";
+                // If we are in Draft folder, show drafts
+                if (selectedFolder === "draft") return msg.folder === "draft";
 
-                  // If we are in Trash or Spam, show everything in that conversation
-                  if (["spam", "trash"].includes(selectedFolder)) return true;
+                // If we are in Trash or Spam, show everything in that conversation
+                if (["spam", "trash"].includes(selectedFolder)) return true;
 
-                  // 📥 FIX FOR INBOX: Show both SENT and RECEIVED messages
-                  return msg.direction === "received" || msg.direction === "sent";
-                })
+                // 📥 FIX FOR INBOX: Show both SENT and RECEIVED messages
+                return msg.direction === "received" || msg.direction === "sent";
+              })
               .reverse()
               // ... render message
               .map((message) => {
@@ -1803,7 +1798,7 @@ const fetchTemplates = async () => {
                               </div>
                               <div className="text-xs text-gray-500 space-y-1">
                                 {/* FROM */}
-                               <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2">
                                   <span className="font-semibold text-[9px] text-gray-400">
                                     From:
                                   </span>
@@ -1839,7 +1834,6 @@ const fetchTemplates = async () => {
                                   {formatDate(message.sentAt)}
                                 </div>
                               </div>
-
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1847,7 +1841,9 @@ const fetchTemplates = async () => {
                               <Paperclip className="w-4 h-4 text-gray-400" />
                             )}
                             <button
-                              onClick={(e) => handleDeleteSingleMessage(message.id, e)}
+                              onClick={(e) =>
+                                handleDeleteSingleMessage(message.id, e)
+                              }
                               className="p-1 hover:bg-red-50 rounded transition-colors group"
                               title="Move to Trash"
                             >
@@ -1989,7 +1985,7 @@ const fetchTemplates = async () => {
 
       {/* 🔥 REPLY MODAL WITH ACCOUNT & TEMPLATE DROPDOWNS */}
       {replyMode && (
-         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center pt-20">
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center pt-20">
           <div className="relative z-50 w-full max-w-4xl mx-auto bg-white dark:bg-slate-900 rounded-2xl shadow-2xl overflow-hidden">
             {/* ... (Existing Reply Modal Content) */}
             <div className="border-b border-gray-200 px-6 py-4 bg-gray-50 flex items-center justify-between">

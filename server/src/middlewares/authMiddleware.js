@@ -39,6 +39,7 @@ async function loadUser(userId) {
         empId: true,
         jobRole: true,
         isActive: true,
+        passwordChangedAt: true,
       },
     }),
   );
@@ -95,6 +96,16 @@ export const protect = async (req, res, next) => {
 
   if (!user) {
     return res.status(401).json({ error: "User not found" });
+  }
+
+  if (
+    user.passwordChangedAt &&
+    decoded.iat &&
+    decoded.iat < Math.floor(new Date(user.passwordChangedAt).getTime() / 1000)
+  ) {
+    return res.status(401).json({
+      error: "Your password was changed. Please log in again.",
+    });
   }
 
   // Deactivated users are logged out on their next request (the frontend

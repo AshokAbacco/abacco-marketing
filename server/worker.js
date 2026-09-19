@@ -17,6 +17,9 @@ process.env.PROCESS_ROLE = process.env.PROCESS_ROLE || "worker";
 
 const { default: prisma, isDbUnavailableError } =
   await import("./src/prismaClient.js");
+const { initObservability, captureError, flushObservability } =
+  await import("./src/observability.js");
+await initObservability("worker");
 const { runSync } = await import("./src/services/imap.service.js");
 const { resumeAccountDeletions } =
   await import("./src/services/accountDeletionWorker.js");
@@ -33,6 +36,13 @@ const { runFollowupCleanup } =
 const { purgeExpiredEmails } =
   await import("./src/services/emailRetention.service.js");
 const { EMAIL_RETENTION_DAYS } = await import("./src/config/emailRetention.js");
+const { resumeExpiredPauses } =
+  await import("./src/services/inboundProcessor.service.js");
+const { runTaskReminders, purgeOldNotifications } =
+  await import("./src/controllers/crm/tasks.controller.js");
+const { runSequences } = await import("./src/services/automation.service.js");
+const { flushAccountSends, purgeOldDailySends } =
+  await import("./src/services/sendingLimits.service.js");
 
 /* ══════════════════════════════════════════════════════════════════════════
    CONFIG
@@ -90,6 +100,7 @@ function noteSuccess() {
 function noteFailure(label, err) {
   if (!isDbUnavailableError(err)) {
     console.error(`❌ ${label}:`, err?.message || err);
+    captureError(err, { tags: { job: label } });
     return;
   }
   consecutiveFailures++;
@@ -274,6 +285,25 @@ async function startWorker() {
   every(IMAP_TICK_MS, "imapSync", () => runSync(prisma));
   every(CLEANUP_TICK_MS, "followupCleanup", runFollowupCleanup);
   every(CLEANUP_TICK_MS, "trimFollowupBodies", trimFollowupBodies);
+  every(
+    ms("ACCOUNT_RESUME_TICK_MS", 5 * 60_000),
+    "resumeExpiredPauses",
+    resumeExpiredPauses,
+  );
+  every(ms("TASK_REMINDER_TICK_MS", 60_000), "taskReminders", () =>
+    runTaskReminders(),
+  );
+  every(ms("SEQUENCE_TICK_MS", 10 * 60_000), "followupSequences", () =>
+    runSequences(),
+  );
+  every(ms("DAILY_SEND_PURGE_TICK_MS", 24 * 3_600_000), "purgeDailySends", () =>
+    purgeOldDailySends(),
+  );
+  every(
+    ms("NOTIFICATION_PURGE_TICK_MS", 6 * 3_600_000),
+    "purgeNotifications",
+    () => purgeOldNotifications(),
+  );
 
   // Not awaited: a large first backlog shouldn't delay the other jobs.
   const retention = every(RETENTION_TICK_MS, "purgeExpiredEmails", () =>
@@ -306,6 +336,12 @@ async function shutdown(signal, exitCode = 0) {
     console.error("⚠️ Could not flush daily send counts:", err.message);
   }
   try {
+    await flushAccountSends();
+  } catch (err) {
+    console.error("⚠️ Could not flush per-mailbox send counts:", err.message);
+  }
+  await flushObservability();
+  try {
     await prisma.$disconnect();
   } catch {
     /* already closed */
@@ -324,10 +360,12 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection in worker:", err);
+  captureError(err, { tags: { kind: "unhandledRejection" } });
 });
 
 process.on("uncaughtException", (err) => {
   console.error("💥 Uncaught exception in worker:", err);
+  captureError(err, { tags: { kind: "uncaughtException" } });
   // Exit non-zero so the platform restarts the worker.
   shutdown("uncaughtException", 1);
 });

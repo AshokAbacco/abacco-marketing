@@ -13,7 +13,11 @@ process.env.PROCESS_ROLE = process.env.PROCESS_ROLE || "api";
 
 const { default: express } = await import("express");
 const { default: cors } = await import("cors");
+const { default: helmet } = await import("helmet");
 const { default: prisma } = await import("./src/prismaClient.js");
+const { initObservability, captureError, flushObservability } =
+  await import("./src/observability.js");
+await initObservability("api");
 
 const { default: accountRoutes } =
   await import("./src/routes/inbox/accounts.js");
@@ -33,6 +37,13 @@ const { default: dashboardRoutes } =
   await import("./src/routes/dashboard.routes.js");
 const { default: accountGroupsRoutes } =
   await import("./src/routes/inbox/accountGroups.js");
+const { default: deliverabilityRoutes } =
+  await import("./src/routes/deliverability.routes.js");
+const { default: unsubscribeRoutes } =
+  await import("./src/routes/unsubscribe.routes.js");
+const { default: crmRoutes } = await import("./src/routes/crm.routes.js");
+const { default: automationRoutes } =
+  await import("./src/routes/automation.routes.js");
 
 if (!process.env.JWT_SECRET) {
   console.error("💥 JWT_SECRET is not set — refusing to start.");
@@ -42,8 +53,18 @@ if (!process.env.JWT_SECRET) {
 const app = express();
 
 app.disable("x-powered-by");
-// Behind Render's proxy: correct req.ip / req.protocol.
-app.set("trust proxy", 1);
+// Behind Render's proxy: correct req.ip / req.protocol (rate limits use req.ip).
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
+
+// Standard security headers. The API serves JSON plus the small
+// unsubscribe page (inline styles, no scripts), so the default CSP fits.
+// Cross-origin resource policy is relaxed because the frontend lives on a
+// different origin and loads files (attachments) from this API.
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
 
 // --------------------
 // Middlewares
@@ -132,6 +153,12 @@ app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/account-groups", accountGroupsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/deliverability", deliverabilityRoutes);
+app.use("/api/crm", crmRoutes);
+app.use("/api/automation", automationRoutes);
+
+// Public unsubscribe links (no login): https://<api>/u/<token>
+app.use("/u", unsubscribeRoutes);
 
 // --------------------
 // 404 + error handler
@@ -152,6 +179,10 @@ app.use((err, req, res, _next) => {
       .json({ success: false, message: "Invalid JSON body" });
   }
   console.error("Unhandled error:", req.method, req.originalUrl, err);
+  captureError(err, {
+    tags: { route: req.originalUrl?.slice(0, 200), method: req.method },
+    user: req.user,
+  });
   if (res.headersSent) return;
   res.status(500).json({ success: false, message: "Server error" });
 });
@@ -188,6 +219,7 @@ async function shutdown(signal, exitCode = 0) {
   setTimeout(() => process.exit(exitCode), 10_000).unref();
 
   server.close(async () => {
+    await flushObservability();
     try {
       await prisma.$disconnect();
     } catch {
@@ -205,9 +237,11 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection in API:", err);
+  captureError(err, { tags: { kind: "unhandledRejection" } });
 });
 
 process.on("uncaughtException", (err) => {
   console.error("💥 Uncaught exception in API:", err);
+  captureError(err, { tags: { kind: "uncaughtException" } });
   shutdown("uncaughtException", 1);
 });

@@ -78,6 +78,25 @@ model EmailAccount {
   estimatedDeleteAt         DateTime?
   estimatedSecondsRemaining Int?
 
+  // ── Sending health (Phase 1) ──
+  // Set automatically when the account's bounce rate spikes or the
+  // provider reports a sending-quota error; cleared by an admin (or
+  // automatically after ACCOUNT_PAUSE_HOURS). While set, the campaign
+  // engine does not send from this account.
+  sendingPausedAt     DateTime?
+  sendingPausedReason String?
+  sendingPausedUntil  DateTime?
+
+  // ── Daily cap & warm-up (Phase 4) ──
+  /// Manual cap for this mailbox (emails per day). Overrides warm-up and
+  /// the company default when set.
+  dailyCap       Int?
+  /// Gradually raise this mailbox's cap from warmupStartCap to warmupTarget.
+  warmupEnabled  Boolean   @default(false)
+  warmupStartAt  DateTime?
+  warmupStartCap Int?
+  warmupTarget   Int?
+
   @@index([userId])
   @@index([email])
 }
@@ -105,6 +124,20 @@ model User {
   jobRole  String  @default("EMP")
   location String?
   isActive Boolean @default(true) // ✅ Active/Inactive status
+
+  // Set when an admin changes/resets the password. Login tokens issued
+  // before this moment are rejected, so a reset logs out old sessions.
+  passwordChangedAt DateTime?
+
+  // ── CRM (Phase 2) ──
+  ownedContacts   Contact[]      @relation("ContactOwner")
+  ownedCompanies  Company[]      @relation("CompanyOwner")
+  ownedDeals      Deal[]         @relation("DealOwner")
+  assignedTasks   Task[]         @relation("TaskAssignee")
+  createdTasks    Task[]         @relation("TaskCreator")
+  crmActivities   Activity[]     @relation("ActivityUser")
+  notifications   Notification[]
+  ownedSequences  FollowupSequence[] @relation("SequenceOwner")
 
   emailAccounts      EmailAccount[]
   ScheduledMessage   ScheduledMessage[]
@@ -350,6 +383,13 @@ model Campaign {
 
   error String?
 
+  // 🔹 Follow-up automation (Phase 3): set on campaigns a sequence creates.
+  sequenceId   Int?
+  sequence     FollowupSequence? @relation("SequenceCampaigns", fields: [sequenceId], references: [id], onDelete: SetNull)
+  sequenceStep Int?
+  // The sequence whose base (root) campaign this is.
+  rootOfSequence FollowupSequence? @relation("SequenceRoot")
+
   // 🔹 Relation
   recipients CampaignRecipient[]
   user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -365,6 +405,7 @@ model Campaign {
   // Follow-up chain lookups + cleanup job
   @@index([parentCampaignId])
   @@index([sendType, status])
+  @@index([sequenceId])
 }
 
 model CampaignRecipient {
@@ -382,10 +423,15 @@ model CampaignRecipient {
   sendingIp     String?
   lastTriedAt   DateTime?
   updatedAt     DateTime?
+
+  // ── Engagement (Phase 1) ──
+  // status stays "sent" for these; the timestamps record what happened next.
+  repliedAt      DateTime?
+  bouncedAt      DateTime?
+  bounceType     String? // "hard" | "soft" | "block"
+  unsubscribedAt DateTime?
+
   campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  // NOTE: the old @@index([campaignId]) was removed — it is a prefix of
-  // @@unique([campaignId, email]) and @@index([campaignId, status]), so it
-  // only cost write time on every insert/update.
 
   @@unique([campaignId, email])
   @@index([campaignId, status])
@@ -397,8 +443,15 @@ model CampaignRecipient {
   // Stuck-email recovery sweep (every 2 min):
   //   WHERE status = 'processing' AND updatedAt < ?
   @@index([status, updatedAt])
-  // Busy-account lookup: DISTINCT accountId for sending campaigns
-  @@index([accountId])
+  // Busy-account lookup (accountId prefix) and per-account health:
+  //   WHERE accountId = ? AND sentAt >= ?
+  @@index([accountId, sentAt])
+  // Reply matching by address + follow-up exclusion:
+  //   WHERE email = ? AND sentAt BETWEEN ? AND ?
+  @@index([email, sentAt])
+  // NOTE: the old @@index([campaignId]) was removed — it is a prefix of
+  // @@unique([campaignId, email]) and @@index([campaignId, status]), so it
+  // only cost write time on every insert/update.
 }
 
 model PitchTemplate {
@@ -449,6 +502,12 @@ model Lead {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // ===== CRM (Phase 2) =====
+  // The shared CRM contact this lead belongs to (set on creation and by
+  // scripts/migrateLeadsToCrm.js).
+  contactId Int?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
   // ===== System =====
   sentAt     DateTime?
   headerText String?   @db.Text
@@ -457,6 +516,7 @@ model Lead {
 
   @@index([userId, createdAt])
   @@index([email])
+  @@index([contactId])
 }
 
 enum LeadType {
@@ -481,4 +541,419 @@ model DailyEmailLog {
   // duplicate @@index was removed because every send updates this row.
   @@unique([userId, sentAt])
   @@index([sentAt])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 1 — REPLIES, BOUNCES, SUPPRESSION
+// These tables intentionally have no foreign keys: events must survive
+// campaign clean-up and account deletion (they are the audit trail for
+// "why did we stop emailing this person?").
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Company-wide do-not-contact list. Checked before every campaign send.
+model SuppressedEmail {
+  id         Int      @id @default(autoincrement())
+  email      String   @unique // always lower-case
+  /// unsubscribe | reply_request | hard_bounce | soft_bounce | manual | import
+  reason     String
+  /// link | one_click | mailto | reply | bounce | admin | import
+  source     String?
+  note       String?
+  campaignId Int?
+  accountId  Int?
+  addedById  String?
+  createdAt  DateTime @default(now())
+
+  @@index([reason, createdAt])
+  @@index([createdAt])
+}
+
+/// One row per bounce notification found in a mailbox.
+model EmailBounce {
+  id          Int      @id @default(autoincrement())
+  email       String
+  accountId   Int
+  campaignId  Int?
+  recipientId Int?
+  /// hard (address is bad) | soft (temporary) | block (rejected as spam/policy)
+  type        String
+  statusCode  String?
+  diagnostic  String?
+  /// Message-ID of the bounce notification itself — makes processing idempotent.
+  messageId   String
+  createdAt   DateTime @default(now())
+
+  @@unique([accountId, messageId])
+  @@index([email, createdAt])
+  @@index([accountId, createdAt])
+}
+
+/// One row per human reply to a campaign email.
+model ReplyEvent {
+  id             Int       @id @default(autoincrement())
+  /// The address we emailed (lower-case), even if they replied from an alias.
+  email          String
+  fromEmail      String?
+  accountId      Int
+  campaignId     Int?
+  recipientId    Int?
+  messageId      String
+  conversationId String?
+  subject        String?
+  snippet        String?
+  /// reply | unsubscribe_request
+  intent         String    @default("reply")
+  /// header (matched by Message-ID) | address (matched by sender address)
+  matchedBy      String
+  receivedAt     DateTime
+  /// Only for intent = unsubscribe_request: pending | suppressed | dismissed
+  reviewStatus   String?
+  reviewedAt     DateTime?
+  reviewedById   String?
+
+  // ── Classification (Phase 3) ──
+  /// interested | meeting | question | not_interested | wrong_person | unsubscribe | other
+  category       String?
+  /// rules | ai | manual
+  categorySource String?
+  confidence     Float?
+  /// Triage in the Replies screen
+  handledAt      DateTime?
+  handledById    String?
+
+  createdAt      DateTime  @default(now())
+
+  @@unique([accountId, messageId])
+  @@index([category, receivedAt])
+  @@index([handledAt, receivedAt])
+  @@index([email, receivedAt])
+  @@index([accountId, receivedAt])
+  @@index([reviewStatus, createdAt])
+  @@index([campaignId])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 2 — CRM: companies, contacts, deals, pipeline, activities, tasks
+//
+// Sharing model: one Contact per email address company-wide, with one
+// owner. Everyone can see CRM records; only the owner or Admin/HR can edit.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  /// Lower-case web domain (acme.com). Unique when set; free-mail domains are never stored.
+  domain    String?  @unique
+  website   String?
+  industry  String?
+  country   String?
+  phone     String?
+  size      String?
+  notes     String?  @db.Text
+
+  ownerId   String
+  owner     User     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  contacts   Contact[]
+  deals      Deal[]
+  activities Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([ownerId, updatedAt])
+}
+
+model Contact {
+  id        Int      @id @default(autoincrement())
+  /// Always lower-case. One contact per address across the whole company.
+  email     String   @unique
+  firstName String?
+  lastName  String?
+  /// Display name ("First Last", or the name from the email header).
+  name      String?
+  phone     String?
+  jobTitle  String?
+  country   String?
+  website   String?
+  linkedin  String?
+  /// association | attendees | industry (from the old LeadType) or free text
+  category  String?
+  /// lead | prospect | customer | lost
+  lifecycle String   @default("lead")
+  /// lead | reply | manual | import | campaign
+  source    String   @default("manual")
+  tags      String[] @default([])
+
+  ownerId   String
+  owner     User     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  companyId Int?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  lastActivityAt DateTime?
+  createdById    String?
+
+  deals      Deal[]
+  tasks      Task[]
+  activities Activity[]
+  leads      Lead[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId, updatedAt])
+  @@index([companyId])
+  @@index([lastActivityAt])
+  @@index([lifecycle, updatedAt])
+}
+
+model PipelineStage {
+  id          Int      @id @default(autoincrement())
+  name        String
+  /// Display order (ascending)
+  position    Int
+  /// open | won | lost
+  kind        String   @default("open")
+  color       String   @default("#0ea5e9")
+  /// Default win probability for forecasting (0–100)
+  probability Int      @default(0)
+  /// Stage new deals start in
+  isDefault   Boolean  @default(false)
+  archived    Boolean  @default(false)
+
+  deals       Deal[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([archived, position])
+}
+
+model Deal {
+  id              Int       @id @default(autoincrement())
+  title           String
+  amount          Decimal?  @db.Decimal(14, 2)
+  currency        String    @default("USD")
+  /// open | won | lost (mirrors the stage kind)
+  status          String    @default("open")
+  expectedCloseAt DateTime?
+  closedAt        DateTime?
+  lostReason      String?
+  /// Order inside a pipeline column
+  position        Float     @default(0)
+  source          String?
+  /// Idempotency key for automated creation (e.g. "lead:123")
+  externalKey     String?   @unique
+
+  stageId   Int
+  stage     PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  contactId Int?
+  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  companyId Int?
+  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  ownerId   String
+  owner     User      @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  tasks      Task[]
+  activities Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stageId, position])
+  @@index([ownerId, status])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([status, updatedAt])
+}
+
+/// Manual and system events on the timeline. Campaign emails, replies and
+/// bounces are NOT copied here — the timeline reads them from their own
+/// tables, so there is one source of truth.
+model Activity {
+  id          Int       @id @default(autoincrement())
+  /// note | call | meeting | email | stage_change | status_change |
+  /// task_completed | created | lead_created | owner_change
+  type        String
+  title       String?
+  body        String?   @db.Text
+  meta        Json?
+  occurredAt  DateTime  @default(now())
+  /// Idempotency key for automated entries (e.g. "lead:123")
+  externalKey String?   @unique
+
+  contactId Int?
+  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  dealId    Int?
+  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  companyId Int?
+  company   Company?  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  userId    String?
+  user      User?     @relation("ActivityUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+
+  @@index([contactId, occurredAt])
+  @@index([dealId, occurredAt])
+  @@index([companyId, occurredAt])
+}
+
+model Task {
+  id             Int       @id @default(autoincrement())
+  title          String
+  description    String?   @db.Text
+  dueAt          DateTime?
+  remindAt       DateTime?
+  reminderSentAt DateTime?
+  /// open | done
+  status         String    @default("open")
+  /// low | normal | high
+  priority       String    @default("normal")
+  completedAt    DateTime?
+  /// Idempotency key for automated tasks (e.g. "reply:123")
+  externalKey    String?   @unique
+
+  contactId Int?
+  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  dealId    Int?
+  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  assignedToId String
+  assignedTo   User   @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
+  createdById  String?
+  createdBy    User?  @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assignedToId, status, dueAt])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([status, remindAt])
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// task_reminder | task_assigned | deal_assigned | contact_assigned
+  type      String
+  title     String
+  body      String?
+  /// In-app path to open, e.g. /crm/tasks
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([createdAt])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 3 — AUTOMATION: settings, follow-up sequences
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Company-wide settings stored as JSON (e.g. "replyAutomation").
+model CrmSetting {
+  key         String   @id
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Automatic follow-ups for one base campaign:
+/// "no reply after N days → send step 1, then step 2 …", stopping for
+/// anyone who replies, bounces or unsubscribes.
+model FollowupSequence {
+  id         Int      @id @default(autoincrement())
+  name       String
+  /// The base (root) campaign. One sequence per campaign.
+  campaignId Int      @unique
+  campaign   Campaign @relation("SequenceRoot", fields: [campaignId], references: [id], onDelete: Cascade)
+  /// draft | active | paused | archived
+  status     String   @default("draft")
+
+  ownerId    String
+  owner      User     @relation("SequenceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+  campaigns   Campaign[] @relation("SequenceCampaigns")
+
+  activatedAt DateTime?
+  lastRunAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+}
+
+model SequenceStep {
+  id         Int              @id @default(autoincrement())
+  sequenceId Int
+  sequence   FollowupSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  /// 1-based order
+  position   Int
+  /// Wait this long after the previous email to this person
+  delayDays  Int
+  bodyHtml   String           @db.Text
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([sequenceId, position])
+}
+
+/// One person's progress through a sequence.
+model SequenceEnrollment {
+  id              Int              @id @default(autoincrement())
+  sequenceId      Int
+  sequence        FollowupSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  /// Lower-case address
+  email           String
+  /// The base-campaign recipient row
+  rootRecipientId Int
+  /// Mailbox that sent the original (follow-ups go from the same one)
+  accountId       Int
+  /// How many steps have been queued for this person
+  stepsSent       Int              @default(0)
+  nextDueAt       DateTime?
+  /// active | replied | bounced | unsubscribed | completed | stopped
+  status          String           @default("active")
+  stoppedReason   String?
+  lastCampaignId  Int?
+  lastStepAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([sequenceId, email])
+  @@index([sequenceId, status, nextDueAt])
+  @@index([status, nextDueAt])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 4 — per-mailbox daily send counters
+// One row per mailbox per sending day (the 5 PM → 5 PM window the engine
+// already uses). Written by the sender, read for caps and the dashboard.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model AccountDailySend {
+  id        Int      @id @default(autoincrement())
+  accountId Int
+  /// Start of the sending day this count belongs to
+  day       DateTime
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountId, day])
+  @@index([day])
 }

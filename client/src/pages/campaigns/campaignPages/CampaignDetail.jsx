@@ -315,7 +315,8 @@ export default function CampaignDetail() {
     const token = localStorage.getItem("token");
     const auth = { headers: { Authorization: `Bearer ${token}` } };
     const res = await fetch(
-      `${API_BASE_URL}/api/campaigns/${campaignId}/recipients?status=sent`,
+      // forFollowup=1: skip people who replied, unsubscribed or hard-bounced.
+      `${API_BASE_URL}/api/campaigns/${campaignId}/recipients?status=sent&forFollowup=1`,
       auth,
     );
     if (!res.ok) {
@@ -490,12 +491,24 @@ export default function CampaignDetail() {
         );
       }
 
+      const ex = data.excluded || {};
+      const leftOut =
+        (ex.replied || 0) + (ex.suppressed || 0) + (ex.bounced || 0);
       setModal({
         open: true,
         type: "success",
-        message: "Follow-up campaign created and sent successfully!",
+        message:
+          leftOut > 0
+            ? `Follow-up started for ${data.recipients} recipient(s). Left out ${leftOut}: ${ex.replied || 0} already replied, ${ex.suppressed || 0} unsubscribed/do-not-contact, ${ex.bounced || 0} bounced.`
+            : "Follow-up campaign created and sent successfully!",
       });
-      window.location.href = "/campaigns";
+      // Give people time to read the summary before leaving the page.
+      setTimeout(
+        () => {
+          window.location.href = "/campaigns";
+        },
+        leftOut > 0 ? 4000 : 0,
+      );
 
       // Reset form
       setFollowUpBody("");
@@ -540,7 +553,7 @@ export default function CampaignDetail() {
 
       // The recipients modal can delete rows, so re-pull the full sent list.
       const recRes = await fetch(
-        `${API_BASE_URL}/api/campaigns/${selectedCampaignId}/recipients?status=sent`,
+        `${API_BASE_URL}/api/campaigns/${selectedCampaignId}/recipients?status=sent&forFollowup=1`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       const recJson = await recRes.json();

@@ -12,12 +12,22 @@ const CampaignList = lazy(() => import("./pages/campaigns/CampaignList"));
 const AnalyticsDashboard = lazy(
   () => import("./pages/analytics/AnalyticsDashboard"),
 );
-const FollowUpRules = lazy(() => import("./pages/followup/FollowUpRules"));
 const MainInbox = lazy(() => import("./pages/campaigns/MainInbox.jsx"));
 const Users = lazy(() => import("./pages/admin/Users.jsx"));
 const AdminDailyOverview = lazy(
   () => import("./pages/admin/AdmindailyLimits.jsx"),
 );
+const Deliverability = lazy(
+  () => import("./pages/deliverability/Deliverability.jsx"),
+);
+const CrmContacts = lazy(() => import("./pages/crm/Contacts.jsx"));
+const CrmContactDetail = lazy(() => import("./pages/crm/ContactDetail.jsx"));
+const CrmCompanies = lazy(() => import("./pages/crm/Companies.jsx"));
+const CrmCompanyDetail = lazy(() => import("./pages/crm/CompanyDetail.jsx"));
+const CrmDeals = lazy(() => import("./pages/crm/Deals.jsx"));
+const CrmTasks = lazy(() => import("./pages/crm/Tasks.jsx"));
+const CrmReplies = lazy(() => import("./pages/crm/Replies.jsx"));
+const CrmSequences = lazy(() => import("./pages/crm/Sequences.jsx"));
 
 function PageLoader() {
   return (
@@ -118,11 +128,75 @@ export default function App() {
           </Page>
         }
       />
+      {/* The old placeholder page is replaced by the real sequence builder. */}
       <Route
         path="/followups"
+        element={<Navigate to="/crm/sequences" replace />}
+      />
+
+      {/* ── CRM ── */}
+      <Route path="/crm" element={<Navigate to="/crm/contacts" replace />} />
+      <Route
+        path="/crm/contacts"
         element={
           <Page>
-            <FollowUpRules />
+            <CrmContacts />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/contacts/:id"
+        element={
+          <Page>
+            <CrmContactDetail />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/companies"
+        element={
+          <Page>
+            <CrmCompanies />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/companies/:id"
+        element={
+          <Page>
+            <CrmCompanyDetail />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/deals"
+        element={
+          <Page>
+            <CrmDeals />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/tasks"
+        element={
+          <Page>
+            <CrmTasks />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/replies"
+        element={
+          <Page>
+            <CrmReplies />
+          </Page>
+        }
+      />
+      <Route
+        path="/crm/sequences"
+        element={
+          <Page>
+            <CrmSequences />
           </Page>
         }
       />
@@ -144,6 +218,17 @@ export default function App() {
           <RoleGuard allowedRoles={["admin", "hr"]}>
             <Page>
               <AdminDailyOverview />
+            </Page>
+          </RoleGuard>
+        }
+      />
+
+      <Route
+        path="/deliverability"
+        element={
+          <RoleGuard allowedRoles={["admin", "hr"]}>
+            <Page>
+              <Deliverability />
             </Page>
           </RoleGuard>
         }

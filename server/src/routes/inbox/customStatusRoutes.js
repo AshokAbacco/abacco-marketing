@@ -1,4 +1,5 @@
 import express from "express";
+import { protect, requireAdmin } from "../../middlewares/authMiddleware.js";
 // Shared client — `new PrismaClient()` here opened an extra connection pool.
 import prisma from "../../prismaClient.js";
 
@@ -7,7 +8,7 @@ const router = express.Router();
 // =======================================================
 // GET all custom lead statuses
 // =======================================================
-router.get("/", async (req, res) => {
+router.get("/", protect, async (req, res) => {
   try {
     const statuses = await prisma.customLeadStatus.findMany({
       orderBy: { createdAt: "desc" },
@@ -26,7 +27,7 @@ router.get("/", async (req, res) => {
 // =======================================================
 // CREATE a new custom lead status
 // =======================================================
-router.post("/", async (req, res) => {
+router.post("/", protect, requireAdmin, async (req, res) => {
   try {
     const { name, color, description } = req.body;
 
@@ -73,7 +74,7 @@ router.post("/", async (req, res) => {
 // =======================================================
 // UPDATE custom lead status
 // =======================================================
-router.put("/:id", async (req, res) => {
+router.put("/:id", protect, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, color, description } = req.body;
@@ -104,7 +105,7 @@ router.put("/:id", async (req, res) => {
 // =======================================================
 // DELETE custom lead status
 // =======================================================
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", protect, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 

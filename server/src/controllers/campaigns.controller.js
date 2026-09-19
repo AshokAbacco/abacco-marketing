@@ -11,7 +11,9 @@ import prisma from "../prismaClient.js";
 import {
   getDailyCount,
   DAILY_LIMIT,
+  resolveOriginalCampaignId,
 } from "../services/campaignMailer.service.js";
+import { normalizeEmail } from "../services/suppression.service.js";
 import cache, { getOrSet, delByPrefix } from "../utils/cache.js";
 import { isAdminOrHr } from "../middlewares/authMiddleware.js";
 
@@ -136,47 +138,63 @@ async function checkGlobalSendingRules(userId) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   HELPER — per-campaign status counts via a single grouped query.
-   Replaces the old pattern of loading every recipient row into Node.
-   Returns { [campaignId]: { total, sent, pending, processing, failed } }
+   HELPER — per-campaign status + engagement counts in ONE query.
+   Returns { [campaignId]: { total, sent, pending, processing, failed,
+             skipped, replied, bounced, unsubscribed, lastSentAt } }
 ───────────────────────────────────────────────────────────────────────── */
+const EMPTY_COUNTS = Object.freeze({
+  total: 0,
+  sent: 0,
+  pending: 0,
+  processing: 0,
+  failed: 0,
+  skipped: 0,
+  replied: 0,
+  bounced: 0,
+  unsubscribed: 0,
+  lastSentAt: null,
+});
+
 async function getRecipientCounts(campaignIds) {
   if (!campaignIds.length) return {};
 
-  const rows = await prisma.campaignRecipient.groupBy({
-    by: ["campaignId", "status"],
-    where: { campaignId: { in: campaignIds } },
-    _count: { _all: true },
-    _max: { sentAt: true },
-  });
+  const rows = await prisma.$queryRaw`
+    SELECT "campaignId",
+           count(*)::int                                               AS total,
+           count(*) FILTER (WHERE "status" = 'sent')::int              AS sent,
+           count(*) FILTER (WHERE "status" = 'pending')::int           AS pending,
+           count(*) FILTER (WHERE "status" = 'processing')::int        AS processing,
+           count(*) FILTER (WHERE "status" = 'failed')::int            AS failed,
+           count(*) FILTER (WHERE "status" = 'skipped')::int           AS skipped,
+           count(*) FILTER (WHERE "repliedAt" IS NOT NULL)::int        AS replied,
+           count(*) FILTER (WHERE "bouncedAt" IS NOT NULL)::int        AS bounced,
+           count(*) FILTER (WHERE "unsubscribedAt" IS NOT NULL)::int   AS unsubscribed,
+           max("sentAt") FILTER (WHERE "status" = 'sent')              AS "lastSentAt"
+    FROM "CampaignRecipient"
+    WHERE "campaignId" = ANY(${campaignIds}::int[])
+    GROUP BY "campaignId"
+  `;
 
   const map = {};
-  for (const id of campaignIds) {
-    map[id] = {
-      total: 0,
-      sent: 0,
-      pending: 0,
-      processing: 0,
-      failed: 0,
-      lastSentAt: null,
-    };
-  }
-  for (const r of rows) {
-    const bucket = map[r.campaignId];
-    if (!bucket) continue;
-    const n = r._count._all;
-    bucket.total += n;
-    if (bucket[r.status] !== undefined) bucket[r.status] += n;
-
-    // Latest actual send — replaces the old client-side
-    // `recipients.filter(r => r.sentAt).sort(...)` scan.
-    if (r.status === "sent" && r._max.sentAt) {
-      if (!bucket.lastSentAt || r._max.sentAt > bucket.lastSentAt) {
-        bucket.lastSentAt = r._max.sentAt;
-      }
-    }
-  }
+  for (const id of campaignIds) map[id] = { ...EMPTY_COUNTS };
+  for (const r of rows) map[r.campaignId] = { ...EMPTY_COUNTS, ...r };
   return map;
+}
+
+/** Fields added to every campaign row in list responses. */
+function countFields(k) {
+  return {
+    recipientCount: k.total,
+    sentCount: k.sent,
+    pendingCount: k.pending + k.processing,
+    failedCount: k.failed,
+    skippedCount: k.skipped,
+    repliedCount: k.replied,
+    bouncedCount: k.bounced,
+    unsubscribedCount: k.unsubscribed,
+    replyRate: k.sent ? Math.round((k.replied / k.sent) * 1000) / 10 : 0,
+    lastSentAt: k.lastSentAt,
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -706,6 +724,57 @@ export const scheduleCampaign = async (req, res) => {
 /* ═══════════════════════════════════════════════════════════════════════════
    CREATE FOLLOW-UP CAMPAIGN
 ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * Which of `emails` must be left out of a follow-up to `baseCampaignId`.
+ * Three set-based queries regardless of list size.
+ * @returns {{ byEmail: Map<string,string>, summary: {suppressed:number, replied:number, bounced:number} }}
+ */
+async function findFollowupExclusions(baseCampaignId, emails) {
+  const byEmail = new Map();
+  const summary = { suppressed: 0, replied: 0, bounced: 0 };
+  if (!emails.length) return { byEmail, summary };
+
+  const rootId = await resolveOriginalCampaignId(baseCampaignId);
+
+  const [suppressed, engaged] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT "email" FROM "SuppressedEmail" WHERE "email" = ANY(${emails}::text[])
+    `,
+    prisma.$queryRaw`
+      SELECT o."email",
+             coalesce(bool_or(
+               o."repliedAt" IS NOT NULL
+               OR EXISTS (
+                 SELECT 1 FROM "ReplyEvent" e
+                 WHERE e."email" = o."email" AND e."receivedAt" >= o."sentAt"
+               )
+             ), false) AS replied,
+             coalesce(bool_or(o."bounceType" = 'hard'), false) AS bounced
+      FROM "CampaignRecipient" o
+      WHERE o."campaignId" = ANY(${[...new Set([rootId, baseCampaignId])]}::int[])
+        AND o."email" = ANY(${emails}::text[])
+        AND o."status" = 'sent'
+      GROUP BY o."email"
+    `,
+  ]);
+
+  for (const r of suppressed) {
+    byEmail.set(r.email, "suppressed");
+    summary.suppressed++;
+  }
+  for (const r of engaged) {
+    if (byEmail.has(r.email)) continue;
+    if (r.replied) {
+      byEmail.set(r.email, "replied");
+      summary.replied++;
+    } else if (r.bounced) {
+      byEmail.set(r.email, "bounced");
+      summary.bounced++;
+    }
+  }
+  return { byEmail, summary };
+}
+
 export const createFollowupCampaign = async (req, res) => {
   try {
     const { baseCampaignId, subjects, bodyHtml, senderRecipientMap } = req.body;
@@ -782,24 +851,45 @@ export const createFollowupCampaign = async (req, res) => {
       },
     });
 
-    const recipientCreates = [];
+    const candidates = [];
     const seen = new Set();
     for (const [senderId, emailArray] of senderEntries) {
       const accountId = Number(senderId);
       if (!Number.isInteger(accountId) || !Array.isArray(emailArray)) continue;
       for (const raw of emailArray) {
-        const email = String(raw || "")
-          .trim()
-          .toLowerCase();
+        const email = normalizeEmail(raw);
         if (!email || seen.has(email)) continue;
         seen.add(email);
-        recipientCreates.push({
-          campaignId: followupCampaign.id,
-          email,
-          status: "pending",
-          accountId,
-        });
+        candidates.push({ email, accountId });
       }
+    }
+
+    // Leave out people who must not get a follow-up: on the do-not-contact
+    // list, already replied, or whose original hard-bounced. (The engine
+    // re-checks at send time; this keeps the counts honest from the start.)
+    const excluded = await findFollowupExclusions(
+      baseCampaign.id,
+      candidates.map((c) => c.email),
+    );
+    const recipientCreates = candidates
+      .filter((c) => !excluded.byEmail.has(c.email))
+      .map((c) => ({
+        campaignId: followupCampaign.id,
+        email: c.email,
+        status: "pending",
+        accountId: c.accountId,
+      }));
+
+    if (!recipientCreates.length) {
+      await prisma.campaign
+        .delete({ where: { id: followupCampaign.id } })
+        .catch(() => {});
+      return res.status(400).json({
+        success: false,
+        message:
+          "Everyone selected has replied, unsubscribed or bounced — no follow-up needed.",
+        excluded: excluded.summary,
+      });
     }
 
     try {
@@ -826,7 +916,12 @@ export const createFollowupCampaign = async (req, res) => {
 
     invalidateDashboardCache(req.user.id);
 
-    return res.json({ success: true, data: followupCampaign });
+    return res.json({
+      success: true,
+      data: followupCampaign,
+      recipients: recipientCreates.length,
+      excluded: excluded.summary,
+    });
   } catch (err) {
     console.error("Followup campaign error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -924,26 +1019,11 @@ export const getAllCampaigns = async (req, res) => {
 
     const counts = await getRecipientCounts(campaigns.map((c) => c.id));
 
-    const result = campaigns.map((c) => {
-      const k = counts[c.id] || {
-        total: 0,
-        sent: 0,
-        pending: 0,
-        processing: 0,
-        failed: 0,
-        lastSentAt: null,
-      };
-      return {
-        ...c,
-        // ⚠ FRONTEND: campaign.recipients is gone — use these instead of
-        // campaign.recipients.length / .filter(...).length
-        recipientCount: k.total,
-        sentCount: k.sent,
-        pendingCount: k.pending + k.processing,
-        failedCount: k.failed,
-        lastSentAt: k.lastSentAt,
-      };
-    });
+    const result = campaigns.map((c) => ({
+      ...c,
+      // ⚠ FRONTEND: campaign.recipients is gone — use these counts instead.
+      ...countFields(counts[c.id] || EMPTY_COUNTS),
+    }));
 
     cache.set(cacheKey, result, 20);
     return res.json({ success: true, data: result });
@@ -1105,23 +1185,11 @@ export const getDashboardCampaigns = async (req, res) => {
         /* ignore */
       }
 
-      const k = counts[campaign.id] || {
-        total: 0,
-        sent: 0,
-        pending: 0,
-        processing: 0,
-        failed: 0,
-        lastSentAt: null,
-      };
       return {
         ...campaign,
         fromNames,
         // ⚠ FRONTEND: campaign.recipients is no longer returned. Use these.
-        recipientCount: k.total,
-        sentCount: k.sent,
-        pendingCount: k.pending + k.processing,
-        failedCount: k.failed,
-        lastSentAt: k.lastSentAt,
+        ...countFields(counts[campaign.id] || EMPTY_COUNTS),
       };
     });
 
@@ -1223,6 +1291,7 @@ export const getCampaignProgress = async (req, res) => {
           processing: 0,
           completed: 0,
           failed: 0,
+          skipped: 0,
           sendingIp: ipMap[account.id] || null,
           eta: "0m",
         };
@@ -1231,6 +1300,7 @@ export const getCampaignProgress = async (req, res) => {
       const n = g._count._all;
       if (g.status === "sent") rows[account.id].completed += n;
       else if (g.status === "failed") rows[account.id].failed += n;
+      else if (g.status === "skipped") rows[account.id].skipped += n;
       else if (g.status === "pending" || g.status === "processing")
         rows[account.id].processing += n;
     }
@@ -1609,27 +1679,21 @@ export const getSingleCampaign = async (req, res) => {
         .json({ success: false, message: "Campaign not found" });
     }
 
-    /* ⚡ Stats from a grouped count: 4 rows instead of every recipient. */
-    const grouped = await prisma.campaignRecipient.groupBy({
-      by: ["status"],
-      where: { campaignId: id },
-      _count: { _all: true },
-    });
-
-    const raw = { sent: 0, pending: 0, processing: 0, failed: 0 };
-    for (const g of grouped) {
-      if (raw[g.status] !== undefined) raw[g.status] += g._count._all;
-    }
+    /* ⚡ Stats + engagement from one grouped query. */
+    const k = (await getRecipientCounts([id]))[id] || EMPTY_COUNTS;
 
     const stats = {
-      total: grouped.reduce((s, g) => s + g._count._all, 0),
-      // `processing` now includes in-flight rows, matching the modal's own
-      // copy filter (pending || processing). Previously only `pending` was
-      // counted here, so total !== processing + completed + failed whenever
-      // rows were mid-send.
-      processing: raw.pending + raw.processing,
-      completed: raw.sent,
-      failed: raw.failed,
+      total: k.total,
+      // `processing` includes in-flight rows, matching the modal's own
+      // copy filter (pending || processing).
+      processing: k.pending + k.processing,
+      completed: k.sent,
+      failed: k.failed,
+      skipped: k.skipped,
+      replied: k.replied,
+      bounced: k.bounced,
+      unsubscribed: k.unsubscribed,
+      replyRate: k.sent ? Math.round((k.replied / k.sent) * 1000) / 10 : 0,
     };
 
     /* ⚡ Recipients: paginated, and sentBodyHtml is NOT selected. That field
@@ -1643,7 +1707,15 @@ export const getSingleCampaign = async (req, res) => {
           ? { status: { in: ["pending", "processing"] } }
           : status === "failed"
             ? { status: "failed" }
-            : {};
+            : status === "skipped"
+              ? { status: "skipped" }
+              : status === "replied"
+                ? { repliedAt: { not: null } }
+                : status === "bounced"
+                  ? { bouncedAt: { not: null } }
+                  : status === "unsubscribed"
+                    ? { unsubscribedAt: { not: null } }
+                    : {};
 
     const recipients = await prisma.campaignRecipient.findMany({
       where: {
@@ -1664,6 +1736,10 @@ export const getSingleCampaign = async (req, res) => {
         sentFromEmail: true,
         sendingIp: true,
         error: true,
+        repliedAt: true,
+        bouncedAt: true,
+        bounceType: true,
+        unsubscribedAt: true,
       },
     });
 
@@ -1758,7 +1834,7 @@ export const getCampaignRecipientEmails = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Campaign not found" });
 
-    const { status } = req.query;
+    const { status, forFollowup } = req.query;
     const statusFilter =
       status === "sent" || status === "completed"
         ? { status: "sent" }
@@ -1766,10 +1842,24 @@ export const getCampaignRecipientEmails = async (req, res) => {
           ? { status: { in: ["pending", "processing"] } }
           : status === "failed"
             ? { status: "failed" }
-            : {};
+            : status === "skipped"
+              ? { status: "skipped" }
+              : {};
+
+    // ?forFollowup=1 → only people a follow-up may still go to.
+    const followupFilter =
+      forFollowup === "1" || forFollowup === "true"
+        ? {
+            repliedAt: null,
+            unsubscribedAt: null,
+            // Explicit null branch: `bounceType <> 'hard'` is NULL (not true)
+            // for rows that never bounced.
+            OR: [{ bounceType: null }, { bounceType: { not: "hard" } }],
+          }
+        : {};
 
     const recipients = await prisma.campaignRecipient.findMany({
-      where: { campaignId: id, ...statusFilter },
+      where: { campaignId: id, ...statusFilter, ...followupFilter },
       orderBy: { id: "asc" },
       select: {
         id: true,
@@ -2017,6 +2107,8 @@ export async function runFollowupCleanup() {
       status: "completed",
       parentCampaignId: { not: null },
       createdAt: { lte: oneDayAgo },
+      // Automated sequence steps are kept: they are that sequence's history.
+      sequenceId: null,
     },
     select: { id: true, parentCampaignId: true, userId: true },
   });

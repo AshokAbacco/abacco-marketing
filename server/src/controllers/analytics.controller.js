@@ -9,7 +9,7 @@ export const getTodayCampaignReport = async (req, res) => {
     console.log("====== TODAY CAMPAIGN REPORT REQUEST ======");
     console.log("req.user:", req.user);
     console.log("User ID from token:", userId);
-    console.log("Request headers:", req.headers.authorization);
+    // console.log("Request headers:", req.headers.authorization);
     console.log("==========================================");
 
     if (!userId) {

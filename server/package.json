@@ -11,7 +11,13 @@
     "db:indexes": "psql \"$DATABASE_URL\" -f prisma/manual/2026_09_perf_indexes.sql",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "security:hash-passwords": "node scripts/hashUserPasswords.js",
+    "security:rotate-mailbox-key": "node scripts/rotateMailboxKey.js",
+    "db:phase1": "psql \"$DATABASE_URL\" -f prisma/manual/2026_10_phase1_engagement.sql",
+    "crm:migrate-leads": "node scripts/migrateLeadsToCrm.js",
+    "test": "node ../tests/run-all.mjs",
+    "db:backup": "bash scripts/backupDatabase.sh"
   },
   "keywords": [
     "node",
@@ -27,18 +33,20 @@
     "@prisma/client": "^5.22.0",
     "@prisma/extension-accelerate": "^3.0.1",
     "@sendgrid/mail": "^8.1.6",
+    "@sentry/node": "^10.75.0",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "helmet": "^8.3.0",
     "html-to-text": "^9.0.5",
     "imap-simple": "^5.1.0",
     "imapflow": "^1.2.6",
     "jsonwebtoken": "^9.0.3",
     "luxon": "^3.7.2",
-    "mailparser": "^3.9.1",
+    "mailparser": "^3.9.28",
     "multer": "^2.0.2",
     "node-cache": "^5.1.2",
     "node-cron": "^4.2.1",
@@ -48,6 +56,7 @@
     "quoted-printable": "^1.0.1"
   },
   "devDependencies": {
+    "autocannon": "^8.0.0",
     "nodemon": "^3.1.11"
   },
   "engines": {

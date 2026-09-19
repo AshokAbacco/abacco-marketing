@@ -5,11 +5,9 @@ import pLimit from "p-limit";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { decrypt } from "../utils/crypto.js";
-import {
-  EMAIL_RETENTION_DAYS,
-  retentionCutoff,
-} from "../config/emailRetention.js";
+import { resolveSecret } from "../utils/crypto.js";
+import { retentionCutoff } from "../config/emailRetention.js";
+import { processInboundMessage } from "./inboundProcessor.service.js";
 
 dotenv.config();
 
@@ -184,11 +182,11 @@ async function saveEmailToDB(
     });
   } catch (err) {
     // Same message saved concurrently (e.g. manual refresh + worker tick).
-    if (err.code === "P2002") return false;
+    if (err.code === "P2002") return null;
     throw err;
   }
 
-  return true;
+  return { conversationId };
 }
 
 /* ======================================================
@@ -352,18 +350,46 @@ async function syncFolder(prisma, client, account, folderPath, type) {
         const direction =
           fromAddr === account.email.toLowerCase() ? "sent" : "received";
 
-        if (
-          await saveEmailToDB(
-            prisma,
-            account,
-            parsed,
-            m.messageId,
-            direction,
-            type,
-            m.arrivedAt,
-          )
-        ) {
+        const stored = await saveEmailToDB(
+          prisma,
+          account,
+          parsed,
+          m.messageId,
+          direction,
+          type,
+          m.arrivedAt,
+        );
+        if (stored) {
           saved++;
+
+          // Replies, bounces and opt-out requests (Phase 1). A failure here
+          // must not lose the email itself, which is already stored.
+          if (
+            direction === "received" &&
+            (type === "inbox" || type === "spam")
+          ) {
+            try {
+              const outcome = await processInboundMessage({
+                account,
+                parsed,
+                messageId: m.messageId,
+                conversationId: stored.conversationId,
+                receivedAt: m.arrivedAt,
+                rawSource: msg.source,
+              });
+              if (outcome.kind === "reply" || outcome.kind === "bounce") {
+                console.log(
+                  `📨 [${account.email}] ${outcome.kind}: ${JSON.stringify(outcome.detail)}`,
+                );
+              }
+            } catch (e) {
+              if (isDbDown(e)) throw e;
+              logError(
+                account.email,
+                `Inbound processing UID ${m.uid}: ${e.message}`,
+              );
+            }
+          }
         }
       } catch (e) {
         // A DB outage must stop the whole sync (so lastUid is NOT advanced
@@ -410,10 +436,11 @@ async function syncImap(prisma, account) {
 
   try {
     let imapPassword = null;
-    if (typeof account.encryptedPass === "string") {
-      imapPassword = account.encryptedPass.includes(":")
-        ? decrypt(account.encryptedPass)
-        : account.encryptedPass;
+    try {
+      imapPassword = resolveSecret(account.encryptedPass);
+    } catch (err) {
+      logError(account.email, `Cannot read stored password: ${err.message}`);
+      return;
     }
 
     if (!imapPassword || !account.imapHost) {
@@ -480,6 +507,7 @@ const ACCOUNT_SELECT = {
   imapPort: true,
   imapUser: true,
   encryptedPass: true,
+  userId: true, // owner — replies create CRM contacts owned by them
 };
 
 let syncRunning = false;

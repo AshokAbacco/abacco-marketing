@@ -4,7 +4,7 @@ process.env.PROCESS_ROLE = "worker";
 process.env.DAILY_LOG_FLUSH_MS = "50";
 process.env.JWT_SECRET = "x";
 
-const S = "/Volumes/Projects/abacco-technology/abacco-marketing/server/src";
+const S = new URL("../src", import.meta.url).pathname;
 await import("@prisma/client");
 await import("nodemailer");
 const db = globalThis.__db;
@@ -195,9 +195,7 @@ assert.equal(res.statusCode, 404, "other user can't read progress");
 console.log("✔ daily limit =", 40, "and progress is per-user");
 
 // ── 8. Auth middleware caches the user ──────────────────────────────────
-const jwt = (
-  await import("/Volumes/Projects/abacco-technology/abacco-marketing/server/node_modules/jsonwebtoken/index.js")
-).default;
+const jwt = (await import("jsonwebtoken")).default;
 const { protect, invalidateUserCache } = await import(`${S}/middlewares/authMiddleware.js`);
 let lookups = 0;
 const orig = prisma.user.findUnique;
