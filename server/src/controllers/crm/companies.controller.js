@@ -82,8 +82,18 @@ export const listCompanies = async (req, res) => {
         { domain: { contains: search.toLowerCase() } },
       ];
     }
-    if (req.query.ownerId === "me") where.ownerId = req.user.id;
-    else if (req.query.ownerId) where.ownerId = String(req.query.ownerId);
+
+    // FIX: previously a non-admin with no `ownerId` filter saw every user's
+    // companies (the client's default "All owners" filter sends nothing).
+    // Non-admins are now always restricted to their own records; only
+    // Admin/HR may request another owner's data or everyone's.
+    if (!isAdminOrHr(req.user)) {
+      where.ownerId = req.user.id;
+    } else if (req.query.ownerId === "me") {
+      where.ownerId = req.user.id;
+    } else if (req.query.ownerId) {
+      where.ownerId = String(req.query.ownerId);
+    }
 
     const [rows, total] = await Promise.all([
       prisma.company.findMany({
@@ -112,6 +122,13 @@ export const getCompany = async (req, res) => {
     const id = idParam(req);
     const company = id ? await prisma.company.findUnique({ where: { id } }) : null;
     if (!company) return res.status(404).json({ success: false, message: "Company not found" });
+
+    // FIX: a non-admin could previously fetch ANY company by id — the list
+    // page filtered results, but the detail route had no ownership check at
+    // all. Block non-owners (unless Admin/HR) the same way edits already do.
+    if (!canEdit(req.user, company.ownerId)) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
 
     const [contacts, deals, activities] = await Promise.all([
       prisma.contact.findMany({

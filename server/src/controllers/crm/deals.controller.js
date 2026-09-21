@@ -72,8 +72,20 @@ async function decorate(deals, user) {
 
 function dealFilters(req) {
   const where = {};
-  if (req.query.ownerId === "me") where.ownerId = req.user.id;
-  else if (req.query.ownerId) where.ownerId = String(req.query.ownerId);
+
+  // FIX: previously a non-admin with no `ownerId` filter saw every user's
+  // deals on the board and in the list (the client's default "All owners"
+  // filter sends nothing). Non-admins are now always restricted to their
+  // own records; only Admin/HR may request another owner's data or
+  // everyone's.
+  if (!isAdminOrHr(req.user)) {
+    where.ownerId = req.user.id;
+  } else if (req.query.ownerId === "me") {
+    where.ownerId = req.user.id;
+  } else if (req.query.ownerId) {
+    where.ownerId = String(req.query.ownerId);
+  }
+
   const search = cleanStr(req.query.search, 100);
   if (search) {
     where.OR = [
@@ -169,6 +181,14 @@ export const getDeal = async (req, res) => {
     const id = idParam(req);
     const deal = id ? await prisma.deal.findUnique({ where: { id } }) : null;
     if (!deal) return res.status(404).json({ success: false, message: "Deal not found" });
+
+    // FIX: a non-admin could previously fetch ANY deal by id — the board and
+    // list filtered results, but the detail route had no ownership check at
+    // all. Block non-owners (unless Admin/HR) the same way edits already do.
+    if (!canEdit(req.user, deal.ownerId)) {
+      return res.status(404).json({ success: false, message: "Deal not found" });
+    }
+
     const [[decorated], stage, tasks, activities] = await Promise.all([
       decorate([deal], req.user),
       prisma.pipelineStage.findUnique({ where: { id: deal.stageId } }),

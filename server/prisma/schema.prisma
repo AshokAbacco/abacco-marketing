@@ -125,19 +125,16 @@ model User {
   location String?
   isActive Boolean @default(true) // ✅ Active/Inactive status
 
-  // Set when an admin changes/resets the password. Login tokens issued
-  // before this moment are rejected, so a reset logs out old sessions.
   passwordChangedAt DateTime?
 
-  // ── CRM (Phase 2) ──
-  ownedContacts   Contact[]      @relation("ContactOwner")
-  ownedCompanies  Company[]      @relation("CompanyOwner")
-  ownedDeals      Deal[]         @relation("DealOwner")
-  assignedTasks   Task[]         @relation("TaskAssignee")
-  createdTasks    Task[]         @relation("TaskCreator")
-  crmActivities   Activity[]     @relation("ActivityUser")
-  notifications   Notification[]
-  ownedSequences  FollowupSequence[] @relation("SequenceOwner")
+  ownedContacts  Contact[]          @relation("ContactOwner")
+  ownedCompanies Company[]          @relation("CompanyOwner")
+  ownedDeals     Deal[]             @relation("DealOwner")
+  assignedTasks  Task[]             @relation("TaskAssignee")
+  createdTasks   Task[]             @relation("TaskCreator")
+  crmActivities  Activity[]         @relation("ActivityUser")
+  notifications  Notification[]
+  ownedSequences FollowupSequence[] @relation("SequenceOwner")
 
   emailAccounts      EmailAccount[]
   ScheduledMessage   ScheduledMessage[]
@@ -384,9 +381,9 @@ model Campaign {
   error String?
 
   // 🔹 Follow-up automation (Phase 3): set on campaigns a sequence creates.
-  sequenceId   Int?
-  sequence     FollowupSequence? @relation("SequenceCampaigns", fields: [sequenceId], references: [id], onDelete: SetNull)
-  sequenceStep Int?
+  sequenceId     Int?
+  sequence       FollowupSequence? @relation("SequenceCampaigns", fields: [sequenceId], references: [id], onDelete: SetNull)
+  sequenceStep   Int?
   // The sequence whose base (root) campaign this is.
   rootOfSequence FollowupSequence? @relation("SequenceRoot")
 
@@ -431,7 +428,10 @@ model CampaignRecipient {
   bounceType     String? // "hard" | "soft" | "block"
   unsubscribedAt DateTime?
 
-  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // NOTE: the old @@index([campaignId]) was removed — it is a prefix of
+  // @@unique([campaignId, email]) and @@index([campaignId, status]), so it
+  // only cost write time on every insert/update.
 
   @@unique([campaignId, email])
   @@index([campaignId, status])
@@ -449,9 +449,6 @@ model CampaignRecipient {
   // Reply matching by address + follow-up exclusion:
   //   WHERE email = ? AND sentAt BETWEEN ? AND ?
   @@index([email, sentAt])
-  // NOTE: the old @@index([campaignId]) was removed — it is a prefix of
-  // @@unique([campaignId, email]) and @@index([campaignId, status]), so it
-  // only cost write time on every insert/update.
 }
 
 model PitchTemplate {
@@ -543,7 +540,6 @@ model DailyEmailLog {
   @@index([sentAt])
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 1 — REPLIES, BOUNCES, SUPPRESSION
 // These tables intentionally have no foreign keys: events must survive
@@ -622,7 +618,7 @@ model ReplyEvent {
   handledAt      DateTime?
   handledById    String?
 
-  createdAt      DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([accountId, messageId])
   @@index([category, receivedAt])
@@ -633,7 +629,6 @@ model ReplyEvent {
   @@index([campaignId])
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2 — CRM: companies, contacts, deals, pipeline, activities, tasks
 //
@@ -642,19 +637,19 @@ model ReplyEvent {
 // ═══════════════════════════════════════════════════════════════════════════
 
 model Company {
-  id        Int      @id @default(autoincrement())
-  name      String
+  id       Int     @id @default(autoincrement())
+  name     String
   /// Lower-case web domain (acme.com). Unique when set; free-mail domains are never stored.
-  domain    String?  @unique
-  website   String?
-  industry  String?
-  country   String?
-  phone     String?
-  size      String?
-  notes     String?  @db.Text
+  domain   String? @unique
+  website  String?
+  industry String?
+  country  String?
+  phone    String?
+  size     String?
+  notes    String? @db.Text
 
-  ownerId   String
-  owner     User     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  ownerId String
+  owner   User   @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
 
   contacts   Contact[]
   deals      Deal[]
@@ -688,8 +683,8 @@ model Contact {
   source    String   @default("manual")
   tags      String[] @default([])
 
-  ownerId   String
-  owner     User     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  ownerId String
+  owner   User   @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Restrict)
 
   companyId Int?
   company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
@@ -712,23 +707,23 @@ model Contact {
 }
 
 model PipelineStage {
-  id          Int      @id @default(autoincrement())
+  id          Int     @id @default(autoincrement())
   name        String
   /// Display order (ascending)
   position    Int
   /// open | won | lost
-  kind        String   @default("open")
-  color       String   @default("#0ea5e9")
+  kind        String  @default("open")
+  color       String  @default("#0ea5e9")
   /// Default win probability for forecasting (0–100)
-  probability Int      @default(0)
+  probability Int     @default(0)
   /// Stage new deals start in
-  isDefault   Boolean  @default(false)
-  archived    Boolean  @default(false)
+  isDefault   Boolean @default(false)
+  archived    Boolean @default(false)
 
-  deals       Deal[]
+  deals Deal[]
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([archived, position])
 }
@@ -749,17 +744,17 @@ model Deal {
   /// Idempotency key for automated creation (e.g. "lead:123")
   externalKey     String?   @unique
 
-  stageId   Int
-  stage     PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  stageId Int
+  stage   PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
 
   contactId Int?
-  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   companyId Int?
-  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
-  ownerId   String
-  owner     User      @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  ownerId String
+  owner   User   @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
 
   tasks      Task[]
   activities Activity[]
@@ -778,28 +773,28 @@ model Deal {
 /// bounces are NOT copied here — the timeline reads them from their own
 /// tables, so there is one source of truth.
 model Activity {
-  id          Int       @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   /// note | call | meeting | email | stage_change | status_change |
   /// task_completed | created | lead_created | owner_change
   type        String
   title       String?
-  body        String?   @db.Text
+  body        String?  @db.Text
   meta        Json?
-  occurredAt  DateTime  @default(now())
+  occurredAt  DateTime @default(now())
   /// Idempotency key for automated entries (e.g. "lead:123")
-  externalKey String?   @unique
+  externalKey String?  @unique
 
   contactId Int?
-  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   dealId    Int?
-  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
   companyId Int?
-  company   Company?  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  userId    String?
-  user      User?     @relation("ActivityUser", fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+  user   User?   @relation("ActivityUser", fields: [userId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@index([contactId, occurredAt])
   @@index([dealId, occurredAt])
@@ -822,14 +817,14 @@ model Task {
   externalKey    String?   @unique
 
   contactId Int?
-  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   dealId    Int?
-  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
 
   assignedToId String
-  assignedTo   User   @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
+  assignedTo   User    @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
   createdById  String?
-  createdBy    User?  @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy    User?   @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -857,7 +852,6 @@ model Notification {
   @@index([createdAt])
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3 — AUTOMATION: settings, follow-up sequences
 // ═══════════════════════════════════════════════════════════════════════════
@@ -882,17 +876,17 @@ model FollowupSequence {
   /// draft | active | paused | archived
   status     String   @default("draft")
 
-  ownerId    String
-  owner      User     @relation("SequenceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  ownerId String
+  owner   User   @relation("SequenceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
 
   steps       SequenceStep[]
   enrollments SequenceEnrollment[]
-  campaigns   Campaign[] @relation("SequenceCampaigns")
+  campaigns   Campaign[]           @relation("SequenceCampaigns")
 
   activatedAt DateTime?
   lastRunAt   DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([status])
 }
@@ -938,7 +932,6 @@ model SequenceEnrollment {
   @@index([sequenceId, status, nextDueAt])
   @@index([status, nextDueAt])
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 4 — per-mailbox daily send counters

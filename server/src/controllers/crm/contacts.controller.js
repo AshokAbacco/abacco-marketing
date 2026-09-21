@@ -103,8 +103,19 @@ export const listContacts = async (req, res) => {
         { company: { name: { contains: search, mode: "insensitive" } } },
       ];
     }
-    if (req.query.ownerId === "me") where.ownerId = req.user.id;
-    else if (req.query.ownerId) where.ownerId = String(req.query.ownerId);
+
+    // FIX: previously a non-admin with no `ownerId` filter saw every user's
+    // contacts (the client's default "All owners" filter sends nothing).
+    // Non-admins are now always restricted to their own records; only
+    // Admin/HR may request another owner's data or everyone's.
+    if (!isAdminOrHr(req.user)) {
+      where.ownerId = req.user.id;
+    } else if (req.query.ownerId === "me") {
+      where.ownerId = req.user.id;
+    } else if (req.query.ownerId) {
+      where.ownerId = String(req.query.ownerId);
+    }
+
     if (LIFECYCLES.includes(req.query.lifecycle))
       where.lifecycle = req.query.lifecycle;
     if (req.query.category)
@@ -218,6 +229,15 @@ export const getContact = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Contact not found" });
 
+    // FIX: a non-admin could previously fetch ANY contact by id — the list
+    // page filtered results, but the detail route had no ownership check at
+    // all. Block non-owners (unless Admin/HR) the same way edits already do.
+    if (!canEdit(req.user, contact.ownerId)) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Contact not found" });
+    }
+
     const [
       company,
       deals,
@@ -320,13 +340,22 @@ export const getContactTimeline = async (req, res) => {
     const contact = id
       ? await prisma.contact.findUnique({
           where: { id },
-          select: { id: true, email: true },
+          select: { id: true, email: true, ownerId: true },
         })
       : null;
     if (!contact)
       return res
         .status(404)
         .json({ success: false, message: "Contact not found" });
+
+    // FIX: same ownership check as getContact — the timeline leaked another
+    // owner's contact activity even when the contact record itself was
+    // hidden from lists.
+    if (!canEdit(req.user, contact.ownerId)) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Contact not found" });
+    }
 
     const limit = intParam(req.query.limit, 30, 1, 100);
     const beforeParsed = parseDateOrNull(req.query.before);
