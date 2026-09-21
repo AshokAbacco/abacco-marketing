@@ -1,33 +1,47 @@
-import { PrismaClient } from "@prisma/client";
+// Shared client — a `new PrismaClient()` here opened a second connection pool.
+import prisma from "../prismaClient.js";
+import { syncLeadToCrm } from "../services/crm.service.js";
 
-const prisma = new PrismaClient();
-
+/**
+ * Keep the CRM in step with leads (Phase 2). Never fails the lead request:
+ * the lead is the user's primary action; CRM linking can be repeated by
+ * scripts/migrateLeadsToCrm.js.
+ */
+async function syncLeadSafely(lead) {
+  try {
+    const result = await syncLeadToCrm(lead);
+    return result?.contact?.id ?? null;
+  } catch (err) {
+    console.error(`CRM sync for lead ${lead.id} failed:`, err.message);
+    return null;
+  }
+}
 
 // ================= CREATE OR UPDATE LEAD FROM INBOX =================
 export const createLeadFromInbox = async (req, res) => {
   try {
-      const {
-        email,
-        name,
-        subject,
-        fromName,
-        fromEmail,
-        toEmail,
-        ccEmail,
-        bccEmail,
-        phone,
-        country,
-        website,
-        leadLink,
-        contactDate,
-        emailPitch,
-        headerText,
-        conversationId,
-        totalMessages,
-        thread,
-        leadType,
-        sentAt,
-      } = req.body;
+    const {
+      email,
+      name,
+      subject,
+      fromName,
+      fromEmail,
+      toEmail,
+      ccEmail,
+      bccEmail,
+      phone,
+      country,
+      website,
+      leadLink,
+      contactDate,
+      emailPitch,
+      headerText,
+      conversationId,
+      totalMessages,
+      thread,
+      leadType,
+      sentAt,
+    } = req.body;
 
     // 🔒 STRICT duplicate check (NO UPDATE)
     const existingLead = await prisma.lead.findFirst({
@@ -43,16 +57,6 @@ export const createLeadFromInbox = async (req, res) => {
         message: "Duplicate lead: this From Email already exists",
       });
     }
-
-    // 🔍 Clean logging (exclude massive HTML content)
-    console.log("📥 Creating lead:", {
-      fromEmail,
-      toEmail,
-      subject,
-      leadType,
-      attendeesCount: req.body.attendeesCount,
-      conversationId,
-    });
 
     // ✅ ONLY CREATE
 
@@ -87,14 +91,23 @@ export const createLeadFromInbox = async (req, res) => {
       },
     });
 
+    const contactId = await syncLeadSafely(lead);
 
-  res.status(201).json({
-    success: true,
-    message: "Lead saved successfully",
-    lead,
-  });
-
+    res.status(201).json({
+      success: true,
+      message: "Lead saved successfully",
+      lead: { ...lead, contactId },
+      contactId,
+    });
   } catch (error) {
+    if (error.code === "P2002") {
+      // fromEmail is unique company-wide.
+      return res.status(409).json({
+        success: false,
+        message:
+          "This client is already a lead of another team member. Open it in CRM → Contacts.",
+      });
+    }
     console.error("❌ Save lead error:", error);
     return res.status(500).json({
       success: false,
@@ -102,8 +115,6 @@ export const createLeadFromInbox = async (req, res) => {
     });
   }
 };
-
-
 
 // ================= GET ALL LEADS =================
 export const getAllLeads = async (req, res) => {
@@ -134,15 +145,16 @@ export const getLeadById = async (req, res) => {
     const id = Number(req.params.id);
 
     const lead = await prisma.lead.findUnique({
-      where: { 
+      where: {
         id: id,
         userId: req.user.id,
       },
-
     });
 
     if (!lead) {
-      return res.status(404).json({ success: false, message: "Lead not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Lead not found" });
     }
 
     res.json({ success: true, lead });
@@ -207,11 +219,26 @@ export const updateLead = async (req, res) => {
       },
     });
 
+    const contactId = await syncLeadSafely(updated);
+
     res.json({
       success: true,
-      lead: updated,
+      lead: { ...updated, contactId: contactId ?? updated.contactId },
     });
   } catch (error) {
+    if (error.code === "P2025") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Lead not found" });
+    }
+    if (error.code === "P2002") {
+      return res
+        .status(409)
+        .json({
+          success: false,
+          message: "Another lead already uses this From Email",
+        });
+    }
     console.error("Update lead error:", error);
     res.status(500).json({
       success: false,
@@ -220,16 +247,13 @@ export const updateLead = async (req, res) => {
   }
 };
 
-
-
-
 // ================= DELETE LEAD =================
 export const deleteLead = async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     await prisma.lead.delete({
-      where: { 
+      where: {
         id: id,
         userId: req.user.id, // ✅ Add this
       },
@@ -237,6 +261,11 @@ export const deleteLead = async (req, res) => {
 
     res.json({ success: true, message: "Lead deleted" });
   } catch (error) {
+    if (error.code === "P2025") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Lead not found" });
+    }
     console.error("Delete error:", error);
     res.status(500).json({ success: false, message: "Delete failed" });
   }

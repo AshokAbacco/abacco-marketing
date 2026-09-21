@@ -38,7 +38,8 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
   }, [editingUser]);
 
   // Derive final location value
-  const finalLocation = locationOption === "custom" ? customLocation : locationOption;
+  const finalLocation =
+    locationOption === "custom" ? customLocation : locationOption;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -60,7 +61,10 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
         if (password.trim()) {
           updateData.password = password;
         }
-        await api.put(`${API_BASE_URL}/api/users/${editingUser.id}`, updateData);
+        await api.put(
+          `${API_BASE_URL}/api/users/${editingUser.id}`,
+          updateData,
+        );
       } else {
         await api.post(`${API_BASE_URL}/api/users/register`, {
           empId,
@@ -82,7 +86,6 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center items-center">
-
       {/* Overlay */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -91,7 +94,6 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
 
       {/* Modal */}
       <div className="relative bg-white w-full max-w-lg rounded-2xl shadow-xl p-6 z-50">
-
         {/* Header */}
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-2xl font-bold">
@@ -107,7 +109,6 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
-
           <input
             placeholder="Employee ID"
             value={empId}
@@ -137,7 +138,13 @@ export default function AddEmp({ onClose, refreshUsers, editingUser }) {
           <div>
             <input
               type="password"
-              placeholder={editingUser ? "Password (leave blank to keep current)" : "Password"}
+              placeholder={
+                editingUser
+                  ? "New password (leave blank to keep current)"
+                  : "Password (min 8 characters)"
+              }
+              minLength={8}
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full p-3 border rounded-xl"

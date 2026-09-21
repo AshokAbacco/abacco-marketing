@@ -3,50 +3,60 @@
 // Access: admin / hr roles only — guard this route in your router
 
 import { useEffect, useState, useCallback } from "react";
+import { startVisiblePolling } from "../utils/polling";
 import {
-  Mail, RefreshCw, Zap, Users, TrendingUp,
-  Clock, CheckCircle2, AlertTriangle, Loader2, Radio,
-  ChevronLeft, ChevronRight,
+  Mail,
+  RefreshCw,
+  Zap,
+  Users,
+  TrendingUp,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  Radio,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { api } from "../utils/api"; // adjust path
 
 const POLL_INTERVAL = 15_000;
-const DAILY_LIMIT   = 5_000;
-const PAGE_SIZE     = 10;
+const DAILY_LIMIT = 5_000;
+const PAGE_SIZE = 10;
 
 // ─── Status badge config ──────────────────────────────────────────────────────
 const STATUS_CONFIG = {
   sending: {
     label: "Sending",
-    dot:   "bg-sky-500 animate-pulse",
+    dot: "bg-sky-500 animate-pulse",
     badge: "bg-sky-50 text-sky-700 border-sky-200",
-    icon:  <Radio size={10} className="inline mr-0.5" />,
+    icon: <Radio size={10} className="inline mr-0.5" />,
   },
   active: {
     label: "Active Today",
-    dot:   "bg-blue-500",
+    dot: "bg-blue-500",
     badge: "bg-blue-50 text-blue-700 border-blue-200",
-    icon:  <TrendingUp size={10} className="inline mr-0.5" />,
+    icon: <TrendingUp size={10} className="inline mr-0.5" />,
   },
   completed: {
     label: "Limit Reached",
-    dot:   "bg-red-500",
+    dot: "bg-red-500",
     badge: "bg-red-50 text-red-700 border-red-200",
-    icon:  <AlertTriangle size={10} className="inline mr-0.5" />,
+    icon: <AlertTriangle size={10} className="inline mr-0.5" />,
   },
   idle: {
     label: "Idle",
-    dot:   "bg-slate-300",
+    dot: "bg-slate-300",
     badge: "bg-slate-100 text-slate-500 border-slate-200",
-    icon:  <Clock size={10} className="inline mr-0.5" />,
+    icon: <Clock size={10} className="inline mr-0.5" />,
   },
 };
 
 // ─── Bar color ────────────────────────────────────────────────────────────────
 function barColor(pct) {
   if (pct >= 100) return "bg-gradient-to-r from-red-500 to-rose-500";
-  if (pct >= 75)  return "bg-gradient-to-r from-amber-400 to-orange-400";
-  if (pct >= 40)  return "bg-gradient-to-r from-blue-500 to-sky-500";
+  if (pct >= 75) return "bg-gradient-to-r from-amber-400 to-orange-400";
+  if (pct >= 40) return "bg-gradient-to-r from-blue-500 to-sky-500";
   return "bg-gradient-to-r from-sky-500 to-blue-500";
 }
 
@@ -55,10 +65,10 @@ function fromNow(date) {
   if (!date) return "—";
   const diff = Date.now() - new Date(date).getTime();
   const mins = Math.floor(diff / 60_000);
-  if (mins < 1)  return "just now";
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
+  if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
@@ -66,12 +76,18 @@ function fromNow(date) {
 function SummaryCard({ iconBg, icon, label, value, sub }) {
   return (
     <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-sky-100 p-5 flex items-center gap-4 hover:shadow-xl transition-shadow duration-200">
-      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+      <div
+        className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${iconBg}`}
+      >
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-xs text-slate-500 font-medium uppercase tracking-wide truncate">{label}</p>
-        <p className="text-2xl font-bold text-slate-800 leading-tight mt-0.5">{value}</p>
+        <p className="text-xs text-slate-500 font-medium uppercase tracking-wide truncate">
+          {label}
+        </p>
+        <p className="text-2xl font-bold text-slate-800 leading-tight mt-0.5">
+          {value}
+        </p>
         {sub && <p className="text-xs text-slate-400 mt-0.5 truncate">{sub}</p>}
       </div>
     </div>
@@ -89,30 +105,43 @@ function ProgressBar({ pct }) {
           style={{ width: `${clamped}%` }}
         />
       </div>
-      <span className="text-[11px] text-slate-400 w-8 text-right font-medium">{pct}%</span>
+      <span className="text-[11px] text-slate-400 w-8 text-right font-medium">
+        {pct}%
+      </span>
     </div>
   );
 }
 
 // ─── Filter Tabs ──────────────────────────────────────────────────────────────
 const FILTER_TABS = [
-  { key: "all",       label: "All"          },
-  { key: "sending",   label: "Sending"      },
-  { key: "active",    label: "Active"       },
-  { key: "completed", label: "Limit Reached"},
-  { key: "idle",      label: "Idle"         },
+  { key: "all", label: "All" },
+  { key: "sending", label: "Sending" },
+  { key: "active", label: "Active" },
+  { key: "completed", label: "Limit Reached" },
+  { key: "idle", label: "Idle" },
 ];
 
 // ─── Pagination Controls ──────────────────────────────────────────────────────
-function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) {
+function Pagination({
+  page,
+  totalPages,
+  onPrev,
+  onNext,
+  totalItems,
+  pageSize,
+}) {
   const from = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
-  const to   = Math.min(page * pageSize, totalItems);
+  const to = Math.min(page * pageSize, totalItems);
 
   return (
     <div className="flex items-center justify-between px-4 py-3 border-t border-sky-100 bg-gradient-to-r from-sky-50/50 to-blue-50/50">
       <p className="text-xs text-slate-500">
-        Showing <span className="font-semibold text-slate-700">{from}–{to}</span> of{" "}
-        <span className="font-semibold text-slate-700">{totalItems}</span> users
+        Showing{" "}
+        <span className="font-semibold text-slate-700">
+          {from}–{to}
+        </span>{" "}
+        of <span className="font-semibold text-slate-700">{totalItems}</span>{" "}
+        users
       </p>
       <div className="flex items-center gap-1">
         {/* Page number pills */}
@@ -158,20 +187,20 @@ function Pagination({ page, totalPages, onPrev, onNext, totalItems, pageSize }) 
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function AdminDailyOverview() {
-  const [data,        setData]        = useState(null);
-  const [loading,     setLoading]     = useState(true);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [search,      setSearch]      = useState("");
-  const [filter,      setFilter]      = useState("all");
-  const [error,       setError]       = useState(null);
-  const [page,        setPage]        = useState(1);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
 
   const fetchData = useCallback(async (showLoader = false) => {
     if (showLoader) setLoading(true);
     setError(null);
 
     try {
-      const res    = await api.get("/api/campaigns/admin/daily-overview");
+      const res = await api.get("/api/campaigns/admin/daily-overview");
       const result = res.data;
 
       if (result.success) {
@@ -182,9 +211,7 @@ export default function AdminDailyOverview() {
       }
     } catch (err) {
       setError(
-        err.response?.data?.message ||
-        err.message ||
-        "Failed to load data"
+        err.response?.data?.message || err.message || "Failed to load data",
       );
     } finally {
       setLoading(false);
@@ -194,8 +221,7 @@ export default function AdminDailyOverview() {
   // Initial load + polling
   useEffect(() => {
     fetchData(true);
-    const timer = setInterval(() => fetchData(false), POLL_INTERVAL);
-    return () => clearInterval(timer);
+    return startVisiblePolling(() => fetchData(false), POLL_INTERVAL);
   }, [fetchData]);
 
   // Reset to page 1 when search or filter changes
@@ -218,20 +244,23 @@ export default function AdminDailyOverview() {
       u.email.toLowerCase().includes(search.toLowerCase());
 
     const matchFilter =
-      filter === "all"
-        ? u.status !== "idle"
-        : u.status === filter;
+      filter === "all" ? u.status !== "idle" : u.status === filter;
 
     return matchSearch && matchFilter;
   });
 
   // ── Pagination ────────────────────────────────────────────────────────────
-  const totalPages  = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
-  const safePage    = Math.min(page, totalPages);
-  const paginated   = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginated = visible.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE,
+  );
 
-  const sendingNow     = data?.users?.filter(u => u.status === "sending").length || 0;
-  const totalSentToday = data?.users?.reduce((s, u) => s + (u.dailySent || 0), 0) ?? 0;
+  const sendingNow =
+    data?.users?.filter((u) => u.status === "sending").length || 0;
+  const totalSentToday =
+    data?.users?.reduce((s, u) => s + (u.dailySent || 0), 0) ?? 0;
 
   // ─────────────────────────────────────────────────────────────────────────
   if (loading) {
@@ -259,7 +288,6 @@ export default function AdminDailyOverview() {
 
   return (
     <div className="p-6 max-w-8xl mx-auto space-y-5 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 min-h-screen">
-
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
@@ -322,9 +350,8 @@ export default function AdminDailyOverview() {
 
       {/* ── Filter Tabs + Search ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-
         <div className="flex items-center gap-1 bg-white/80 backdrop-blur-sm border border-sky-100 shadow-lg p-1 rounded-xl">
-          {FILTER_TABS.map(tab => (
+          {FILTER_TABS.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setFilter(tab.key)}
@@ -336,11 +363,13 @@ export default function AdminDailyOverview() {
             >
               {tab.label}
               {tab.key !== "all" && counts[tab.key] != null && (
-                <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${
-                  filter === tab.key
-                    ? "bg-white/25 text-white"
-                    : "bg-sky-100 text-sky-700"
-                }`}>
+                <span
+                  className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${
+                    filter === tab.key
+                      ? "bg-white/25 text-white"
+                      : "bg-sky-100 text-sky-700"
+                  }`}
+                >
                   {counts[tab.key]}
                 </span>
               )}
@@ -349,14 +378,23 @@ export default function AdminDailyOverview() {
         </div>
 
         <div className="relative">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-sky-400" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+          <svg
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-sky-400"
+            width="13"
+            height="13"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
           </svg>
           <input
             type="text"
             placeholder="Search name, Emp ID, email…"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
             className="pl-8 pr-3 py-2.5 rounded-xl border-2 border-sky-200 text-xs w-64 focus:outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10 bg-white placeholder-slate-400 text-slate-700 transition-all duration-200"
           />
         </div>
@@ -387,14 +425,19 @@ export default function AdminDailyOverview() {
           <tbody>
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-14 text-slate-400 text-sm">
+                <td
+                  colSpan={5}
+                  className="text-center py-14 text-slate-400 text-sm"
+                >
                   No users match your filter.
                 </td>
               </tr>
             ) : (
               paginated.map((u, index) => {
                 const cfg = STATUS_CONFIG[u.status] || STATUS_CONFIG.idle;
-                const pct = Math.round(((u.dailySent || 0) / DAILY_LIMIT) * 100);
+                const pct = Math.round(
+                  ((u.dailySent || 0) / DAILY_LIMIT) * 100,
+                );
 
                 return (
                   <tr
@@ -405,17 +448,25 @@ export default function AdminDailyOverview() {
                   >
                     {/* User */}
                     <td className="px-5 py-3.5">
-                      <p className="font-semibold text-slate-800 text-[15px]">{u.name}</p>
+                      <p className="font-semibold text-slate-800 text-[15px]">
+                        {u.name}
+                      </p>
                       <p className="text-xs text-slate-400 mt-0.5">
                         {u.empId} · {u.jobRole}
                       </p>
-                      <p className="text-xs text-slate-400 hidden md:block">{u.email}</p>
+                      <p className="text-xs text-slate-400 hidden md:block">
+                        {u.email}
+                      </p>
                     </td>
 
                     {/* Status badge */}
                     <td className="px-5 py-3.5">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${cfg.badge}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />
+                      <span
+                        className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${cfg.badge}`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`}
+                        />
                         {cfg.icon}
                         {cfg.label}
                       </span>
@@ -433,9 +484,13 @@ export default function AdminDailyOverview() {
 
                     {/* Remaining */}
                     <td className="px-5 py-3.5 text-right">
-                      <span className={`font-semibold text-[15px] ${
-                        (u.remaining || 0) <= 500 ? "text-red-500" : "text-sky-600"
-                      }`}>
+                      <span
+                        className={`font-semibold text-[15px] ${
+                          (u.remaining || 0) <= 500
+                            ? "text-red-500"
+                            : "text-sky-600"
+                        }`}
+                      >
                         {(u.remaining || 0).toLocaleString()}
                       </span>
                     </td>
@@ -453,15 +508,16 @@ export default function AdminDailyOverview() {
             totalPages={totalPages}
             totalItems={visible.length}
             pageSize={PAGE_SIZE}
-            onPrev={(steps) => setPage(p => Math.max(1, p - steps))}
-            onNext={(steps) => setPage(p => Math.min(totalPages, p + steps))}
+            onPrev={(steps) => setPage((p) => Math.max(1, p - steps))}
+            onNext={(steps) => setPage((p) => Math.min(totalPages, p + steps))}
           />
         )}
       </div>
 
       {/* ── Footer ──────────────────────────────────────────────────────────── */}
       <p className="text-xs text-slate-400 text-center pb-2">
-        Auto-refreshes every 15 seconds · Quota resets daily at 5:00 PM IST · Limit: 5,000 emails / user / day
+        Auto-refreshes every 15 seconds · Quota resets daily at 5:00 PM IST ·
+        Limit: 5,000 emails / user / day
       </p>
     </div>
   );

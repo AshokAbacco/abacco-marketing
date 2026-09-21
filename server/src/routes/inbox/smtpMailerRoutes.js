@@ -3,7 +3,12 @@ import express from "express";
 import nodemailer from "nodemailer";
 import multer from "multer";
 import crypto from "crypto";
-import { decrypt } from "../../utils/crypto.js";
+import { resolveSecret } from "../../utils/crypto.js";
+import { protect } from "../../middlewares/authMiddleware.js";
+import {
+  canAccessAccount,
+  canAccessConversation,
+} from "../../middlewares/accountAccess.js";
 import cache from "../../utils/cache.js";
 import prisma from "../../prismaClient.js"; // ✅ shared singleton — no extra connection pool
 
@@ -15,7 +20,9 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
 });
 
-router.post("/send", upload.array("attachments"), async (req, res) => {
+// Login required (this route used to be open to anyone), and the sender
+// mailbox must belong to the caller.
+router.post("/send", protect, upload.array("attachments"), async (req, res) => {
   try {
     const {
       to,
@@ -35,7 +42,12 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
       });
     }
 
-    // 2. Fetch Account
+    // 2. Fetch Account (ownership first — 404 for other people's mailboxes)
+    if (!(await canAccessAccount(req.user, emailAccountId))) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Account not found" });
+    }
     const account = await prisma.emailAccount.findUnique({
       where: { id: Number(emailAccountId) },
       include: { user: { select: { email: true, empId: true } } },
@@ -66,8 +78,12 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
       // Based on error, it's a String.
       const exists = await prisma.conversation.findUnique({
         where: { id: conversationId },
+        select: { emailAccountId: true },
       });
-      if (exists) finalConversationId = conversationId;
+      // Only attach to a thread the caller may see.
+      if (exists && (await canAccessConversation(req.user, conversationId))) {
+        finalConversationId = conversationId;
+      }
     }
 
     // B) Find by Email
@@ -92,14 +108,13 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
         //   where: { id: existing.id },
         //   data: { lastMessageAt: new Date(), messageCount: { increment: 1 } },
         // });
-      await prisma.conversation.update({
-        where: { id: existing.id },
-        data: {
-          lastMessageAt: new Date(),
-          messageCount: { increment: 1 },
-        },
-      });
-
+        await prisma.conversation.update({
+          where: { id: existing.id },
+          data: {
+            lastMessageAt: new Date(),
+            messageCount: { increment: 1 },
+          },
+        });
       } else {
         // C) Create NEW Conversation (FIXED: Added ID)
         console.log("🆕 Creating new conversation for:", to);
@@ -141,12 +156,10 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
           },
         });
 
-
         finalConversationId = newConv.id;
       }
     }
 
- 
     /* ==============================
       4. CONFIGURE SMTP
       ============================== */
@@ -154,13 +167,13 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
     const isSecure = smtpPort === 465;
 
     let smtpPassword = null;
-
-    if (typeof account.encryptedPass === "string") {
-      if (account.encryptedPass.includes(":")) {
-        smtpPassword = decrypt(account.encryptedPass);
-      } else {
-        smtpPassword = account.encryptedPass;
-      }
+    try {
+      smtpPassword = resolveSecret(account.encryptedPass);
+    } catch (err) {
+      console.error(
+        `Cannot read stored password for ${account.email}:`,
+        err.message,
+      );
     }
 
     if (!smtpPassword) {
@@ -169,8 +182,6 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
         message: "SMTP password missing for this account",
       });
     }
-
-
 
     const domain = authenticatedEmail.split("@")[1] || "localhost.localdomain";
 
@@ -185,8 +196,6 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
       },
       tls: { rejectUnauthorized: false },
     });
-
-
 
     /* ==============================
        5. PREPARE ATTACHMENTS
@@ -213,7 +222,6 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
        6. SEND EMAIL
        ============================== */
 
-
     const info = await transporter.sendMail({
       from: senderName
         ? `"${senderName}" <${authenticatedEmail}>`
@@ -224,64 +232,68 @@ router.post("/send", upload.array("attachments"), async (req, res) => {
       html: body,
     });
 
-
-
     console.log("📤 Email Sent! ID:", info.messageId);
 
     /* ==============================
        7. SAVE TO DATABASE
        ============================== */
     const savedMessage = await prisma.emailMessage.create({
-        data: {
-          emailAccountId: Number(emailAccountId),
-          conversationId: finalConversationId,
-          messageId: info.messageId,
-          fromEmail: authenticatedEmail,
-          fromName: senderName,
-          toEmail: to,
-          ccEmail: cc || null,
-          subject: subject || "(No Subject)",
-          body,
-          direction: "sent",
-          sentAt: new Date(),
-          folder: "sent",
-          isRead: true,
-          attachments:
-            attachmentRecords.length > 0
-              ? { create: attachmentRecords }
-              : undefined,
-        },
-        include: { attachments: true },
+      data: {
+        emailAccountId: Number(emailAccountId),
+        conversationId: finalConversationId,
+        messageId: info.messageId,
+        fromEmail: authenticatedEmail,
+        fromName: senderName,
+        toEmail: to,
+        ccEmail: cc || null,
+        subject: subject || "(No Subject)",
+        body,
+        direction: "sent",
+        sentAt: new Date(),
+        folder: "sent",
+        isRead: true,
+        attachments:
+          attachmentRecords.length > 0
+            ? { create: attachmentRecords }
+            : undefined,
+      },
+      include: { attachments: true },
+    });
+
+    // 🔥 CLEAR INBOX CACHE AFTER SENDING MAIL
+    try {
+      const userId = account.userId;
+      const MONTH_FILTERS = ["current", "last", "three"];
+      const FOLDERS = ["inbox", "sent", "spam", "trash", "draft"];
+
+      // Clear all folder + monthFilter combinations (matches inbox.js key format)
+      FOLDERS.forEach((folder) => {
+        MONTH_FILTERS.forEach((mf) => {
+          cache.del(`inbox:${userId}:${emailAccountId}:${folder}:${mf}`);
+        });
       });
 
-      // 🔥 CLEAR INBOX CACHE AFTER SENDING MAIL
-      try {
-        const userId = account.userId;
-        const MONTH_FILTERS = ["current", "last", "three"];
-        const FOLDERS = ["inbox", "sent", "spam", "trash", "draft"];
+      // Also clear accounts cache so unread counts refresh on next load
+      cache.del(`accounts:${userId}`);
 
-        // Clear all folder + monthFilter combinations (matches inbox.js key format)
-        FOLDERS.forEach((folder) => {
-          MONTH_FILTERS.forEach((mf) => {
-            cache.del(`inbox:${userId}:${emailAccountId}:${folder}:${mf}`);
-          });
-        });
+      console.log("🧹 Cache cleared for all folders/filters");
+    } catch (e) {
+      console.warn("Cache clear failed:", e.message);
+    }
 
-        // Also clear accounts cache so unread counts refresh on next load
-        cache.del(`accounts:${userId}`);
-
-        console.log("🧹 Cache cleared for all folders/filters");
-      } catch (e) {
-        console.warn("Cache clear failed:", e.message);
-      }
- 
-      return res.json({ success: true, data: savedMessage });
-    } catch (error) {
+    return res.json({ success: true, data: savedMessage });
+  } catch (error) {
     console.error("❌ SMTP SEND ERROR:", error);
-    return res.status(500).json({
+    // SMTP errors are useful to the user ("invalid login", "mailbox full");
+    // database/internal details are not.
+    const isSmtp = Boolean(
+      error.responseCode || error.command || error.code?.startsWith?.("E"),
+    );
+    return res.status(isSmtp ? 502 : 500).json({
       success: false,
-      message: error.message,
-      details: error.meta || error.message,
+      message: isSmtp
+        ? `Sending failed: ${error.response || error.message}`
+        : "Failed to send email",
     });
   }
 });

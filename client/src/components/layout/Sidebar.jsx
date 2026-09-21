@@ -15,7 +15,10 @@ import {
   Menu,
   X,
   Folder,
+  ShieldCheck,
+  Contact as ContactIcon,
 } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 import { api } from "../../pages/utils/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -24,9 +27,11 @@ const navigationItems = [
   { name: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
   // "Inbox" is handled separately with a group dropdown
   { name: "Campaigns", icon: Megaphone, path: "/campaigns" },
+  { name: "CRM", icon: ContactIcon, path: "/crm" },
   { name: "Pitches", icon: FileText, path: "/pitches" },
   { name: "Analytics", icon: BarChart3, path: "/analytics" },
   { name: "Daily Overview", icon: BarChart3, path: "/daily-overview" },
+  { name: "Deliverability", icon: ShieldCheck, path: "/deliverability" },
   { name: "Admin", icon: Shield, path: "/admin" },
 ];
 
@@ -79,7 +84,10 @@ export default function TopNavbar() {
       if (!e.target.closest("#user-menu-container")) {
         setShowUserMenu(false);
       }
-      if (inboxDropdownRef.current && !inboxDropdownRef.current.contains(e.target)) {
+      if (
+        inboxDropdownRef.current &&
+        !inboxDropdownRef.current.contains(e.target)
+      ) {
         setShowInboxDropdown(false);
       }
     };
@@ -92,7 +100,9 @@ export default function TopNavbar() {
     if (!name) return "U";
     const names = name.trim().split(" ");
     if (names.length === 1) return names[0].charAt(0).toUpperCase();
-    return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
+    return (
+      names[0].charAt(0) + names[names.length - 1].charAt(0)
+    ).toUpperCase();
   };
 
   // Check if user is admin
@@ -120,6 +130,7 @@ export default function TopNavbar() {
   const filteredNavItems = navigationItems.filter((item) => {
     if (item.name === "Admin") return isAdmin();
     if (item.name === "Daily Overview") return isHROrAdmin();
+    if (item.name === "Deliverability") return isHROrAdmin();
     return true;
   });
 
@@ -146,7 +157,8 @@ export default function TopNavbar() {
 
             {/* Modal Body */}
             <p className="text-slate-600 dark:text-slate-300 mb-6">
-              You will be logged out of your account and redirected to the login page.
+              You will be logged out of your account and redirected to the login
+              page.
             </p>
 
             {/* Modal Actions */}
@@ -171,7 +183,6 @@ export default function TopNavbar() {
       {/* Top Navbar */}
       <header className="fixed top-0 left-0 right-0 z-50 h-16 bg-blue-50 border-b border-sky-200 shadow-sm">
         <div className="flex items-center h-full px-4 gap-4">
-
           {/* Brand */}
           <div className="flex items-center gap-2.5 shrink-0 mr-4">
             <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-sky-700 text-white flex items-center justify-center font-bold shadow-lg shadow-sky-500/50 ring-2 ring-sky-400/20">
@@ -216,79 +227,84 @@ export default function TopNavbar() {
                 {/* Inbox dropdown inserted right after Dashboard */}
                 {item.name === "Dashboard" && (
                   <div className="relative" ref={inboxDropdownRef}>
-              <button
-                onClick={() => {
-                  setShowInboxDropdown((prev) => !prev);
-                  if (!showInboxDropdown) fetchGroups();
-                }}
-                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap
+                    <button
+                      onClick={() => {
+                        setShowInboxDropdown((prev) => !prev);
+                        if (!showInboxDropdown) fetchGroups();
+                      }}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap
                   ${
                     isInboxActive
                       ? "bg-gradient-to-r from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/40"
                       : "text-slate-600 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 hover:text-sky-600 dark:hover:text-sky-400"
                   }`}
-              >
-                <Mail size={16} strokeWidth={isInboxActive ? 2.5 : 2} />
-                <span className="font-semibold">Inbox</span>
-                <ChevronDown
-                  size={13}
-                  className={`transition-transform duration-200 ${showInboxDropdown ? "rotate-180" : ""}`}
-                />
-              </button>
-
-              {showInboxDropdown && (
-                <div className="absolute left-0 top-full mt-2 w-52 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden z-50">
-                  <div className="px-3 py-2 border-b border-sky-100 dark:border-sky-900/50">
-                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                      Select Group
-                    </p>
-                  </div>
-
-                  {accountGroups.length > 0 && (
-                    <div>
-                      {accountGroups.map((group) => (
-                        <button
-                          key={group.id}
-                          onClick={() => {
-                            navigate(`/inbox?groupId=${group.id}`);
-                            setShowInboxDropdown(false);
-                          }}
-                          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
-                        >
-                          <div
-                            className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
-                            style={{ backgroundColor: group.color || "#10b981" }}
-                          >
-                            <Folder className="w-3.5 h-3.5 text-white" />
-                          </div>
-                          <span className="truncate">{group.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* All Accounts — always last */}
-                  <div className="border-t border-slate-100 dark:border-slate-700">
-                    <button
-                      onClick={() => {
-                        navigate("/inbox");
-                        setShowInboxDropdown(false);
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
                     >
-                      <div className="w-6 h-6 rounded-md bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center flex-shrink-0">
-                        <Mail className="w-3.5 h-3.5 text-white" />
-                      </div>
-                      <span>All Accounts</span>
+                      <Mail size={16} strokeWidth={isInboxActive ? 2.5 : 2} />
+                      <span className="font-semibold">Inbox</span>
+                      <ChevronDown
+                        size={13}
+                        className={`transition-transform duration-200 ${showInboxDropdown ? "rotate-180" : ""}`}
+                      />
                     </button>
+
+                    {showInboxDropdown && (
+                      <div className="absolute left-0 top-full mt-2 w-52 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden z-50">
+                        <div className="px-3 py-2 border-b border-sky-100 dark:border-sky-900/50">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                            Select Group
+                          </p>
+                        </div>
+
+                        {accountGroups.length > 0 && (
+                          <div>
+                            {accountGroups.map((group) => (
+                              <button
+                                key={group.id}
+                                onClick={() => {
+                                  navigate(`/inbox?groupId=${group.id}`);
+                                  setShowInboxDropdown(false);
+                                }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
+                              >
+                                <div
+                                  className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                                  style={{
+                                    backgroundColor: group.color || "#10b981",
+                                  }}
+                                >
+                                  <Folder className="w-3.5 h-3.5 text-white" />
+                                </div>
+                                <span className="truncate">{group.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* All Accounts — always last */}
+                        <div className="border-t border-slate-100 dark:border-slate-700">
+                          <button
+                            onClick={() => {
+                              navigate("/inbox");
+                              setShowInboxDropdown(false);
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
+                          >
+                            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                              <Mail className="w-3.5 h-3.5 text-white" />
+                            </div>
+                            <span>All Accounts</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
-            </div>
                 )}
               </React.Fragment>
             ))}
           </nav>
+
+          {/* Notifications */}
+          <NotificationBell />
 
           {/* User Menu */}
           <div className="relative shrink-0" id="user-menu-container">
@@ -388,7 +404,10 @@ export default function TopNavbar() {
                 {item.name === "Dashboard" && (
                   <div>
                     <button
-                      onClick={() => { navigate("/inbox"); setMobileMenuOpen(false); }}
+                      onClick={() => {
+                        navigate("/inbox");
+                        setMobileMenuOpen(false);
+                      }}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200
                         ${isInboxActive && !location.search ? "bg-gradient-to-r from-sky-500 to-blue-600 text-white shadow-md" : "text-slate-600 hover:bg-sky-50 hover:text-sky-600"}`}
                     >
@@ -398,7 +417,10 @@ export default function TopNavbar() {
                     {accountGroups.map((group) => (
                       <button
                         key={group.id}
-                        onClick={() => { navigate(`/inbox?groupId=${group.id}`); setMobileMenuOpen(false); }}
+                        onClick={() => {
+                          navigate(`/inbox?groupId=${group.id}`);
+                          setMobileMenuOpen(false);
+                        }}
                         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-sky-50 hover:text-sky-600 transition-all duration-200"
                       >
                         <div

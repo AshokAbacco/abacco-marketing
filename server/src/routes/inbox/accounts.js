@@ -2,7 +2,13 @@ import express from "express";
 import prisma from "../../prismaClient.js"; // shared pool (see prismaClient.js)
 import nodemailer from "nodemailer";
 import dns from "dns/promises";
-import { protect } from "../../middlewares/authMiddleware.js";
+import { protect, isAdminOrHr } from "../../middlewares/authMiddleware.js";
+import {
+  canAccessAccount,
+  invalidateOwnedAccounts,
+  sanitizeAccount,
+} from "../../middlewares/accountAccess.js";
+import { encryptSecret } from "../../utils/crypto.js";
 import { runSyncForAccount } from "../../services/imap.service.js";
 import { ImapFlow } from "imapflow";
 import cache from "../../utils/cache.js"; // add at top
@@ -157,7 +163,6 @@ const UNIVERSAL_PROVIDER_SETTINGS = {
     imapPort: 993,
     smtpPort: 465,
   },
-
 };
 
 async function detectProviderFromMx(domain) {
@@ -311,7 +316,7 @@ router.post("/", protect, async (req, res) => {
         // until the worker finishes and removes the row.
         const remainingEmails = Math.max(
           (exists.totalEmails || 0) - (exists.deletedEmails || 0),
-          0
+          0,
         );
         return res.status(409).json({
           success: false,
@@ -431,7 +436,9 @@ router.post("/", protect, async (req, res) => {
        SAVE ACCOUNT & START SYNC
     -------------------------- */
     if (!req.user || !req.user.id) {
-      return res.status(401).json({ error: "Unauthorized. Please login again." });
+      return res
+        .status(401)
+        .json({ error: "Unauthorized. Please login again." });
     }
     const newAccount = await prisma.emailAccount.create({
       data: {
@@ -443,7 +450,8 @@ router.post("/", protect, async (req, res) => {
         smtpHost,
         smtpPort: Number(smtpPort),
         smtpUser,
-        encryptedPass,
+        // Verified above with the raw value; stored encrypted.
+        encryptedPass: encryptSecret(encryptedPass),
         authType,
         senderName: senderName?.trim() || null,
         verified: true,
@@ -457,19 +465,18 @@ router.post("/", protect, async (req, res) => {
     // `accounts:{id}:all` / `accounts:{id}:group:{gid}`, so a new account
     // could stay invisible for up to 60 s)
     clearAccountsCache(req.user.id);
+    invalidateOwnedAccounts(req.user.id);
 
     // Trigger initial sync in background
     runSyncForAccount(prisma, email)
       .then(() => console.log(`⚡ Initial sync completed for ${email}`))
       .catch((e) => console.error("Sync trigger error:", e));
 
-    res.status(201).json(newAccount);
-
+    // Never send the stored password (or OAuth secrets) back to the browser.
+    res.status(201).json(sanitizeAccount(newAccount));
   } catch (err) {
     console.error("CREATE ACCOUNT ERROR:", err);
-    res
-      .status(500)
-      .json({ error: "Internal server error", details: err.message });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 /* ============================================================
@@ -478,9 +485,11 @@ router.post("/", protect, async (req, res) => {
 router.put("/:id", protect, async (req, res) => {
   try {
     const accountId = Number(req.params.id);
+    if (!(await canAccessAccount(req.user, accountId))) {
+      return res.status(404).json({ error: "Account not found" });
+    }
 
     const {
-      email,
       provider,
       imapHost,
       imapPort,
@@ -489,38 +498,46 @@ router.put("/:id", protect, async (req, res) => {
       smtpPort,
       smtpUser,
       encryptedPass,
-      oauthClientId,
-      oauthClientSecret,
-      refreshToken,
       authType,
+      senderName,
     } = req.body;
+
+    // Only fields that were actually sent are changed. The address itself
+    // and OAuth tokens are not editable here.
+    const data = {};
+    if (provider !== undefined) data.provider = provider;
+    if (imapHost !== undefined) data.imapHost = imapHost;
+    if (imapPort !== undefined) data.imapPort = Number(imapPort);
+    if (imapUser !== undefined) data.imapUser = imapUser;
+    if (smtpHost !== undefined) data.smtpHost = smtpHost;
+    if (smtpPort !== undefined) data.smtpPort = Number(smtpPort);
+    if (smtpUser !== undefined) data.smtpUser = smtpUser;
+    if (authType !== undefined) data.authType = authType;
+    if (senderName !== undefined)
+      data.senderName = String(senderName || "").trim() || null;
+    if (typeof encryptedPass === "string" && encryptedPass.trim()) {
+      data.encryptedPass = encryptSecret(encryptedPass.trim());
+    }
+    if (
+      ["imapPort", "smtpPort"].some(
+        (k) => k in data && !Number.isInteger(data[k]),
+      )
+    ) {
+      return res.status(400).json({ error: "Ports must be numbers" });
+    }
 
     const updated = await prisma.emailAccount.update({
       where: { id: accountId },
-      data: {
-        email,
-        provider,
-        imapHost,
-        imapPort: Number(imapPort),
-        imapUser,
-        smtpHost,
-        smtpPort: Number(smtpPort),
-        smtpUser,
-        encryptedPass,
-        oauthClientId,
-        oauthClientSecret,
-        refreshToken,
-        authType,
-      },
+      data,
     });
 
-    res.json(updated);
+    clearAccountsCache(updated.userId);
+    res.json(sanitizeAccount(updated));
   } catch (err) {
     console.error("❌ Update error:", err);
     res.status(500).json({ error: "Failed to update account" });
   }
 });
-
 
 /* ============================================================
    🗑️ DELETE /accounts/:id → INSTANT SOFT DELETE
@@ -574,7 +591,7 @@ router.delete("/:id", protect, async (req, res) => {
     });
     const estimatedSecondsRemaining = Math.max(
       Math.ceil((totalEmails / DELETE_SPEED_PER_MIN) * 60),
-      0
+      0,
     );
 
     // 3️⃣ Soft-delete: this alone is what makes the account disappear from
@@ -591,17 +608,22 @@ router.delete("/:id", protect, async (req, res) => {
         deletedEmails: 0,
         deleteProgress: totalEmails === 0 ? 100 : 0,
         estimatedSecondsRemaining,
-        estimatedDeleteAt: new Date(Date.now() + estimatedSecondsRemaining * 1000),
+        estimatedDeleteAt: new Date(
+          Date.now() + estimatedSecondsRemaining * 1000,
+        ),
       },
     });
 
     // ✅ Clear cache so next GET /accounts reflects the deletion immediately
     clearAccountsCache(req.user.id);
+    invalidateOwnedAccounts(req.user.id);
 
     // 4️⃣ Fire-and-forget the actual permanent deletion — NOT awaited.
     startAccountDeletion(prisma, id);
 
-    console.log(`🟢 Account ${id} hidden from UI — background delete started (${totalEmails} emails)`);
+    console.log(
+      `🟢 Account ${id} hidden from UI — background delete started (${totalEmails} emails)`,
+    );
     res.json({
       success: true,
       deleting: true,
@@ -616,7 +638,7 @@ router.delete("/:id", protect, async (req, res) => {
       return res.json({ success: true, message: "Account already deleted" });
     }
 
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: "Failed to delete account" });
   }
 });
 
@@ -629,7 +651,11 @@ router.get("/delete-status/:email", protect, async (req, res) => {
 
     const account = await prisma.emailAccount.findUnique({ where: { email } });
 
-    if (!account || !account.deleted) {
+    // Other users' mailboxes look like "not deleting".
+    const visible =
+      account && (account.userId === req.user.id || isAdminOrHr(req.user));
+
+    if (!visible || !account.deleted) {
       // Nothing deleting under this email — safe to (re)create.
       return res.json({ success: true, deleting: false });
     }
@@ -652,7 +678,9 @@ router.get("/delete-status/:email", protect, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ delete-status error:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to check delete status" });
   }
 });
 
@@ -691,11 +719,11 @@ router.get("/delete-status/:email", protect, async (req, res) => {
    ============================================================ */
 router.get("/", protect, async (req, res) => {
   try {
-  const groupId = req.query.groupId;
+    const groupId = req.query.groupId;
 
-  const cacheKey = groupId
-    ? `accounts:${req.user.id}:group:${groupId}`
-    : `accounts:${req.user.id}:all`;
+    const cacheKey = groupId
+      ? `accounts:${req.user.id}:group:${groupId}`
+      : `accounts:${req.user.id}:all`;
     const cached = cache.get(cacheKey);
 
     if (cached) {
@@ -708,9 +736,7 @@ router.get("/", protect, async (req, res) => {
         userId: req.user.id,
         deleted: false, // hide accounts mid-permanent-delete from the UI immediately
 
-        ...(groupId
-          ? { groupId: Number(groupId) }
-          : {}),
+        ...(groupId ? { groupId: Number(groupId) } : {}),
       },
 
       select: {
@@ -721,6 +747,8 @@ router.get("/", protect, async (req, res) => {
         verified: true,
         createdAt: true,
         groupId: true,
+        sendingPausedAt: true,
+        sendingPausedReason: true,
       },
 
       orderBy: {
@@ -730,24 +758,23 @@ router.get("/", protect, async (req, res) => {
 
     cache.set(cacheKey, accounts, 60); // 60 seconds
     return res.json({ success: true, data: accounts });
-
   } catch (error) {
     console.error("🔥 GET /accounts error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: "Failed to load accounts" });
   }
 });
 
-
-
-router.get("/sync/:email", async (req, res) => {
+router.get("/sync/:email", protect, async (req, res) => {
   try {
     const email = req.params.email;
 
     const account = await prisma.emailAccount.findUnique({
       where: { email },
+      select: { id: true },
     });
 
-    if (!account) {
+    // (This route used to need no login at all.)
+    if (!account || !(await canAccessAccount(req.user, account.id))) {
       return res.status(404).json({ error: "Account not found" });
     }
 
@@ -763,7 +790,7 @@ router.get("/sync/:email", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("SYNC ERROR:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Sync failed" });
   }
 });
 
@@ -774,9 +801,27 @@ router.get("/emp/:empId", protect, async (req, res) => {
   try {
     const empId = req.params.empId;
 
+    // Own accounts, or anyone's for Admin/HR. Secrets are never returned.
     const accounts = await prisma.emailAccount.findMany({
-      where: { empId },
+      where: {
+        empId,
+        deleted: false,
+        ...(isAdminOrHr(req.user) ? {} : { userId: req.user.id }),
+      },
       orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        email: true,
+        provider: true,
+        senderName: true,
+        verified: true,
+        createdAt: true,
+        groupId: true,
+        empId: true,
+        userId: true,
+        sendingPausedAt: true,
+        sendingPausedReason: true,
+      },
     });
 
     return res.json({
@@ -788,7 +833,6 @@ router.get("/emp/:empId", protect, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch accounts",
-      details: err.message,
     });
   }
 });
@@ -799,6 +843,9 @@ router.get("/:accountId/unread", protect, async (req, res) => {
     const accountId = Number(req.params.accountId);
     if (!accountId) {
       return res.status(400).json({ error: "Invalid account ID" });
+    }
+    if (!(await canAccessAccount(req.user, accountId))) {
+      return res.status(404).json({ error: "Account not found" });
     }
 
     const unreadCount = await prisma.emailMessage.count({
@@ -814,7 +861,6 @@ router.get("/:accountId/unread", protect, async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Failed to fetch unread count",
-      details: err.message,
     });
   }
 });
@@ -869,7 +915,6 @@ router.patch("/:id/sender-name", protect, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update sender name",
-      error: error.message,
     });
   }
 });
@@ -883,7 +928,9 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     const { newPassword } = req.body;
 
     if (!newPassword || !newPassword.trim()) {
-      return res.status(400).json({ success: false, error: "New password is required." });
+      return res
+        .status(400)
+        .json({ success: false, error: "New password is required." });
     }
 
     // Verify ownership
@@ -892,7 +939,9 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     });
 
     if (!account) {
-      return res.status(404).json({ success: false, error: "Account not found." });
+      return res
+        .status(404)
+        .json({ success: false, error: "Account not found." });
     }
 
     // Re-verify IMAP with new password
@@ -900,16 +949,26 @@ router.patch("/:id/app-password", protect, async (req, res) => {
       host: account.imapHost,
       port: account.imapPort,
       secure: [993, 995].includes(account.imapPort),
-      auth: { user: account.imapUser || account.email, pass: newPassword.trim() },
+      auth: {
+        user: account.imapUser || account.email,
+        pass: newPassword.trim(),
+      },
       tls: { rejectUnauthorized: false },
     });
-    imap.on("error", (err) => console.error("⚠️ IMAP verify error:", err.message));
+    imap.on("error", (err) =>
+      console.error("⚠️ IMAP verify error:", err.message),
+    );
 
     try {
       await imap.connect();
       await imap.logout();
     } catch (err) {
-      return res.status(400).json({ success: false, error: "IMAP verification failed: " + err.message });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "IMAP verification failed: " + err.message,
+        });
     }
 
     // Re-verify SMTP with new password
@@ -917,7 +976,10 @@ router.patch("/:id/app-password", protect, async (req, res) => {
       host: account.smtpHost,
       port: account.smtpPort,
       secure: account.smtpPort === 465,
-      auth: { user: account.smtpUser || account.email, pass: newPassword.trim() },
+      auth: {
+        user: account.smtpUser || account.email,
+        pass: newPassword.trim(),
+      },
       requireTLS: account.smtpPort === 587,
       tls: { rejectUnauthorized: false, minVersion: "TLSv1.2" },
     });
@@ -925,22 +987,41 @@ router.patch("/:id/app-password", protect, async (req, res) => {
     try {
       await transporter.verify();
     } catch (err) {
-      return res.status(400).json({ success: false, error: "SMTP verification failed: " + err.message });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "SMTP verification failed: " + err.message,
+        });
     }
 
-    // Save new password
+    // Save new password (encrypted). A pause caused by the old password
+    // failing to log in is lifted, since the new one was just verified.
     await prisma.emailAccount.update({
       where: { id },
-      data: { encryptedPass: newPassword.trim() },
+      data: { encryptedPass: encryptSecret(newPassword.trim()) },
+    });
+    await prisma.emailAccount.updateMany({
+      where: { id, sendingPausedReason: { startsWith: "Login failed" } },
+      data: {
+        sendingPausedAt: null,
+        sendingPausedReason: null,
+        sendingPausedUntil: null,
+      },
     });
 
     // Clear cache
     clearAccountsCache(req.user.id);
 
-    return res.json({ success: true, message: "App password updated successfully." });
+    return res.json({
+      success: true,
+      message: "App password updated successfully.",
+    });
   } catch (err) {
     console.error("❌ app-password update error:", err);
-    return res.status(500).json({ success: false, error: "Failed to update password." });
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to update password." });
   }
 });
 

@@ -2,7 +2,159 @@
 import { useEffect, useState } from "react";
 import AddEmp from "./AddEmp";
 import { api } from "../utils/api";
-import { Users, UserCheck, UserX, Briefcase, Pencil, Trash2, Search, X, Eye, EyeOff, MapPin } from "lucide-react";
+import {
+  Users,
+  UserCheck,
+  UserX,
+  Briefcase,
+  Pencil,
+  Trash2,
+  Search,
+  X,
+  Eye,
+  EyeOff,
+  MapPin,
+  KeyRound,
+} from "lucide-react";
+
+const MIN_PASSWORD_LENGTH = 8;
+
+// Passwords are stored hashed and can't be shown. Admins set a new one
+// instead; the user is logged out everywhere and signs in with it.
+function ResetPasswordModal({ user, onClose }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+    if (password !== confirm) {
+      setError("The two passwords don't match.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put(`${API_BASE_URL}/api/users/${user.id}/password`, {
+        password,
+      });
+      setDone(true);
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to reset password.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reset-pw-title"
+    >
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative bg-white w-full max-w-md rounded-2xl shadow-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 id="reset-pw-title" className="text-lg font-bold text-slate-800">
+            Reset password
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-700"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {done ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              The password for <strong>{user.name}</strong> was changed. They
+              have been signed out and must log in with the new password. Share
+              it with them securely.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full py-2.5 rounded-lg bg-sky-600 text-white font-semibold hover:bg-sky-700"
+            >
+              Done
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="space-y-3">
+            <p className="text-sm text-slate-600">
+              Set a new password for <strong>{user.name}</strong> ({user.email}
+              ).
+            </p>
+            <div className="relative">
+              <input
+                type={show ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={`New password (min ${MIN_PASSWORD_LENGTH} characters)`}
+                autoComplete="new-password"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShow((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                aria-label={show ? "Hide password" : "Show password"}
+              >
+                {show ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <input
+              type={show ? "text" : "password"}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              placeholder="Confirm new password"
+              autoComplete="new-password"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-sky-400"
+              required
+            />
+            {error && (
+              <p className="text-sm text-red-600" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 py-2.5 rounded-lg bg-sky-600 text-white font-semibold hover:bg-sky-700 disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Reset password"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -11,7 +163,7 @@ export default function UsersPage() {
   const [open, setOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showPasswords, setShowPasswords] = useState({});
+  const [resetUser, setResetUser] = useState(null);
   const [locationFilter, setLocationFilter] = useState("All");
 
   const activeCount = users.filter((u) => u.isActive).length;
@@ -41,7 +193,8 @@ export default function UsersPage() {
         alert(`✅ ${userName} has been deleted successfully.`);
       } catch (error) {
         console.error("Error deleting employee:", error);
-        const errorMessage = error.response?.data?.error || "Failed to delete employee";
+        const errorMessage =
+          error.response?.data?.error || "Failed to delete employee";
         const suggestion = error.response?.data?.suggestion;
         if (suggestion) {
           alert(`❌ ${errorMessage}\n\n💡 ${suggestion}`);
@@ -57,8 +210,8 @@ export default function UsersPage() {
       const res = await api.put(`${API_BASE_URL}/api/users/${id}/status`);
       setUsers((prev) =>
         prev.map((u) =>
-          u.id === id ? { ...u, isActive: res.data.isActive } : u
-        )
+          u.id === id ? { ...u, isActive: res.data.isActive } : u,
+        ),
       );
     } catch (err) {
       console.log("Status update error:", err);
@@ -94,7 +247,6 @@ export default function UsersPage() {
 
   return (
     <div className="p-6 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 min-h-screen">
-
       {/* Header */}
       <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
         <div>
@@ -113,6 +265,13 @@ export default function UsersPage() {
       </div>
 
       {/* Modal */}
+      {resetUser && (
+        <ResetPasswordModal
+          user={resetUser}
+          onClose={() => setResetUser(null)}
+        />
+      )}
+
       {open && (
         <AddEmp
           onClose={handleClose}
@@ -123,14 +282,17 @@ export default function UsersPage() {
 
       {/* Status Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-
         <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-sky-100 p-5 flex gap-4 items-center hover:shadow-xl transition-shadow duration-200">
           <div className="p-3 bg-gradient-to-br from-sky-100 to-blue-100 rounded-xl">
             <Users className="text-sky-600" size={24} />
           </div>
           <div>
-            <p className="text-slate-600 text-sm font-medium">Total Employees</p>
-            <h2 className="text-3xl font-bold text-slate-800">{users.length}</h2>
+            <p className="text-slate-600 text-sm font-medium">
+              Total Employees
+            </p>
+            <h2 className="text-3xl font-bold text-slate-800">
+              {users.length}
+            </h2>
           </div>
         </div>
 
@@ -151,7 +313,9 @@ export default function UsersPage() {
           </div>
           <div>
             <p className="text-slate-600 text-sm font-medium">Inactive</p>
-            <h2 className="text-3xl font-bold text-slate-800">{inactiveCount}</h2>
+            <h2 className="text-3xl font-bold text-slate-800">
+              {inactiveCount}
+            </h2>
           </div>
         </div>
 
@@ -168,13 +332,11 @@ export default function UsersPage() {
 
       {/* Employee Table */}
       <div className="bg-white/80 backdrop-blur-sm shadow-xl rounded-2xl overflow-hidden border border-sky-100">
-
         <div className="p-6 border-b border-sky-100 bg-gradient-to-r from-sky-50 to-blue-50">
           <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
             <h2 className="text-xl font-bold text-slate-800">Employee List</h2>
 
             <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-
               {/* Location Filter Dropdown */}
               <div className="relative flex items-center">
                 <div className="absolute left-3 pointer-events-none">
@@ -261,23 +423,15 @@ export default function UsersPage() {
                   <td className="p-4 text-slate-800 font-medium">{u.name}</td>
                   <td className="p-4 text-slate-600">{u.email}</td>
                   <td className="p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm text-slate-500 bg-slate-100 px-2 py-1 rounded">
-                        {showPasswords[u.id] ? u.password : "••••••••"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setShowPasswords((prev) => ({
-                            ...prev,
-                            [u.id]: !prev[u.id],
-                          }))
-                        }
-                        className="text-slate-500 hover:text-slate-800"
-                      >
-                        {showPasswords[u.id] ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setResetUser(u)}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 px-3 py-1.5 rounded-lg"
+                      title="Set a new password for this user"
+                    >
+                      <KeyRound size={15} />
+                      Reset
+                    </button>
                   </td>
 
                   <td className="p-4">

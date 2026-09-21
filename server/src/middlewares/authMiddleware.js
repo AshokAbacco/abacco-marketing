@@ -1,55 +1,59 @@
+// src/middlewares/authMiddleware.js
 import jwt from "jsonwebtoken";
-import prisma from "../prismaClient.js";
+import prisma, { isDbUnavailableError } from "../prismaClient.js";
+import cache, { getOrSet } from "../utils/cache.js";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   WHY THIS FILE CHANGED
+   AUTH MIDDLEWARE
 
-   The old `protect` wrapped BOTH jwt.verify() and prisma.user.findUnique()
-   in a single try/catch that returned 401 "Token failed" for any error.
+   1. JWT problems        → 401 (frontend logs out — correct)
+   2. Database problems   → 503 (frontend retries, user stays logged in)
 
-   A Prisma pool timeout is a DATABASE error, not an auth error — but it
-   came back as 401. The frontend interceptor in api.js treats every 401 as
-   an expired session, so it cleared localStorage and redirected to login.
+   PERFORMANCE: `protect` runs on EVERY API request, and several screens
+   poll every few seconds. It used to run prisma.user.findUnique each time,
+   which alone was dozens of queries per second with a handful of users.
+   The user row is now cached for USER_CACHE_TTL seconds, and concurrent
+   requests for the same user share one lookup.
 
-   Net effect: whenever the connection pool was saturated, everyone using the
-   site got logged out. Their token was perfectly valid the whole time.
-
-   Now: JWT problems → 401 (log out, correct).
-        Database problems → 503 (retry later, stay logged in).
+   When a user is edited, deactivated or deleted, userController calls
+   invalidateUserCache(id) so the change applies immediately in the API
+   process.
 ═══════════════════════════════════════════════════════════════════════════ */
 
-const DB_ERROR_CODES = new Set([
-  "P1001", // can't reach database
-  "P1002", // database timed out
-  "P1008", // operation timed out
-  "P1017", // server closed the connection
-  "P2024", // TIMED OUT FETCHING A CONNECTION FROM THE POOL  ← the one you hit
-]);
+const USER_CACHE_TTL = Number(process.env.USER_CACHE_TTL) || 60; // seconds
 
-function isInfrastructureError(err) {
-  if (!err) return false;
-  if (DB_ERROR_CODES.has(err.code)) return true;
+const userCacheKey = (id) => `authUser:${id}`;
 
-  const msg = String(err.message || "");
-  return (
-    msg.includes("Timed out fetching a new connection") ||
-    msg.includes("Server has closed the connection") ||
-    msg.includes("recovery mode") ||
-    msg.includes("not yet accepting connections") ||
-    msg.includes("Can't reach database server")
+export function invalidateUserCache(userId) {
+  if (userId) cache.del(userCacheKey(userId));
+}
+
+async function loadUser(userId) {
+  return getOrSet(userCacheKey(userId), USER_CACHE_TTL, () =>
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        empId: true,
+        jobRole: true,
+        isActive: true,
+        passwordChangedAt: true,
+      },
+    }),
   );
 }
 
+function extractBearer(req) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) return null;
+  const token = header.slice(7).trim();
+  return token || null;
+}
+
 export const protect = async (req, res, next) => {
-  let token;
-
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
-  ) {
-    token = req.headers.authorization.split(" ")[1];
-  }
-
+  const token = extractBearer(req);
   if (!token) {
     return res.status(401).json({ error: "Not authorized, no token" });
   }
@@ -65,15 +69,21 @@ export const protect = async (req, res, next) => {
     return res.status(401).json({ error: "Invalid token" });
   }
 
-  // ── Step 2: load the user. Failures here are infrastructure, not auth. ──
+  if (!decoded?.id) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+
+  // ── Step 2: load the user (cached). Failures here are infrastructure. ──
+  let user;
   try {
-    req.user = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: { id: true, email: true, empId: true, jobRole: true },
-    });
+    user = await loadUser(decoded.id);
   } catch (err) {
-    if (isInfrastructureError(err)) {
-      console.error("[protect] Database unavailable:", err.message);
+    if (isDbUnavailableError(err)) {
+      console.error(
+        "[protect] Database unavailable:",
+        err.code || "",
+        err.message?.split("\n").pop(),
+      );
       res.set("Retry-After", "5");
       return res.status(503).json({
         error: "Service temporarily unavailable. Please retry.",
@@ -84,10 +94,29 @@ export const protect = async (req, res, next) => {
     return res.status(500).json({ error: "Server error" });
   }
 
-  if (!req.user) {
+  if (!user) {
     return res.status(401).json({ error: "User not found" });
   }
 
+  if (
+    user.passwordChangedAt &&
+    decoded.iat &&
+    decoded.iat < Math.floor(new Date(user.passwordChangedAt).getTime() / 1000)
+  ) {
+    return res.status(401).json({
+      error: "Your password was changed. Please log in again.",
+    });
+  }
+
+  // Deactivated users are logged out on their next request (the frontend
+  // interceptor treats "inactive" as a real auth failure).
+  if (user.isActive === false) {
+    return res
+      .status(401)
+      .json({ error: "Your account is inactive. Please contact admin." });
+  }
+
+  req.user = user;
   next();
 };
 
@@ -96,35 +125,36 @@ export const protect = async (req, res, next) => {
  * Useful for quick verification routes or socket auth.
  */
 export const verifyToken = (req, res, next) => {
+  const token = extractBearer(req);
+  if (!token) {
+    return res
+      .status(401)
+      .json({ message: "Authorization token missing or invalid" });
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ message: "Authorization token missing or invalid" });
-    }
-
-    const token = authHeader.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch (err) {
-    if (err.name === "TokenExpiredError")
+    if (err.name === "TokenExpiredError") {
       return res.status(401).json({ message: "Token expired" });
-    if (err.name === "JsonWebTokenError")
-      return res.status(401).json({ message: "Invalid token format" });
-
-    return res.status(401).json({ message: "Invalid or expired token" });
+    }
+    return res.status(401).json({ message: "Invalid token" });
   }
 };
 
+export function isAdminOrHr(user) {
+  const role = String(user?.jobRole || "")
+    .trim()
+    .toLowerCase();
+  return role === "admin" || role === "hr";
+}
+
 /**
- * Requires an admin/HR role. The app has role data but never enforced it
- * server-side — every check was client-side only.
+ * Requires an admin/HR role. Must run AFTER `protect`.
  */
 export const requireAdmin = (req, res, next) => {
-  const role = String(req.user?.jobRole || "").trim().toLowerCase();
-  if (role !== "admin" && role !== "hr") {
+  if (!isAdminOrHr(req.user)) {
     return res.status(403).json({ error: "Access denied" });
   }
   next();
@@ -132,35 +162,14 @@ export const requireAdmin = (req, res, next) => {
 
 /**
  * Logout handler.
- * NOTE: this references prisma.session, but there is no Session model in
- * schema.prisma — calling it throws. Left as-is to avoid changing behaviour;
- * either add the model or remove the route.
+ * There is no Session model in schema.prisma (JWTs are stateless), so this
+ * simply acknowledges the logout; the client discards its token.
  */
 export const logoutSession = async (req, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ message: "Unauthorized - user not found" });
-    }
-
-    const { sessionId } = req.params;
-    if (!sessionId) {
-      return res.status(400).json({ message: "Session ID required" });
-    }
-
-    await prisma.session.delete({ where: { id: parseInt(sessionId, 10) } });
-
-    return res
-      .status(200)
-      .json({ success: true, message: "Session logged out successfully" });
-  } catch (err) {
-    console.error("[logoutSession] Error:", err);
-    if (err.code === "P2025") {
-      return res
-        .status(404)
-        .json({ success: false, message: "Session not found" });
-    }
-    return res
-      .status(500)
-      .json({ success: false, message: "Internal server error" });
+  if (!req.user) {
+    return res.status(401).json({ message: "Unauthorized - user not found" });
   }
+  return res
+    .status(200)
+    .json({ success: true, message: "Logged out successfully" });
 };

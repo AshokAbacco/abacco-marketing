@@ -2,6 +2,13 @@
 import express from "express";
 import prisma from "../../prismaClient.js";
 import { protect } from "../../middlewares/authMiddleware.js";
+import {
+  requireAccountAccess,
+  requireConversationAccess,
+  filterAccessibleAccountIds,
+  canAccessAccount,
+  conversationAccountId,
+} from "../../middlewares/accountAccess.js";
 import cache from "../../utils/cache.js";
 import {
   EMAIL_RETENTION_DAYS,
@@ -29,6 +36,16 @@ function extractNameOrEmail(value) {
 }
 
 const router = express.Router();
+
+// Ownership guards: every route below checks that the mailbox (or the
+// conversation's mailbox) belongs to the caller; Admin/HR may access all.
+const accountFromParam = (name) =>
+  requireAccountAccess((req) => req.params[name]);
+const accountFromBody = (name = "accountId") =>
+  requireAccountAccess((req) => req.body?.[name]);
+const conversationFromParam = requireConversationAccess(
+  (req) => req.params.conversationId,
+);
 
 /* =========================================================
    HELPER: Retention filter
@@ -60,7 +77,7 @@ const CACHE_SUFFIX = "current";
 
 function allCacheKeys(userId, accountId, folder) {
   return MONTH_FILTERS.map(
-    (mf) => `inbox:${userId}:${accountId}:${folder}:${mf}`
+    (mf) => `inbox:${userId}:${accountId}:${folder}:${mf}`,
   );
 }
 
@@ -88,26 +105,31 @@ async function clearCachesForConversation(userId, conversationId) {
    GET UNREAD COUNT
    GET /api/inbox/accounts/:id/unread
 ========================================================= */
-router.get("/accounts/:id/unread", protect, async (req, res) => {
-  try {
-    const accountId = Number(req.params.id);
+router.get(
+  "/accounts/:id/unread",
+  protect,
+  accountFromParam("id"),
+  async (req, res) => {
+    try {
+      const accountId = Number(req.params.id);
 
-    const count = await prisma.emailMessage.count({
-      where: {
-        emailAccountId: accountId,
-        direction: "received",
-        isRead: false,
-        folder: "inbox",
-        ...withinRetention("inbox"),
-      },
-    });
+      const count = await prisma.emailMessage.count({
+        where: {
+          emailAccountId: accountId,
+          direction: "received",
+          isRead: false,
+          folder: "inbox",
+          ...withinRetention("inbox"),
+        },
+      });
 
-    res.json({ success: true, data: { inboxUnread: count } });
-  } catch (err) {
-    console.error("Unread error:", err);
-    res.status(500).json({ success: false });
-  }
-});
+      res.json({ success: true, data: { inboxUnread: count } });
+    } catch (err) {
+      console.error("Unread error:", err);
+      res.status(500).json({ success: false });
+    }
+  },
+);
 
 /* =========================================================
    BULK UNREAD COUNTS (single DB query for all accounts)
@@ -120,16 +142,18 @@ router.get("/accounts/:id/unread", protect, async (req, res) => {
 ========================================================= */
 router.post("/accounts/unread-bulk", protect, async (req, res) => {
   try {
-    const { accountIds } = req.body;
-    if (!Array.isArray(accountIds) || accountIds.length === 0) {
+    const { accountIds: requested } = req.body;
+    if (!Array.isArray(requested) || requested.length === 0) {
       return res.json({ success: true, data: {} });
     }
+    const accountIds = await filterAccessibleAccountIds(req.user, requested);
+    if (!accountIds.length) return res.json({ success: true, data: {} });
 
     // Group by emailAccountId in a single query
     const rows = await prisma.emailMessage.groupBy({
       by: ["emailAccountId"],
       where: {
-        emailAccountId: { in: accountIds.map(Number).filter(Boolean) },
+        emailAccountId: { in: accountIds },
         direction: "received",
         isRead: false,
         folder: "inbox",
@@ -140,13 +164,19 @@ router.post("/accounts/unread-bulk", protect, async (req, res) => {
 
     // Build a map: { accountId: unreadCount }
     const result = {};
-    accountIds.forEach((id) => { result[id] = 0; });
-    rows.forEach((row) => { result[row.emailAccountId] = row._count.id; });
+    accountIds.forEach((id) => {
+      result[id] = 0;
+    });
+    rows.forEach((row) => {
+      result[row.emailAccountId] = row._count.id;
+    });
 
     res.json({ success: true, data: result });
   } catch (err) {
     console.error("Bulk unread error:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to load unread counts" });
   }
 });
 
@@ -216,112 +246,124 @@ function formatMessages(messages) {
    Pagination is now exact: `hasMore` is correct at any depth,
    instead of being limited to what fit in the old 2000-row cap.
 ========================================================= */
-router.get("/conversations/:accountId", protect, async (req, res) => {
-  try {
-    const accountId = Number(req.params.accountId);
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: "Invalid account id" });
-    }
-    const { folder = "inbox", bust } = req.query;
+router.get(
+  "/conversations/:accountId",
+  protect,
+  accountFromParam("accountId"),
+  async (req, res) => {
+    try {
+      const accountId = Number(req.params.accountId);
+      if (!accountId) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid account id" });
+      }
+      const { folder = "inbox", bust } = req.query;
 
-    // ── Pagination params ────────────────────────────────────
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
-    const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
-    const offset = page * limit;
+      // ── Pagination params ────────────────────────────────────
+      const limit = Math.min(
+        Math.max(parseInt(req.query.limit, 10) || 10, 1),
+        100,
+      );
+      const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
+      const offset = page * limit;
 
-    const cacheKey = `inbox:${req.user.id}:${accountId}:${folder}:${CACHE_SUFFIX}`;
-    const isCacheablePage = page === 0 && limit === 10;
-    const cached = !bust && isCacheablePage ? cache.get(cacheKey) : null;
+      const cacheKey = `inbox:${req.user.id}:${accountId}:${folder}:${CACHE_SUFFIX}`;
+      const isCacheablePage = page === 0 && limit === 10;
+      const cached = !bust && isCacheablePage ? cache.get(cacheKey) : null;
 
-    // Cache hit returns instantly. No IMAP sync is triggered from here —
-    // sync is done by the worker (every 2 min) or the Refresh button.
-    if (cached) {
+      // Cache hit returns instantly. No IMAP sync is triggered from here —
+      // sync is done by the worker (every 2 min) or the Refresh button.
+      if (cached) {
+        return res.json({
+          success: true,
+          data: cached.data,
+          hasMore: cached.hasMore,
+          page,
+          fromCache: true,
+          retentionDays: EMAIL_RETENTION_DAYS,
+        });
+      }
+
+      const msgWhere = {
+        emailAccountId: accountId,
+        ...withinRetention(folder),
+      };
+
+      if (folder === "inbox") {
+        msgWhere.folder = "inbox";
+        msgWhere.direction = "received";
+      } else if (folder === "sent") {
+        msgWhere.folder = "sent";
+        msgWhere.direction = "sent";
+      } else {
+        msgWhere.folder = folder; // spam, trash, draft
+      }
+
+      // ── 1) Lightweight scan: ids only, newest first ──────────
+      const scan = await prisma.emailMessage.findMany({
+        where: msgWhere,
+        orderBy: { sentAt: "desc" },
+        select: { id: true, conversationId: true },
+        take: MAX_SCAN_ROWS,
+      });
+
+      // First row seen per conversation = its latest message
+      const seen = new Set();
+      const latestIds = [];
+      for (const row of scan) {
+        if (!row.conversationId || seen.has(row.conversationId)) continue;
+        seen.add(row.conversationId);
+        latestIds.push(row.id);
+      }
+
+      const pageIds = latestIds.slice(offset, offset + limit);
+      const hasMore = latestIds.length > offset + limit;
+
+      // ── 2) Full rows (with body) for this page only ──────────
+      let pageItems = [];
+      if (pageIds.length > 0) {
+        const rows = await prisma.emailMessage.findMany({
+          where: { id: { in: pageIds } },
+          select: {
+            id: true,
+            conversationId: true,
+            subject: true,
+            fromEmail: true,
+            fromName: true,
+            toEmail: true,
+            direction: true,
+            sentAt: true,
+            isRead: true,
+            isStarred: true,
+            body: true,
+            folder: true,
+          },
+        });
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        pageItems = formatMessages(
+          pageIds.map((id) => byId.get(id)).filter(Boolean),
+        );
+      }
+
+      if (isCacheablePage) {
+        cache.set(cacheKey, { data: pageItems, hasMore }, 30); // 30 s, first page only
+      }
+
       return res.json({
         success: true,
-        data: cached.data,
-        hasMore: cached.hasMore,
+        data: pageItems,
+        hasMore,
         page,
-        fromCache: true,
+        fromCache: false,
         retentionDays: EMAIL_RETENTION_DAYS,
       });
+    } catch (err) {
+      console.error("Conversations error:", err);
+      res.status(500).json({ success: false, error: "Server error" });
     }
-
-    const msgWhere = {
-      emailAccountId: accountId,
-      ...withinRetention(folder),
-    };
-
-    if (folder === "inbox") {
-      msgWhere.folder = "inbox";
-      msgWhere.direction = "received";
-    } else if (folder === "sent") {
-      msgWhere.folder = "sent";
-      msgWhere.direction = "sent";
-    } else {
-      msgWhere.folder = folder; // spam, trash, draft
-    }
-
-    // ── 1) Lightweight scan: ids only, newest first ──────────
-    const scan = await prisma.emailMessage.findMany({
-      where: msgWhere,
-      orderBy: { sentAt: "desc" },
-      select: { id: true, conversationId: true },
-      take: MAX_SCAN_ROWS,
-    });
-
-    // First row seen per conversation = its latest message
-    const seen = new Set();
-    const latestIds = [];
-    for (const row of scan) {
-      if (!row.conversationId || seen.has(row.conversationId)) continue;
-      seen.add(row.conversationId);
-      latestIds.push(row.id);
-    }
-
-    const pageIds = latestIds.slice(offset, offset + limit);
-    const hasMore = latestIds.length > offset + limit;
-
-    // ── 2) Full rows (with body) for this page only ──────────
-    let pageItems = [];
-    if (pageIds.length > 0) {
-      const rows = await prisma.emailMessage.findMany({
-        where: { id: { in: pageIds } },
-        select: {
-          id: true,
-          conversationId: true,
-          subject: true,
-          fromEmail: true,
-          fromName: true,
-          toEmail: true,
-          direction: true,
-          sentAt: true,
-          isRead: true,
-          isStarred: true,
-          body: true,
-          folder: true,
-        },
-      });
-      const byId = new Map(rows.map((r) => [r.id, r]));
-      pageItems = formatMessages(pageIds.map((id) => byId.get(id)).filter(Boolean));
-    }
-
-    if (isCacheablePage) {
-      cache.set(cacheKey, { data: pageItems, hasMore }, 30); // 30 s, first page only
-    }
-
-    return res.json({
-      success: true,
-      data: pageItems,
-      hasMore,
-      page,
-      fromCache: false,
-      retentionDays: EMAIL_RETENTION_DAYS,
-    });
-  } catch (err) {
-    console.error("Conversations error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+  },
+);
 
 /* =========================================================
    GET MESSAGES OF CONVERSATION
@@ -330,6 +372,7 @@ router.get("/conversations/:accountId", protect, async (req, res) => {
 router.get(
   "/conversations/:conversationId/messages",
   protect,
+  conversationFromParam,
   async (req, res) => {
     try {
       const { conversationId } = req.params;
@@ -344,7 +387,7 @@ router.get(
       console.error("Messages error:", err);
       res.status(500).json({ success: false });
     }
-  }
+  },
 );
 
 /* =========================================================
@@ -354,6 +397,7 @@ router.get(
 router.patch(
   "/conversations/:conversationId/read",
   protect,
+  conversationFromParam,
   async (req, res) => {
     try {
       const { conversationId } = req.params;
@@ -372,7 +416,7 @@ router.patch(
       console.error("Mark read error:", err);
       res.status(500).json({ success: false });
     }
-  }
+  },
 );
 
 /* =========================================================
@@ -382,6 +426,7 @@ router.patch(
 router.patch(
   "/conversations/:conversationId/unread",
   protect,
+  conversationFromParam,
   async (req, res) => {
     try {
       const { conversationId } = req.params;
@@ -398,131 +443,155 @@ router.patch(
       console.error("Mark unread error:", err);
       res.status(500).json({ success: false });
     }
-  }
+  },
 );
 
 /* =========================================================
    BATCH MARK AS READ
    PATCH /api/inbox/batch-mark-read
 ========================================================= */
-router.patch("/batch-mark-read", protect, async (req, res) => {
-  try {
-    const { conversationIds, accountId } = req.body;
-
-    if (
-      !conversationIds ||
-      !Array.isArray(conversationIds) ||
-      conversationIds.length === 0
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "conversationIds array is required" });
-    }
-
-    const result = await prisma.emailMessage.updateMany({
-      where: {
-        conversationId: { in: conversationIds },
-        emailAccountId: Number(accountId),
-      },
-      data: { isRead: true },
-    });
-
+router.patch(
+  "/batch-mark-read",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
     try {
-      clearAllFolderCaches(req.user.id, accountId);
-    } catch (e) {
-      console.warn("Cache clear failed:", e.message);
-    }
+      const { conversationIds, accountId } = req.body;
 
-    res.json({ success: true, updated: result.count });
-  } catch (err) {
-    console.error("❌ Batch mark read error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
+      if (
+        !conversationIds ||
+        !Array.isArray(conversationIds) ||
+        conversationIds.length === 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "conversationIds array is required",
+          });
+      }
+
+      const result = await prisma.emailMessage.updateMany({
+        where: {
+          conversationId: { in: conversationIds },
+          emailAccountId: Number(accountId),
+        },
+        data: { isRead: true },
+      });
+
+      try {
+        clearAllFolderCaches(req.user.id, accountId);
+      } catch (e) {
+        console.warn("Cache clear failed:", e.message);
+      }
+
+      res.json({ success: true, updated: result.count });
+    } catch (err) {
+      console.error("❌ Batch mark read error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  },
+);
 
 /* =========================================================
    BATCH MARK AS UNREAD
    PATCH /api/inbox/batch-mark-unread
 ========================================================= */
-router.patch("/batch-mark-unread", protect, async (req, res) => {
-  try {
-    const { conversationIds, accountId } = req.body;
-
-    if (
-      !conversationIds ||
-      !Array.isArray(conversationIds) ||
-      conversationIds.length === 0
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "conversationIds array is required" });
-    }
-
-    const result = await prisma.emailMessage.updateMany({
-      where: {
-        conversationId: { in: conversationIds },
-        emailAccountId: Number(accountId),
-      },
-      data: { isRead: false },
-    });
-
+router.patch(
+  "/batch-mark-unread",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
     try {
-      clearAllFolderCaches(req.user.id, accountId);
-    } catch (e) {
-      console.warn("Cache clear failed:", e.message);
-    }
+      const { conversationIds, accountId } = req.body;
 
-    res.json({ success: true, updated: result.count });
-  } catch (err) {
-    console.error("❌ Batch mark unread error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
+      if (
+        !conversationIds ||
+        !Array.isArray(conversationIds) ||
+        conversationIds.length === 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "conversationIds array is required",
+          });
+      }
+
+      const result = await prisma.emailMessage.updateMany({
+        where: {
+          conversationId: { in: conversationIds },
+          emailAccountId: Number(accountId),
+        },
+        data: { isRead: false },
+      });
+
+      try {
+        clearAllFolderCaches(req.user.id, accountId);
+      } catch (e) {
+        console.warn("Cache clear failed:", e.message);
+      }
+
+      res.json({ success: true, updated: result.count });
+    } catch (err) {
+      console.error("❌ Batch mark unread error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  },
+);
 
 /* =========================================================
    BATCH HIDE CONVERSATIONS (MOVE TO TRASH)
    PATCH /api/inbox/batch-hide-conversations
 ========================================================= */
-router.patch("/batch-hide-conversations", protect, async (req, res) => {
-  try {
-    const { conversationIds, accountId } = req.body;
-
-    if (
-      !conversationIds ||
-      !Array.isArray(conversationIds) ||
-      conversationIds.length === 0
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "conversationIds array is required" });
-    }
-
-    const result = await prisma.emailMessage.updateMany({
-      where: {
-        conversationId: { in: conversationIds },
-        emailAccountId: Number(accountId),
-      },
-      data: { folder: "trash" },
-    });
-
+router.patch(
+  "/batch-hide-conversations",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
     try {
-      clearAllFolderCaches(req.user.id, accountId);
-    } catch (e) {
-      console.warn("Cache clear failed:", e.message);
-    }
+      const { conversationIds, accountId } = req.body;
 
-    res.json({ success: true, updated: result.count });
-  } catch (err) {
-    console.error("❌ Batch hide error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
+      if (
+        !conversationIds ||
+        !Array.isArray(conversationIds) ||
+        conversationIds.length === 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "conversationIds array is required",
+          });
+      }
+
+      const result = await prisma.emailMessage.updateMany({
+        where: {
+          conversationId: { in: conversationIds },
+          emailAccountId: Number(accountId),
+        },
+        data: { folder: "trash" },
+      });
+
+      try {
+        clearAllFolderCaches(req.user.id, accountId);
+      } catch (e) {
+        console.warn("Cache clear failed:", e.message);
+      }
+
+      res.json({ success: true, updated: result.count });
+    } catch (err) {
+      console.error("❌ Batch hide error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  },
+);
 
 /* =========================================================
    BATCH MOVE TO INBOX (e.g. from Spam)
    POST /api/inbox/move-to-inbox
 ========================================================= */
-router.post("/move-to-inbox", protect, async (req, res) => {
+router.post("/move-to-inbox", protect, accountFromBody(), async (req, res) => {
   try {
     const { conversationIds, accountId } = req.body;
 
@@ -553,7 +622,7 @@ router.post("/move-to-inbox", protect, async (req, res) => {
     res.json({ success: true, moved: result.count });
   } catch (err) {
     console.error("❌ Move to inbox error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
@@ -561,85 +630,112 @@ router.post("/move-to-inbox", protect, async (req, res) => {
    SAVE MESSAGE TO DRAFT
    POST /api/inbox/save-draft
 ========================================================= */
-router.post("/save-draft", protect, async (req, res) => {
-  try {
-    const {
-      to,
-      cc,
-      subject,
-      body,
-      emailAccountId,
-      conversationId,
-      messageId,
-    } = req.body;
+router.post(
+  "/save-draft",
+  protect,
+  accountFromBody("emailAccountId"),
+  async (req, res) => {
+    try {
+      const {
+        to,
+        cc,
+        subject,
+        body,
+        emailAccountId,
+        conversationId,
+        messageId,
+      } = req.body;
 
-    if (!emailAccountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "emailAccountId is required" });
-    }
+      if (!emailAccountId) {
+        return res
+          .status(400)
+          .json({ success: false, message: "emailAccountId is required" });
+      }
 
-    const account = await prisma.emailAccount.findUnique({
-      where: { id: Number(emailAccountId) },
-    });
+      const account = await prisma.emailAccount.findUnique({
+        where: { id: Number(emailAccountId) },
+      });
 
-    if (!account) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Account not found" });
-    }
+      if (!account) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Account not found" });
+      }
 
-    if (messageId) {
-      const updated = await prisma.emailMessage.update({
-        where: { id: messageId },
+      if (messageId) {
+        const draftId = Number(messageId);
+        // Only a draft that belongs to this mailbox can be overwritten.
+        const result = Number.isInteger(draftId)
+          ? await prisma.emailMessage.updateMany({
+              where: {
+                id: draftId,
+                emailAccountId: Number(emailAccountId),
+                folder: "draft",
+              },
+              data: {
+                toEmail: to || "",
+                ccEmail: cc || "",
+                subject: subject || "(No subject)",
+                body: body || "",
+                sentAt: new Date(),
+              },
+            })
+          : { count: 0 };
+        if (result.count === 0) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Draft not found" });
+        }
+        const updated = await prisma.emailMessage.findUnique({
+          where: { id: draftId },
+        });
+
+        try {
+          allCacheKeys(req.user.id, emailAccountId, "draft").forEach((k) =>
+            cache.del(k),
+          );
+        } catch (e) {}
+
+        return res.json({ success: true, data: updated });
+      }
+
+      const draft = await prisma.emailMessage.create({
         data: {
+          emailAccountId: Number(emailAccountId),
+          // Only link the draft to a thread of this same mailbox.
+          conversationId:
+            conversationId &&
+            (await conversationAccountId(conversationId)) ===
+              Number(emailAccountId)
+              ? conversationId
+              : null,
+          messageId: `draft-${Date.now()}@${account.email}`,
+          fromEmail: account.email,
+          fromName: account.senderName || null,
           toEmail: to || "",
           ccEmail: cc || "",
           subject: subject || "(No subject)",
           body: body || "",
+          direction: "sent",
           sentAt: new Date(),
+          folder: "draft",
+          isRead: true,
         },
       });
 
       try {
         allCacheKeys(req.user.id, emailAccountId, "draft").forEach((k) =>
-          cache.del(k)
+          cache.del(k),
         );
       } catch (e) {}
 
-      return res.json({ success: true, data: updated });
+      res.json({ success: true, data: draft });
+    } catch (err) {
+      console.error("❌ Save draft error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
     }
-
-    const draft = await prisma.emailMessage.create({
-      data: {
-        emailAccountId: Number(emailAccountId),
-        conversationId: conversationId || null,
-        messageId: `draft-${Date.now()}@${account.email}`,
-        fromEmail: account.email,
-        fromName: account.senderName || null,
-        toEmail: to || "",
-        ccEmail: cc || "",
-        subject: subject || "(No subject)",
-        body: body || "",
-        direction: "sent",
-        sentAt: new Date(),
-        folder: "draft",
-        isRead: true,
-      },
-    });
-
-    try {
-      allCacheKeys(req.user.id, emailAccountId, "draft").forEach((k) =>
-        cache.del(k)
-      );
-    } catch (e) {}
-
-    res.json({ success: true, data: draft });
-  } catch (err) {
-    console.error("❌ Save draft error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
+  },
+);
 
 /* =========================================================
    DELETE DRAFT
@@ -647,21 +743,36 @@ router.post("/save-draft", protect, async (req, res) => {
 ========================================================= */
 router.delete("/delete-draft/:messageId", protect, async (req, res) => {
   try {
-    const { messageId } = req.params;
-    const { accountId } = req.body;
+    const draftId = Number(req.params.messageId);
+    const draft = Number.isInteger(draftId)
+      ? await prisma.emailMessage.findUnique({
+          where: { id: draftId },
+          select: { id: true, emailAccountId: true, folder: true },
+        })
+      : null;
+    if (
+      !draft ||
+      draft.folder !== "draft" ||
+      !(await canAccessAccount(req.user, draft.emailAccountId))
+    ) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Draft not found" });
+    }
+    const accountId = draft.emailAccountId;
 
-    await prisma.emailMessage.delete({ where: { id: messageId } });
+    await prisma.emailMessage.delete({ where: { id: draftId } });
 
     try {
       allCacheKeys(req.user.id, accountId, "draft").forEach((k) =>
-        cache.del(k)
+        cache.del(k),
       );
     } catch (e) {}
 
     res.json({ success: true });
   } catch (err) {
     console.error("❌ Delete draft error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
@@ -669,33 +780,41 @@ router.delete("/delete-draft/:messageId", protect, async (req, res) => {
    SEARCH
    GET /api/inbox/search?query=&accountId=
 ========================================================= */
-router.get("/search", protect, async (req, res) => {
-  try {
-    const { query, accountId } = req.query;
+router.get(
+  "/search",
+  protect,
+  async (req, res, next) => {
+    if (!req.query.accountId) return next();
+    return requireAccountAccess((r) => r.query.accountId)(req, res, next);
+  },
+  async (req, res) => {
+    try {
+      const { query, accountId } = req.query;
 
-    if (!query || !accountId) {
-      return res.json({ success: true, data: [] });
+      if (!query || !accountId) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const results = await prisma.emailMessage.findMany({
+        where: {
+          emailAccountId: Number(accountId),
+          OR: [
+            { subject: { contains: query, mode: "insensitive" } },
+            { fromEmail: { contains: query, mode: "insensitive" } },
+            { toEmail: { contains: query, mode: "insensitive" } },
+          ],
+        },
+        orderBy: { sentAt: "desc" },
+        take: 200,
+      });
+
+      res.json({ success: true, data: results });
+    } catch (err) {
+      console.error("Search error:", err);
+      res.status(500).json({ success: false });
     }
-
-    const results = await prisma.emailMessage.findMany({
-      where: {
-        emailAccountId: Number(accountId),
-        OR: [
-          { subject: { contains: query, mode: "insensitive" } },
-          { fromEmail: { contains: query, mode: "insensitive" } },
-          { toEmail: { contains: query, mode: "insensitive" } },
-        ],
-      },
-      orderBy: { sentAt: "desc" },
-      take: 200,
-    });
-
-    res.json({ success: true, data: results });
-  } catch (err) {
-    console.error("Search error:", err);
-    res.status(500).json({ success: false });
-  }
-});
+  },
+);
 
 router.get("/countries", async (_req, res) => {
   try {
@@ -707,88 +826,106 @@ router.get("/countries", async (_req, res) => {
   }
 });
 
-router.get("/accounts/:id/user", protect, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
+router.get(
+  "/accounts/:id/user",
+  protect,
+  accountFromParam("id"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
 
-    const account = await prisma.emailAccount.findUnique({
-      where: { id },
-      select: { email: true },
-    });
+      const account = await prisma.emailAccount.findUnique({
+        where: { id },
+        select: { email: true },
+      });
 
-    if (!account) return res.status(404).json({ success: false });
+      if (!account) return res.status(404).json({ success: false });
 
-    res.json({ success: true, userName: account.email.split("@")[0] });
-  } catch (err) {
-    console.error("User fetch error:", err);
-    res.status(500).json({ success: false });
-  }
-});
-
-router.patch("/hide-inbox-conversation", protect, async (req, res) => {
-  try {
-    const { conversationId, accountId } = req.body;
-
-    if (!conversationId || !accountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing data" });
+      res.json({ success: true, userName: account.email.split("@")[0] });
+    } catch (err) {
+      console.error("User fetch error:", err);
+      res.status(500).json({ success: false });
     }
+  },
+);
 
-    await prisma.emailMessage.updateMany({
-      where: { conversationId, emailAccountId: Number(accountId) },
-      data: { folder: "trash" },
-    });
+router.patch(
+  "/hide-inbox-conversation",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
+    try {
+      const { conversationId, accountId } = req.body;
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Trash move error:", err);
-    res.status(500).json({ success: false });
-  }
-});
+      if (!conversationId || !accountId) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Missing data" });
+      }
 
-router.patch("/restore-conversation", protect, async (req, res) => {
-  try {
-    const { conversationId, accountId } = req.body;
+      await prisma.emailMessage.updateMany({
+        where: { conversationId, emailAccountId: Number(accountId) },
+        data: { folder: "trash" },
+      });
 
-    await prisma.emailMessage.updateMany({
-      where: { conversationId, emailAccountId: Number(accountId) },
-      data: { folder: "inbox" },
-    });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Trash move error:", err);
+      res.status(500).json({ success: false });
+    }
+  },
+);
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Restore error:", err);
-    res.status(500).json({ success: false });
-  }
-});
+router.patch(
+  "/restore-conversation",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
+    try {
+      const { conversationId, accountId } = req.body;
 
-router.delete("/permanent-delete-conversation", protect, async (req, res) => {
-  try {
-    const { conversationId, accountId } = req.body;
+      await prisma.emailMessage.updateMany({
+        where: { conversationId, emailAccountId: Number(accountId) },
+        data: { folder: "inbox" },
+      });
 
-    await prisma.emailMessage.deleteMany({
-      where: { conversationId, emailAccountId: Number(accountId) },
-    });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Restore error:", err);
+      res.status(500).json({ success: false });
+    }
+  },
+);
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Permanent delete error:", err);
-    res.status(500).json({ success: false });
-  }
-});
+router.delete(
+  "/permanent-delete-conversation",
+  protect,
+  accountFromBody(),
+  async (req, res) => {
+    try {
+      const { conversationId, accountId } = req.body;
 
-router.patch("/move-to-draft", protect, async (req, res) => {
+      await prisma.emailMessage.deleteMany({
+        where: { conversationId, emailAccountId: Number(accountId) },
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Permanent delete error:", err);
+      res.status(500).json({ success: false });
+    }
+  },
+);
+
+router.patch("/move-to-draft", protect, accountFromBody(), async (req, res) => {
   try {
     const { conversationId, accountId } = req.body;
 
     if (!conversationId || !accountId) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Missing conversationId or accountId",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Missing conversationId or accountId",
+      });
     }
 
     const result = await prisma.emailMessage.updateMany({
@@ -803,7 +940,7 @@ router.patch("/move-to-draft", protect, async (req, res) => {
     res.json({ success: true, moved: result.count });
   } catch (err) {
     console.error("❌ Move to draft error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 

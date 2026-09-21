@@ -7,7 +7,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 // Must match TOTAL_ACCOUNT_LIMIT / GROUP_ACCOUNT_LIMIT in
 // routes/inbox/accounts.js on the backend.
-const TOTAL_ACCOUNT_LIMIT = 50;
+const TOTAL_ACCOUNT_LIMIT = 70;
 const GROUP_ACCOUNT_LIMIT = 8;
 
 export default function AddAccountManager({ onClose, onAccountAdded, pendingGroup }) {

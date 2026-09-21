@@ -1,49 +1,18 @@
-import { useEffect, useState, useCallback } from "react";
 import { Mail, Clock, Zap, AlertTriangle } from "lucide-react";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-
-// ─────────────────────────────────────────────────────────────
-// Shared hook
-// ─────────────────────────────────────────────────────────────
-export function useDailyLimit() {
-  const [limitData, setLimitData] = useState(null);
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch(API_BASE_URL + "/api/campaigns/daily-limit", {
-        headers: { Authorization: "Bearer " + localStorage.getItem("token") },
-      });
-      const result = await res.json();
-      if (result.success) setLimitData(result.data);
-    } catch (err) {
-      console.error("Daily limit error:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
-
-  return limitData;
-}
+import { useDailyLimit } from "./dailyLimitStore";
 
 // ─────────────────────────────────────────────────────────────
 // Helper: Convert IST window → user local time
 // ─────────────────────────────────────────────────────────────
 function getLocalWindow() {
-  const now = new Date();
-
   // Create IST times
   const istStart = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
   );
   istStart.setHours(17, 0, 0, 0);
 
   const istEnd = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
   );
   istEnd.setHours(5, 0, 0, 0);
 
@@ -81,26 +50,26 @@ export default function DailyLimitBanner() {
   const barColor = isExhausted
     ? "bg-red-500"
     : isNearLimit
-    ? "bg-amber-400"
-    : "bg-sky-500";
+      ? "bg-amber-400"
+      : "bg-sky-500";
 
   const containerBg = isExhausted
     ? "bg-red-50 border-red-200"
     : isNearLimit
-    ? "bg-amber-50 border-amber-200"
-    : "bg-gradient-to-r from-sky-50 to-blue-50 border-sky-200";
+      ? "bg-amber-50 border-amber-200"
+      : "bg-gradient-to-r from-sky-50 to-blue-50 border-sky-200";
 
   const textColor = isExhausted
     ? "text-red-700"
     : isNearLimit
-    ? "text-amber-800"
-    : "text-sky-800";
+      ? "text-amber-800"
+      : "text-sky-800";
 
   const subTextColor = isExhausted
     ? "text-red-500"
     : isNearLimit
-    ? "text-amber-600"
-    : "text-sky-600";
+      ? "text-amber-600"
+      : "text-sky-600";
 
   return (
     <div
@@ -108,7 +77,9 @@ export default function DailyLimitBanner() {
     >
       {/* Top row */}
       <div className="flex items-center justify-between mb-2 gap-2">
-        <div className={`flex items-center gap-2 font-bold text-sm ${textColor}`}>
+        <div
+          className={`flex items-center gap-2 font-bold text-sm ${textColor}`}
+        >
           {isExhausted ? (
             <AlertTriangle size={15} className="text-red-500" />
           ) : (
@@ -153,8 +124,8 @@ export default function DailyLimitBanner() {
             isExhausted
               ? "bg-red-100 text-red-700"
               : isNearLimit
-              ? "bg-amber-100 text-amber-700"
-              : "bg-sky-100 text-sky-700"
+                ? "bg-amber-100 text-amber-700"
+                : "bg-sky-100 text-sky-700"
           }`}
         >
           <Zap size={11} className="inline mr-0.5 -mt-px" />

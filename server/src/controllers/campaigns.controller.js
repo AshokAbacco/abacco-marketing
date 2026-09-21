@@ -1,43 +1,111 @@
-// campaigns.controller.js — Full file with Global Daily Limit (5 PM reset) + all original exports
+// campaigns.controller.js
+//
+// API-side campaign endpoints.
+//
+// IMPORTANT: this process never sends email. Endpoints that start a
+// campaign only set status = "sending"; worker.js picks it up within
+// WORKER_RESUME_TICK_MS (default 10 s). Sending used to run here too,
+// which put long-running send loops on the API's connection pool.
 
 import prisma from "../prismaClient.js";
 import {
-  sendBulkCampaign,
   getDailyCount,
- 
-  
+  DAILY_LIMIT,
+  resolveOriginalCampaignId,
 } from "../services/campaignMailer.service.js";
-import cache from "../utils/cache.js";
+import { normalizeEmail } from "../services/suppression.service.js";
+import cache, { getOrSet, delByPrefix } from "../utils/cache.js";
+import { isAdminOrHr } from "../middlewares/authMiddleware.js";
 
-const DAILY_LIMIT = 5000;
+const RECIPIENT_INSERT_CHUNK = 5_000;
 
 /* ─────────────────────────────────────────────────────────────────────────
    HELPER — invalidate dashboard cache
 ───────────────────────────────────────────────────────────────────────── */
 const invalidateDashboardCache = (userId) => {
-  const ranges = ["today", "week", "month"];
-  ranges.forEach(range => cache.del(`dashboard:${userId}:${range}`));
-
-  const keys = cache.keys();
-  keys.forEach(key => {
-    if (key.startsWith(`dashboard:${userId}:`)) cache.del(key);
-  });
-
-  cache.del(`locked:${userId}`);
+  delByPrefix(`dashboard:${userId}:`);
+  delByPrefix(`progress:${userId}:`);
+  // Busy accounts are global (any user's sending campaign locks accounts).
+  cache.del("busyAccounts");
+  cache.del(`dailyLimit:${userId}`);
   cache.del(`allCampaigns:${userId}`);
   cache.del(`campaignNames:${userId}`);
-
-  // Follow-up eligibility changes whenever a campaign is created, completed,
-  // stopped or deleted — clear all four level buckets.
-  for (let lvl = 1; lvl <= 4; lvl++) cache.del(`forFollowup:${userId}:${lvl}`);
+  cache.del(`appDashboard:${userId}`);
+  // Keys are forFollowup:{user}:{level}:{offset}:{limit}. The old code
+  // deleted `forFollowup:{user}:{level}`, which never matched anything.
+  delByPrefix(`forFollowup:${userId}:`);
 };
+
+/* ─────────────────────────────────────────────────────────────────────────
+   HELPER — load a campaign the caller may manage (owner, or Admin/HR).
+   Several endpoints previously let any logged-in user act on any campaign.
+───────────────────────────────────────────────────────────────────────── */
+async function findManageableCampaign(req, campaignId, select) {
+  if (!Number.isInteger(campaignId) || campaignId <= 0) return null;
+  const where = isAdminOrHr(req.user)
+    ? { id: campaignId }
+    : { id: campaignId, userId: req.user.id };
+  return prisma.campaign.findFirst({ where, select });
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   HELPER — account ids currently busy sending (any user, any campaign).
+   Was: load every "sending" campaign WITH every one of its recipient rows
+   (potentially hundreds of thousands) on every create request.
+   Now: two narrow queries, cached for a few seconds and shared between
+   concurrent callers.
+───────────────────────────────────────────────────────────────────────── */
+async function getBusyAccountIds({ excludeCampaignId = null } = {}) {
+  const loadAll = async () => {
+    const sending = await prisma.campaign.findMany({
+      where: { status: "sending" },
+      select: { id: true, fromAccountIds: true },
+    });
+    if (!sending.length) return { byCampaign: [] };
+
+    const assigned = await prisma.$queryRaw`
+      SELECT DISTINCT r."campaignId", r."accountId"
+      FROM "CampaignRecipient" r
+      WHERE r."campaignId" = ANY(${sending.map((c) => c.id)}::int[])
+        AND r."accountId" IS NOT NULL
+        AND r."status" IN ('pending', 'processing')
+    `;
+
+    const byCampaign = sending.map((c) => {
+      const ids = new Set();
+      try {
+        JSON.parse(c.fromAccountIds || "[]").forEach((id) =>
+          ids.add(Number(id)),
+        );
+      } catch {
+        /* malformed */
+      }
+      return { id: c.id, ids };
+    });
+    const index = new Map(byCampaign.map((c) => [c.id, c.ids]));
+    for (const row of assigned)
+      index.get(row.campaignId)?.add(Number(row.accountId));
+
+    return {
+      byCampaign: byCampaign.map((c) => ({ id: c.id, ids: [...c.ids] })),
+    };
+  };
+
+  const data = await getOrSet("busyAccounts", 5, loadAll);
+  const busy = new Set();
+  for (const c of data.byCampaign) {
+    if (excludeCampaignId && c.id === excludeCampaignId) continue;
+    c.ids.forEach((id) => busy.add(id));
+  }
+  return busy;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────
    HELPER — shared daily-limit + window pre-check
    Returns null if all clear, or { status, body } error object if blocked.
 ───────────────────────────────────────────────────────────────────────── */
 async function checkGlobalSendingRules(userId) {
-  const sentToday = await getDailyCount(userId);
+  const sentToday = await getDailyCount(userId, { fresh: true });
 
   if (sentToday >= DAILY_LIMIT) {
     return {
@@ -69,48 +137,76 @@ async function checkGlobalSendingRules(userId) {
   return null;
 }
 
-
 /* ─────────────────────────────────────────────────────────────────────────
-   HELPER — per-campaign status counts via a single grouped query.
-   Replaces the old pattern of loading every recipient row into Node.
-   Returns { [campaignId]: { total, sent, pending, processing, failed } }
+   HELPER — per-campaign status + engagement counts in ONE query.
+   Returns { [campaignId]: { total, sent, pending, processing, failed,
+             skipped, replied, bounced, unsubscribed, lastSentAt } }
 ───────────────────────────────────────────────────────────────────────── */
+const EMPTY_COUNTS = Object.freeze({
+  total: 0,
+  sent: 0,
+  pending: 0,
+  processing: 0,
+  failed: 0,
+  skipped: 0,
+  replied: 0,
+  bounced: 0,
+  unsubscribed: 0,
+  lastSentAt: null,
+});
+
 async function getRecipientCounts(campaignIds) {
   if (!campaignIds.length) return {};
 
-  const rows = await prisma.campaignRecipient.groupBy({
-    by:     ["campaignId", "status"],
-    where:  { campaignId: { in: campaignIds } },
-    _count: { _all: true },
-    _max:   { sentAt: true },
-  });
+  const rows = await prisma.$queryRaw`
+    SELECT "campaignId",
+           count(*)::int                                               AS total,
+           count(*) FILTER (WHERE "status" = 'sent')::int              AS sent,
+           count(*) FILTER (WHERE "status" = 'pending')::int           AS pending,
+           count(*) FILTER (WHERE "status" = 'processing')::int        AS processing,
+           count(*) FILTER (WHERE "status" = 'failed')::int            AS failed,
+           count(*) FILTER (WHERE "status" = 'skipped')::int           AS skipped,
+           count(*) FILTER (WHERE "repliedAt" IS NOT NULL)::int        AS replied,
+           count(*) FILTER (WHERE "bouncedAt" IS NOT NULL)::int        AS bounced,
+           count(*) FILTER (WHERE "unsubscribedAt" IS NOT NULL)::int   AS unsubscribed,
+           max("sentAt") FILTER (WHERE "status" = 'sent')              AS "lastSentAt"
+    FROM "CampaignRecipient"
+    WHERE "campaignId" = ANY(${campaignIds}::int[])
+    GROUP BY "campaignId"
+  `;
 
   const map = {};
-  for (const id of campaignIds) {
-    map[id] = { total: 0, sent: 0, pending: 0, processing: 0, failed: 0, lastSentAt: null };
-  }
-  for (const r of rows) {
-    const bucket = map[r.campaignId];
-    if (!bucket) continue;
-    const n = r._count._all;
-    bucket.total += n;
-    if (bucket[r.status] !== undefined) bucket[r.status] += n;
-
-    // Latest actual send — replaces the old client-side
-    // `recipients.filter(r => r.sentAt).sort(...)` scan.
-    if (r.status === "sent" && r._max.sentAt) {
-      if (!bucket.lastSentAt || r._max.sentAt > bucket.lastSentAt) {
-        bucket.lastSentAt = r._max.sentAt;
-      }
-    }
-  }
+  for (const id of campaignIds) map[id] = { ...EMPTY_COUNTS };
+  for (const r of rows) map[r.campaignId] = { ...EMPTY_COUNTS, ...r };
   return map;
+}
+
+/** Fields added to every campaign row in list responses. */
+function countFields(k) {
+  return {
+    recipientCount: k.total,
+    sentCount: k.sent,
+    pendingCount: k.pending + k.processing,
+    failedCount: k.failed,
+    skippedCount: k.skipped,
+    repliedCount: k.replied,
+    bouncedCount: k.bounced,
+    unsubscribedCount: k.unsubscribed,
+    replyRate: k.sent ? Math.round((k.replied / k.sent) * 1000) / 10 : 0,
+    lastSentAt: k.lastSentAt,
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
    HELPER — per-provider hourly send limits (shared by progress + create)
 ───────────────────────────────────────────────────────────────────────── */
-const SAFE_LIMITS = { gmail: 50, gsuite: 80, rediff: 40, amazon: 60, custom: 60 };
+const SAFE_LIMITS = {
+  gmail: 50,
+  gsuite: 80,
+  rediff: 40,
+  amazon: 60,
+  custom: 60,
+};
 
 function formatDuration(ms) {
   const totalMinutes = Math.ceil(ms / 60000);
@@ -126,23 +222,25 @@ function formatDuration(ms) {
 ═══════════════════════════════════════════════════════════════════════════ */
 export const getDailyLimitStatus = async (req, res) => {
   try {
-    const userId    = req.user.id;
+    const userId = req.user.id;
+    // Polled by several components at once — getDailyCount caches and
+    // de-duplicates, so this is at most one SUM per user every few seconds.
     const sentToday = await getDailyCount(userId);
     const remaining = Math.max(0, DAILY_LIMIT - sentToday);
-    const inWindow  =  true;
-    const waitMs    = null;
+    const inWindow = true;
 
+    res.set("Cache-Control", "private, max-age=5");
     return res.json({
       success: true,
       data: {
-        dailySent:      sentToday,
-        dailyLimit:     DAILY_LIMIT,
+        dailySent: sentToday,
+        dailyLimit: DAILY_LIMIT,
         remaining,
-        limitReached:   sentToday >= DAILY_LIMIT,
-        withinWindow:   inWindow,
+        limitReached: sentToday >= DAILY_LIMIT,
+        withinWindow: inWindow,
         windowResetsIn: null,
         windowResetsAt: null,
-        percentUsed:    Math.min(100, Math.round((sentToday / DAILY_LIMIT) * 100)),
+        percentUsed: Math.min(100, Math.round((sentToday / DAILY_LIMIT) * 100)),
       },
     });
   } catch (err) {
@@ -151,92 +249,96 @@ export const getDailyLimitStatus = async (req, res) => {
   }
 };
 
-
 export const getAdminDailyOverview = async (req, res) => {
   try {
-    // ── 1. Role guard ────────────────────────────────────────────────────────
-    // const role = String(req.user?.jobRole || "").trim().toLowerCase();
-    // if (role !== "admin" && role !== "hr") {
-    //   return res.status(403).json({ success: false, message: "Access denied" });
-    // }
- 
+    // ── 1. Role guard (the page is Admin/HR-only in the UI too) ─────────────
+    if (!isAdminOrHr(req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    const cached = cache.get("adminDailyOverview");
+    if (cached) return res.json({ success: true, data: cached });
+
     // ── 2. All active users ──────────────────────────────────────────────────
     const users = await prisma.user.findMany({
-      where:  { isActive: true },
+      where: { isActive: true },
       select: { id: true, name: true, empId: true, email: true, jobRole: true },
       orderBy: { name: "asc" },
     });
- 
+
     // ── 3. IST-aware bucket start (same logic as getDailyCount) ──────────────
     const nowIST = new Date(
-      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
     );
     const resetToday = new Date(nowIST);
     resetToday.setHours(17, 0, 0, 0);
- 
+
     const bucketStart =
       nowIST < resetToday
         ? new Date(resetToday.getTime() - 24 * 60 * 60 * 1000)
         : resetToday;
- 
+
     // ── 4. Bulk-fetch DailyEmailLog rows for current bucket ──────────────────
     const logs = await prisma.dailyEmailLog.groupBy({
-      by:    ["userId"],
-      _sum:  { count: true },
-      _max:  { sentAt: true },
+      by: ["userId"],
+      _sum: { count: true },
+      _max: { sentAt: true },
       where: { sentAt: { gte: bucketStart } },
     });
- 
+
     const logMap = {};
     for (const row of logs) {
       logMap[row.userId] = {
-        sent:       row._sum.count || 0,
+        sent: row._sum.count || 0,
         lastSentAt: row._max.sentAt,
       };
     }
- 
+
     // ── 5. Bulk-fetch active (sending) campaign counts per user ──────────────
     const sendingCampaigns = await prisma.campaign.groupBy({
-      by:     ["userId"],
+      by: ["userId"],
       _count: { id: true },
-      where:  { status: "sending" },
+      where: { status: "sending" },
     });
- 
+
     const sendingMap = {};
     for (const row of sendingCampaigns) {
       sendingMap[row.userId] = row._count.id;
     }
- 
+
     // ── 6. Build per-user rows ───────────────────────────────────────────────
     let totalSentToday = 0;
- 
+
     const rows = users.map((u) => {
-      const dailySent      = logMap[u.id]?.sent       || 0;
-      const lastSentAt     = logMap[u.id]?.lastSentAt || null;
-      const activeCampaigns = sendingMap[u.id]        || 0;
-      const remaining      = Math.max(0, DAILY_LIMIT - dailySent);
-      const percentUsed    = Math.min(100, Math.round((dailySent / DAILY_LIMIT) * 100));
- 
+      const dailySent = logMap[u.id]?.sent || 0;
+      const lastSentAt = logMap[u.id]?.lastSentAt || null;
+      const activeCampaigns = sendingMap[u.id] || 0;
+      const remaining = Math.max(0, DAILY_LIMIT - dailySent);
+      const percentUsed = Math.min(
+        100,
+        Math.round((dailySent / DAILY_LIMIT) * 100),
+      );
+
       totalSentToday += dailySent;
- 
+
       // status logic:
       // "sending"   → has at least one campaign currently sending
       // "completed" → hit/exceeded daily limit
       // "idle"      → sent nothing today
       // "active"    → sent some emails, no campaign running right now
       let status = "idle";
-      if (activeCampaigns > 0)     status = "sending";
+      if (activeCampaigns > 0) status = "sending";
       else if (dailySent >= DAILY_LIMIT) status = "completed";
-      else if (dailySent > 0)      status = "active";
- 
+      else if (dailySent > 0) status = "active";
+
       return {
-        userId:          u.id,
-        name:            u.name || u.email.split("@")[0],
-        empId:           u.empId || "—",
-        email:           u.email,
-        jobRole:         String(u.jobRole || "EMP").trim(),
+        userId: u.id,
+        name: u.name || u.email.split("@")[0],
+        empId: u.empId || "—",
+        email: u.email,
+        jobRole: String(u.jobRole || "EMP").trim(),
         dailySent,
-        dailyLimit:      DAILY_LIMIT,
+        dailyLimit: DAILY_LIMIT,
         remaining,
         percentUsed,
         status,
@@ -244,21 +346,23 @@ export const getAdminDailyOverview = async (req, res) => {
         lastSentAt,
       };
     });
- 
+
     // Sort: sending first, then active, then idle
     const ORDER = { sending: 0, active: 1, completed: 2, idle: 3 };
-    rows.sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || b.dailySent - a.dailySent);
- 
-    return res.json({
-      success: true,
-      data: {
-        generatedAt:    new Date().toISOString(),
-        totalSentToday,
-        globalLimit:    DAILY_LIMIT * users.length,
-        users:          rows,
-      },
-    });
- 
+    rows.sort(
+      (a, b) =>
+        (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) ||
+        b.dailySent - a.dailySent,
+    );
+
+    const data = {
+      generatedAt: new Date().toISOString(),
+      totalSentToday,
+      globalLimit: DAILY_LIMIT * users.length,
+      users: rows,
+    };
+    cache.set("adminDailyOverview", data, 10);
+    return res.json({ success: true, data });
   } catch (err) {
     console.error("getAdminDailyOverview error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -285,13 +389,39 @@ export const createCampaign = async (req, res) => {
 
     // 1️⃣ Basic validation
     if (!campaignName || !campaignName.trim()) {
-      return res.status(400).json({ success: false, message: "Campaign name is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Campaign name is required" });
     }
-    if (!subjects?.length || !bodyHtml || !recipients?.length || !fromAccountIds?.length) {
+    if (
+      !Array.isArray(subjects) ||
+      !subjects.length ||
+      !bodyHtml ||
+      !Array.isArray(recipients) ||
+      !recipients.length ||
+      !Array.isArray(fromAccountIds) ||
+      !fromAccountIds.length
+    ) {
       return res.status(400).json({
         success: false,
         message: "Subjects, body, recipients and from accounts are required",
       });
+    }
+    if (!["immediate", "scheduled"].includes(sendType)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid send type" });
+    }
+    if (
+      sendType === "scheduled" &&
+      (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime()))
+    ) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "A valid scheduled time is required",
+        });
     }
 
     // 2️⃣ 🌐 Global daily limit + window check (immediate only)
@@ -303,31 +433,53 @@ export const createCampaign = async (req, res) => {
     }
 
     // 3️⃣ Account lock check
-    const sendingCampaigns = await prisma.campaign.findMany({
-      where:   { status: "sending" },
-      include: { recipients: { select: { accountId: true } } },
-    });
-
-    const locked = new Set();
-    for (const campaign of sendingCampaigns) {
-      try { JSON.parse(campaign.fromAccountIds || "[]").forEach(id => locked.add(Number(id))); } catch {}
-      campaign.recipients.forEach(r => { if (r.accountId) locked.add(Number(r.accountId)); });
-    }
-
     if (sendType === "immediate") {
-      const conflict = fromAccountIds.find(id => locked.has(Number(id)));
+      const locked = await getBusyAccountIds();
+      const conflict = fromAccountIds.find((id) => locked.has(Number(id)));
       if (conflict) {
         return res.status(400).json({
           success: false,
-          message: "This email account is already sending a campaign. Please wait until it completes.",
+          message:
+            "This email account is already sending a campaign. Please wait until it completes.",
         });
       }
     }
 
     // 4️⃣ Provider limit / estimated completion
-    const accounts = await prisma.emailAccount.findMany({ where: { id: { in: fromAccountIds } } });
+    const fromIds = [
+      ...new Set(fromAccountIds.map(Number).filter(Number.isInteger)),
+    ];
+    const accounts = await prisma.emailAccount.findMany({
+      where: { id: { in: fromIds }, userId: req.user.id, deleted: false },
+      select: { id: true, provider: true },
+    });
+    if (accounts.length !== fromIds.length) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "One or more sender accounts are invalid",
+        });
+    }
 
-    const SAFE_LIMITS = { gmail: 50, gsuite: 80, rediff: 40, amazon: 60, custom: 60 };
+    // Normalise + de-duplicate recipients once.
+    const uniqueRecipients = [
+      ...new Set(
+        recipients
+          .map((e) =>
+            String(e || "")
+              .trim()
+              .toLowerCase(),
+          )
+          .filter(Boolean),
+      ),
+    ];
+    if (!uniqueRecipients.length) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No valid recipients" });
+    }
+
     let totalHourlyCapacity = 0;
     for (const acc of accounts) {
       const provider = (acc.provider || "custom").toLowerCase();
@@ -336,23 +488,20 @@ export const createCampaign = async (req, res) => {
       totalHourlyCapacity += limit;
     }
 
-    const hoursNeeded         = recipients.length / totalHourlyCapacity;
-    const estimatedMs         = hoursNeeded * 60 * 60 * 1000;
+    const hoursNeeded =
+      uniqueRecipients.length / Math.max(totalHourlyCapacity, 1);
+    const estimatedMs = hoursNeeded * 60 * 60 * 1000;
     const estimatedCompletion = new Date(Date.now() + estimatedMs);
 
-    if (recipients.length > totalHourlyCapacity) {
-      console.log(`⚠️ Recipients (${recipients.length}) exceed hourly capacity (${totalHourlyCapacity}). Will send in batches.`);
-    }
-
     // 5️⃣ Auto-unique campaign name
-    let baseName  = campaignName.trim();
+    let baseName = campaignName.trim();
     let finalName = baseName;
 
     const existing = await prisma.campaign.findMany({
-      where:  { userId: req.user.id, name: { startsWith: baseName } },
+      where: { userId: req.user.id, name: { startsWith: baseName } },
       select: { name: true },
     });
-    const used = existing.map(c => c.name);
+    const used = existing.map((c) => c.name);
     if (used.includes(baseName)) {
       let i = 2;
       while (used.includes(`${baseName} (${i})`)) i++;
@@ -362,12 +511,12 @@ export const createCampaign = async (req, res) => {
     // 6️⃣ Schedule conflict check
     if (sendType === "scheduled" && scheduledAt) {
       const scheduledTime = new Date(scheduledAt);
-      const windowStart   = new Date(scheduledTime.getTime() - 2 * 3_600_000);
-      const windowEnd     = new Date(scheduledTime.getTime() + 2 * 3_600_000);
+      const windowStart = new Date(scheduledTime.getTime() - 2 * 3_600_000);
+      const windowEnd = new Date(scheduledTime.getTime() + 2 * 3_600_000);
 
       const conflicting = await prisma.campaign.findMany({
         where: {
-          OR:          [{ status: "scheduled" }, { status: "sending" }],
+          OR: [{ status: "scheduled" }, { status: "sending" }],
           scheduledAt: { gte: windowStart, lte: windowEnd },
         },
         select: { fromAccountIds: true },
@@ -375,70 +524,94 @@ export const createCampaign = async (req, res) => {
 
       const busyAccounts = new Set();
       for (const c of conflicting) {
-        try { JSON.parse(c.fromAccountIds || "[]").forEach(id => busyAccounts.add(Number(id))); } catch {}
+        try {
+          JSON.parse(c.fromAccountIds || "[]").forEach((id) =>
+            busyAccounts.add(Number(id)),
+          );
+        } catch {}
       }
 
-      if (fromAccountIds.find(id => busyAccounts.has(Number(id)))) {
+      if (fromAccountIds.find((id) => busyAccounts.has(Number(id)))) {
         return res.status(400).json({
           success: false,
-          message: "This email account already has a campaign scheduled near this time. Choose another time or account.",
+          message:
+            "This email account already has a campaign scheduled near this time. Choose another time or account.",
         });
       }
     }
 
-    // 7️⃣ Create campaign + recipients
-    const fromIds = fromAccountIds.map(Number);
-
+    // 7️⃣ Create campaign, then bulk-insert recipients.
+    //    The old nested `recipients: { create: [...] }` issued one INSERT
+    //    per recipient. createMany sends them in a few multi-row INSERTs.
     const campaign = await prisma.campaign.create({
       data: {
-        userId:    req.user.id,
-        name:      finalName,
+        userId: req.user.id,
+        name: finalName,
         bodyHtml,
         sendType,
         estimatedCompletion,
         senderRole,
-        scheduledAt:    sendType === "scheduled" ? new Date(scheduledAt) : null,
-        status:         sendType === "scheduled" ? "scheduled" : "draft",
-        subject:        JSON.stringify(subjects),
+        scheduledAt: sendType === "scheduled" ? new Date(scheduledAt) : null,
+        status: sendType === "scheduled" ? "scheduled" : "draft",
+        subject: JSON.stringify(subjects),
         fromAccountIds: JSON.stringify(fromAccountIds),
-        pitchIds:       JSON.stringify(pitchIds || []),
-        customLimits:   customLimits ? JSON.stringify(customLimits) : null,
-        recipients: {
-          create: (() => {
-            const unique = [...new Set(recipients.map(e => e.trim().toLowerCase()))];
-            return unique.map((email, i) => ({
-              email,
-              status:    "pending",
-              accountId: fromIds[i % fromIds.length],
-            }));
-          })(),
-        },
+        pitchIds: JSON.stringify(pitchIds || []),
+        customLimits: customLimits ? JSON.stringify(customLimits) : null,
+        totalRecipients: uniqueRecipients.length,
+      },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        sendType: true,
+        scheduledAt: true,
+        createdAt: true,
+        estimatedCompletion: true,
+        fromAccountIds: true,
       },
     });
 
-    // 8️⃣ Kick off sending for immediate campaigns
-    if (campaign.sendType === "immediate") {
-      await prisma.campaign.update({ where: { id: campaign.id }, data: { status: "sending" } });
-      invalidateDashboardCache(req.user.id);
-
-      const freshCampaign = await prisma.campaign.findUnique({ where: { id: campaign.id } });
-      if (freshCampaign.status === "sending") {
-        sendBulkCampaign(campaign.id).catch(err => {
-          console.error(`Error in campaign ${campaign.id}:`, err);
+    try {
+      for (
+        let i = 0;
+        i < uniqueRecipients.length;
+        i += RECIPIENT_INSERT_CHUNK
+      ) {
+        const chunk = uniqueRecipients.slice(i, i + RECIPIENT_INSERT_CHUNK);
+        await prisma.campaignRecipient.createMany({
+          data: chunk.map((email, j) => ({
+            campaignId: campaign.id,
+            email,
+            status: "pending",
+            accountId: fromIds[(i + j) % fromIds.length],
+          })),
+          skipDuplicates: true,
         });
       }
-    } else {
-      invalidateDashboardCache(req.user.id);
+    } catch (insertErr) {
+      // Don't leave a half-filled campaign behind.
+      await prisma.campaign
+        .delete({ where: { id: campaign.id } })
+        .catch(() => {});
+      throw insertErr;
     }
 
-    return res.json({ success: true, data: campaign });
+    // 8️⃣ Immediate campaigns: mark "sending" — the worker starts them.
+    if (campaign.sendType === "immediate") {
+      await prisma.campaign.update({
+        where: { id: campaign.id },
+        data: { status: "sending" },
+      });
+      campaign.status = "sending";
+    }
+    invalidateDashboardCache(req.user.id);
 
+    return res.json({ success: true, data: campaign });
   } catch (err) {
     console.error("Create campaign error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SEND CAMPAIGN NOW
@@ -447,118 +620,214 @@ export const sendCampaignNow = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
 
-    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
-    if (campaign.status === "sent") return res.json({ success: true });
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+      fromAccountIds: true,
+    });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    if (["sent", "completed", "sending"].includes(campaign.status)) {
+      return res.json({
+        success: true,
+        message: `Campaign is already ${campaign.status}`,
+      });
+    }
 
     // 🌐 Global check
     const blocked = await checkGlobalSendingRules(campaign.userId);
     if (blocked) return res.status(blocked.status).json(blocked.body);
 
     // Account lock check
-    const activeCampaigns = await prisma.campaign.findMany({
-      where: { status: "sending", NOT: { id: campaignId } },
-    });
-
-    const locked = new Set();
-    for (const c of activeCampaigns) {
-      try { JSON.parse(c.fromAccountIds || "[]").forEach(id => locked.add(Number(id))); } catch {}
+    const locked = await getBusyAccountIds({ excludeCampaignId: campaignId });
+    let fromIds = [];
+    try {
+      fromIds = JSON.parse(campaign.fromAccountIds || "[]");
+    } catch {
+      /* malformed */
     }
-
-    const fromIds = JSON.parse(campaign.fromAccountIds || "[]");
-    if (fromIds.find(id => locked.has(Number(id)))) {
+    if (fromIds.find((id) => locked.has(Number(id)))) {
       return res.status(400).json({
         success: false,
         message: "Email account is already used in another active campaign.",
       });
     }
 
-    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: "sending", error: null },
+    });
     invalidateDashboardCache(campaign.userId);
 
-    sendBulkCampaign(campaignId).catch(err => {
-      console.error(`Error sending campaign ${campaignId}:`, err);
-    });
-
     return res.json({ success: true, message: "Campaign sending started" });
-
   } catch (err) {
     console.error("sendCampaignNow error:", err);
-    return res.status(500).json({ success: false, message: "Failed to send campaign" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to send campaign" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SCHEDULE CAMPAIGN
 ═══════════════════════════════════════════════════════════════════════════ */
 export const scheduleCampaign = async (req, res) => {
   try {
-    const campaignId    = Number(req.params.id);
+    const campaignId = Number(req.params.id);
     const { scheduledAt } = req.body;
 
-    if (!scheduledAt) return res.status(400).json({ success: false, message: "Scheduled time is required" });
+    if (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "A valid scheduled time is required",
+        });
+    }
 
-    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+    });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    if (campaign.status === "sending") {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Stop the campaign before rescheduling it",
+        });
+    }
 
     await prisma.campaign.update({
       where: { id: campaignId },
-      data:  { scheduledAt: new Date(scheduledAt), status: "scheduled" },
+      data: { scheduledAt: new Date(scheduledAt), status: "scheduled" },
     });
 
     invalidateDashboardCache(campaign.userId);
     return res.json({ success: true });
-
   } catch (err) {
     console.error("Schedule campaign error:", err);
-    res.status(500).json({ success: false, message: "Failed to schedule campaign" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to schedule campaign" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    CREATE FOLLOW-UP CAMPAIGN
 ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * Which of `emails` must be left out of a follow-up to `baseCampaignId`.
+ * Three set-based queries regardless of list size.
+ * @returns {{ byEmail: Map<string,string>, summary: {suppressed:number, replied:number, bounced:number} }}
+ */
+async function findFollowupExclusions(baseCampaignId, emails) {
+  const byEmail = new Map();
+  const summary = { suppressed: 0, replied: 0, bounced: 0 };
+  if (!emails.length) return { byEmail, summary };
+
+  const rootId = await resolveOriginalCampaignId(baseCampaignId);
+
+  const [suppressed, engaged] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT "email" FROM "SuppressedEmail" WHERE "email" = ANY(${emails}::text[])
+    `,
+    prisma.$queryRaw`
+      SELECT o."email",
+             coalesce(bool_or(
+               o."repliedAt" IS NOT NULL
+               OR EXISTS (
+                 SELECT 1 FROM "ReplyEvent" e
+                 WHERE e."email" = o."email" AND e."receivedAt" >= o."sentAt"
+               )
+             ), false) AS replied,
+             coalesce(bool_or(o."bounceType" = 'hard'), false) AS bounced
+      FROM "CampaignRecipient" o
+      WHERE o."campaignId" = ANY(${[...new Set([rootId, baseCampaignId])]}::int[])
+        AND o."email" = ANY(${emails}::text[])
+        AND o."status" = 'sent'
+      GROUP BY o."email"
+    `,
+  ]);
+
+  for (const r of suppressed) {
+    byEmail.set(r.email, "suppressed");
+    summary.suppressed++;
+  }
+  for (const r of engaged) {
+    if (byEmail.has(r.email)) continue;
+    if (r.replied) {
+      byEmail.set(r.email, "replied");
+      summary.replied++;
+    } else if (r.bounced) {
+      byEmail.set(r.email, "bounced");
+      summary.bounced++;
+    }
+  }
+  return { byEmail, summary };
+}
+
 export const createFollowupCampaign = async (req, res) => {
   try {
     const { baseCampaignId, subjects, bodyHtml, senderRecipientMap } = req.body;
 
     if (!baseCampaignId || !senderRecipientMap) {
-      return res.status(400).json({ success: false, message: "Invalid payload" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid payload" });
     }
 
     // 🌐 Global check
     const blocked = await checkGlobalSendingRules(req.user.id);
     if (blocked) return res.status(blocked.status).json(blocked.body);
 
-    const baseCampaign = await prisma.campaign.findUnique({
-      where:  { id: baseCampaignId },
-      select: {
-        id: true, name: true, senderRole: true, customLimits: true,
-        recipients: { select: { email: true, accountId: true } },
+    // Was selecting every recipient of the base campaign, unused.
+    const baseCampaign = await findManageableCampaign(
+      req,
+      Number(baseCampaignId),
+      {
+        id: true,
+        name: true,
+        senderRole: true,
+        customLimits: true,
       },
-    });
+    );
 
-    if (!baseCampaign) return res.status(404).json({ success: false, message: "Base campaign not found" });
+    if (!baseCampaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Base campaign not found" });
 
-    const sendingCampaigns = await prisma.campaign.findMany({
-      where:   { status: "sending" },
-      include: { recipients: { select: { accountId: true } } },
-    });
+    const senderEntries = Object.entries(senderRecipientMap || {});
+    if (!senderEntries.length) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No recipients selected" });
+    }
 
-    const locked = new Set();
-    for (const campaign of sendingCampaigns) {
-      try { JSON.parse(campaign.fromAccountIds || "[]").forEach(id => locked.add(Number(id))); } catch {}
-      campaign.recipients.forEach(r => { if (r.accountId) locked.add(Number(r.accountId)); });
+    // Busy check BEFORE creating anything.
+    const locked = await getBusyAccountIds();
+    if (senderEntries.some(([senderId]) => locked.has(Number(senderId)))) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more sender accounts are currently busy. Please wait.",
+      });
     }
 
     let finalName = `${baseCampaign.name} (Followup)`;
     const existing = await prisma.campaign.findMany({
-      where:  { userId: req.user.id, name: { startsWith: finalName } },
+      where: { userId: req.user.id, name: { startsWith: finalName } },
       select: { name: true },
     });
-    const used = existing.map(c => c.name);
+    const used = existing.map((c) => c.name);
     if (used.includes(finalName)) {
       let i = 2;
       while (used.includes(`${finalName} (${i})`)) i++;
@@ -567,58 +836,97 @@ export const createFollowupCampaign = async (req, res) => {
 
     const followupCampaign = await prisma.campaign.create({
       data: {
-        userId:           req.user.id,
-        name:             finalName,
-        subject:          JSON.stringify(subjects || []),
-        bodyHtml:         bodyHtml || "",
-        sendType:         "followup",
-        status:           "draft",
-        parentCampaignId: baseCampaignId,
-        fromAccountIds:   JSON.stringify([]),
-        pitchIds:         JSON.stringify([]),
-        senderRole:       baseCampaign.senderRole || "",
+        userId: req.user.id,
+        name: finalName,
+        subject: JSON.stringify(subjects || []),
+        bodyHtml: bodyHtml || "",
+        sendType: "followup",
+        status: "draft",
+        parentCampaignId: baseCampaign.id,
+        fromAccountIds: JSON.stringify([]),
+        pitchIds: JSON.stringify([]),
+        senderRole: baseCampaign.senderRole || "",
         // ✅ Inherit rate limits from parent so follow-ups obey the same /hr setting
-        customLimits:     baseCampaign.customLimits || null,
+        customLimits: baseCampaign.customLimits || null,
       },
     });
 
-    const recipientCreates = [];
-
-    for (const [senderId, emailArray] of Object.entries(senderRecipientMap)) {
+    const candidates = [];
+    const seen = new Set();
+    for (const [senderId, emailArray] of senderEntries) {
       const accountId = Number(senderId);
-
-      if (locked.has(accountId)) {
-        await prisma.campaign.delete({ where: { id: followupCampaign.id } });
-        return res.status(400).json({
-          success: false,
-          message: "One or more sender accounts are currently busy. Please wait.",
-        });
-      }
-
-      for (const email of emailArray) {
-        recipientCreates.push({
-          campaignId:    followupCampaign.id,
-          email,
-          status:        "pending",
-          accountId,
-          sentBodyHtml:  "",
-          sentSubject:   "",
-          sentFromEmail: "",
-        });
+      if (!Number.isInteger(accountId) || !Array.isArray(emailArray)) continue;
+      for (const raw of emailArray) {
+        const email = normalizeEmail(raw);
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        candidates.push({ email, accountId });
       }
     }
 
-    await prisma.campaignRecipient.createMany({ data: recipientCreates });
+    // Leave out people who must not get a follow-up: on the do-not-contact
+    // list, already replied, or whose original hard-bounced. (The engine
+    // re-checks at send time; this keeps the counts honest from the start.)
+    const excluded = await findFollowupExclusions(
+      baseCampaign.id,
+      candidates.map((c) => c.email),
+    );
+    const recipientCreates = candidates
+      .filter((c) => !excluded.byEmail.has(c.email))
+      .map((c) => ({
+        campaignId: followupCampaign.id,
+        email: c.email,
+        status: "pending",
+        accountId: c.accountId,
+      }));
+
+    if (!recipientCreates.length) {
+      await prisma.campaign
+        .delete({ where: { id: followupCampaign.id } })
+        .catch(() => {});
+      return res.status(400).json({
+        success: false,
+        message:
+          "Everyone selected has replied, unsubscribed or bounced — no follow-up needed.",
+        excluded: excluded.summary,
+      });
+    }
+
+    try {
+      for (
+        let i = 0;
+        i < recipientCreates.length;
+        i += RECIPIENT_INSERT_CHUNK
+      ) {
+        await prisma.campaignRecipient.createMany({
+          data: recipientCreates.slice(i, i + RECIPIENT_INSERT_CHUNK),
+          skipDuplicates: true,
+        });
+      }
+      await prisma.campaign.update({
+        where: { id: followupCampaign.id },
+        data: { totalRecipients: recipientCreates.length },
+      });
+    } catch (insertErr) {
+      await prisma.campaign
+        .delete({ where: { id: followupCampaign.id } })
+        .catch(() => {});
+      throw insertErr;
+    }
+
     invalidateDashboardCache(req.user.id);
 
-    return res.json({ success: true, data: followupCampaign });
-
+    return res.json({
+      success: true,
+      data: followupCampaign,
+      recipients: recipientCreates.length,
+      excluded: excluded.summary,
+    });
   } catch (err) {
     console.error("Followup campaign error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SEND FOLLOW-UP CAMPAIGN
@@ -627,31 +935,40 @@ export const sendFollowupCampaign = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
 
-    const campaign = await prisma.campaign.findUnique({
-      where:  { id: campaignId },
-      select: { userId: true, status: true },
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+      sendType: true,
     });
 
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    if (campaign.sendType !== "followup") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Not a follow-up campaign" });
+    }
+    if (campaign.status === "sending") return res.json({ success: true });
 
     // 🌐 Global check
     const blocked = await checkGlobalSendingRules(campaign.userId);
     if (blocked) return res.status(blocked.status).json(blocked.body);
 
-    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
-
-    sendBulkCampaign(campaignId).catch(err => {
-      console.error(`Error sending follow-up campaign ${campaignId}:`, err);
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: "sending", error: null },
     });
+    invalidateDashboardCache(campaign.userId);
 
     return res.json({ success: true });
-
   } catch (err) {
     console.error("sendFollowupCampaign error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET ALL CAMPAIGNS
@@ -669,7 +986,7 @@ export const getAllCampaigns = async (req, res) => {
       if (nameCached) return res.json({ success: true, data: nameCached });
 
       const rows = await prisma.campaign.findMany({
-        where:  { userId: req.user.id },
+        where: { userId: req.user.id },
         select: { id: true, name: true },
       });
 
@@ -685,40 +1002,36 @@ export const getAllCampaigns = async (req, res) => {
     // every campaign) and no longer selects `bodyHtml` (the full email
     // template, per campaign). Counts come from one grouped query instead.
     const campaigns = await prisma.campaign.findMany({
-      where:   { userId: req.user.id },
+      where: { userId: req.user.id },
       orderBy: { createdAt: "desc" },
       select: {
-        id: true, name: true, status: true, sendType: true,
-        subject: true, fromAccountIds: true,
-        parentCampaignId: true, createdAt: true, estimatedCompletion: true,
+        id: true,
+        name: true,
+        status: true,
+        sendType: true,
+        subject: true,
+        fromAccountIds: true,
+        parentCampaignId: true,
+        createdAt: true,
+        estimatedCompletion: true,
       },
     });
 
-    const counts = await getRecipientCounts(campaigns.map(c => c.id));
+    const counts = await getRecipientCounts(campaigns.map((c) => c.id));
 
-    const result = campaigns.map(c => {
-      const k = counts[c.id] || { total: 0, sent: 0, pending: 0, processing: 0, failed: 0, lastSentAt: null };
-      return {
-        ...c,
-        // ⚠ FRONTEND: campaign.recipients is gone — use these instead of
-        // campaign.recipients.length / .filter(...).length
-        recipientCount: k.total,
-        sentCount:      k.sent,
-        pendingCount:   k.pending + k.processing,
-        failedCount:    k.failed,
-        lastSentAt:     k.lastSentAt,
-      };
-    });
+    const result = campaigns.map((c) => ({
+      ...c,
+      // ⚠ FRONTEND: campaign.recipients is gone — use these counts instead.
+      ...countFields(counts[c.id] || EMPTY_COUNTS),
+    }));
 
     cache.set(cacheKey, result, 20);
     return res.json({ success: true, data: result });
-
   } catch (err) {
     console.error("Get campaigns error:", err);
     res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET DASHBOARD CAMPAIGNS
@@ -737,26 +1050,34 @@ export const getDashboardCampaigns = async (req, res) => {
 
     /* -- date range (same logic, but no longer mutates `now` via setHours) -- */
     let startDate = null;
-    let endDate   = null;
-    const now     = new Date();
+    let endDate = null;
+    const now = new Date();
 
     if (range === "today") {
       startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      endDate   = new Date();
+      endDate = new Date();
     } else if (range === "week") {
       const firstDay = new Date(now);
       firstDay.setDate(now.getDate() - now.getDay());
       firstDay.setHours(0, 0, 0, 0);
       startDate = firstDay;
-      endDate   = new Date();
+      endDate = new Date();
     } else if (range === "month") {
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      endDate   = new Date();
+      endDate = new Date();
     }
     if (date) {
       const d = new Date(date);
       startDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      endDate   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+      endDate = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
     }
 
     const where = {
@@ -772,9 +1093,16 @@ export const getDashboardCampaigns = async (req, res) => {
         take,
         skip,
         select: {
-          id: true, name: true, status: true, sendType: true, subject: true,
-          createdAt: true, scheduledAt: true, estimatedCompletion: true,
-          parentCampaignId: true, fromAccountIds: true,
+          id: true,
+          name: true,
+          status: true,
+          sendType: true,
+          subject: true,
+          createdAt: true,
+          scheduledAt: true,
+          estimatedCompletion: true,
+          parentCampaignId: true,
+          fromAccountIds: true,
         },
       }),
       prisma.campaign.count({ where }),
@@ -788,20 +1116,25 @@ export const getDashboardCampaigns = async (req, res) => {
       select: { id: true, sendType: true },
     });
 
-    const followupIds    = new Set(allInRange.filter(c => c.sendType === "followup").map(c => c.id));
+    const followupIds = new Set(
+      allInRange.filter((c) => c.sendType === "followup").map((c) => c.id),
+    );
     const totalFollowups = followupIds.size;
     const totalCampaigns = allInRange.length - totalFollowups;
 
     const statRows = allInRange.length
       ? await prisma.campaignRecipient.groupBy({
-          by:     ["campaignId", "status"],
-          where:  { campaignId: { in: allInRange.map(c => c.id) } },
+          by: ["campaignId", "status"],
+          where: { campaignId: { in: allInRange.map((c) => c.id) } },
           _count: { _all: true },
         })
       : [];
 
-    let totalRecipients = 0, sentRecipients = 0,
-        pendingRecipients = 0, failedRecipients = 0, followupEmails = 0;
+    let totalRecipients = 0,
+      sentRecipients = 0,
+      pendingRecipients = 0,
+      failedRecipients = 0,
+      followupEmails = 0;
 
     for (const row of statRows) {
       const n = row._count._all;
@@ -810,56 +1143,65 @@ export const getDashboardCampaigns = async (req, res) => {
         continue;
       }
       totalRecipients += n;
-      if      (row.status === "sent")   sentRecipients    += n;
-      else if (row.status === "failed") failedRecipients  += n;
-      else if (row.status === "pending" || row.status === "processing") pendingRecipients += n;
+      if (row.status === "sent") sentRecipients += n;
+      else if (row.status === "failed") failedRecipients += n;
+      else if (row.status === "pending" || row.status === "processing")
+        pendingRecipients += n;
     }
 
     /* -- 3. per-row counts for the visible page only ------------------------ */
-    const counts = await getRecipientCounts(campaigns.map(c => c.id));
+    const counts = await getRecipientCounts(campaigns.map((c) => c.id));
 
     /* -- 4. sender labels --------------------------------------------------- */
     const accountIds = new Set();
     for (const c of campaigns) {
       try {
-        JSON.parse(c.fromAccountIds || "[]").forEach(id => accountIds.add(Number(id)));
-      } catch { /* malformed JSON on this row — skip */ }
+        JSON.parse(c.fromAccountIds || "[]").forEach((id) =>
+          accountIds.add(Number(id)),
+        );
+      } catch {
+        /* malformed JSON on this row — skip */
+      }
     }
 
     let accountEmailMap = {};
     if (accountIds.size > 0) {
       const allAccounts = await prisma.emailAccount.findMany({
-        where:  { id: { in: Array.from(accountIds) } },
+        where: { id: { in: Array.from(accountIds) } },
         select: { id: true, email: true },
       });
-      allAccounts.forEach(acc => { accountEmailMap[acc.id] = acc.email.split("@")[0] + "@"; });
+      allAccounts.forEach((acc) => {
+        accountEmailMap[acc.id] = acc.email.split("@")[0] + "@";
+      });
     }
 
-    const recentCampaigns = campaigns.map(campaign => {
+    const recentCampaigns = campaigns.map((campaign) => {
       let fromNames = [];
       try {
         fromNames = JSON.parse(campaign.fromAccountIds || "[]")
-          .map(id => accountEmailMap[Number(id)])
+          .map((id) => accountEmailMap[Number(id)])
           .filter(Boolean);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
 
-      const k = counts[campaign.id] || { total: 0, sent: 0, pending: 0, processing: 0, failed: 0, lastSentAt: null };
       return {
         ...campaign,
         fromNames,
         // ⚠ FRONTEND: campaign.recipients is no longer returned. Use these.
-        recipientCount: k.total,
-        sentCount:      k.sent,
-        pendingCount:   k.pending + k.processing,
-        failedCount:    k.failed,
-        lastSentAt:     k.lastSentAt,
+        ...countFields(counts[campaign.id] || EMPTY_COUNTS),
       };
     });
 
     const responseData = {
       stats: {
-        totalCampaigns, totalRecipients, sentRecipients,
-        pendingRecipients, failedRecipients, totalFollowups, followupEmails,
+        totalCampaigns,
+        totalRecipients,
+        sentRecipients,
+        pendingRecipients,
+        failedRecipients,
+        totalFollowups,
+        followupEmails,
       },
       recentCampaigns,
       pagination: { page: Number(page), pageSize: take, total: totalCount },
@@ -867,13 +1209,11 @@ export const getDashboardCampaigns = async (req, res) => {
 
     cache.set(cacheKey, responseData, 15);
     return res.json({ success: true, data: responseData });
-
   } catch (err) {
     console.error("Dashboard error:", err);
     res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET CAMPAIGN PROGRESS
@@ -882,34 +1222,40 @@ export const getCampaignProgress = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
-      return res.status(400).json({ success: false, message: "Invalid campaign id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
     }
 
     // Short micro-cache: this endpoint is polled every 5s per expanded row,
     // so concurrent pollers within the same tick collapse to one query.
-    const cacheKey = `progress:${id}`;
+    // Key includes the user: the old `progress:${id}` key was served from
+    // cache BEFORE the ownership check, leaking other users' progress.
+    const cacheKey = `progress:${req.user.id}:${id}`;
     const cached = cache.get(cacheKey);
     if (cached) return res.json({ success: true, data: cached });
 
-    // Ownership check — this route previously had no `protect` at all.
-    const campaign = await prisma.campaign.findFirst({
-      where:  { id, userId: req.user.id },
-      select: { id: true, customLimits: true },
+    const campaign = await findManageableCampaign(req, id, {
+      id: true,
+      customLimits: true,
     });
     if (!campaign) return res.status(404).json({ success: false });
 
     let customLimits = {};
     try {
-      if (campaign.customLimits) customLimits = JSON.parse(campaign.customLimits);
-    } catch { /* malformed — fall back to provider defaults */ }
+      if (campaign.customLimits)
+        customLimits = JSON.parse(campaign.customLimits);
+    } catch {
+      /* malformed — fall back to provider defaults */
+    }
 
     /* ⚡ OPTIMISED: was `include: { recipients: true }`, which pulled every
        column of every recipient row — including sentBodyHtml, the full
        rendered email — every 5 seconds. Now one grouped count.            */
     const [grouped, ipRows] = await Promise.all([
       prisma.campaignRecipient.groupBy({
-        by:     ["accountId", "status"],
-        where:  { campaignId: id, accountId: { not: null } },
+        by: ["accountId", "status"],
+        where: { campaignId: id, accountId: { not: null } },
         _count: { _all: true },
       }),
       prisma.$queryRaw`
@@ -922,14 +1268,16 @@ export const getCampaignProgress = async (req, res) => {
       `,
     ]);
 
-    const accountIds = [...new Set(grouped.map(g => g.accountId))];
-    const accounts   = await prisma.emailAccount.findMany({
-      where:  { id: { in: accountIds } },
+    const accountIds = [...new Set(grouped.map((g) => g.accountId))];
+    const accounts = await prisma.emailAccount.findMany({
+      where: { id: { in: accountIds } },
       select: { id: true, email: true, provider: true },
     });
 
-    const byId  = Object.fromEntries(accounts.map(a => [a.id, a]));
-    const ipMap = Object.fromEntries(ipRows.map(r => [r.accountId, r.sendingIp]));
+    const byId = Object.fromEntries(accounts.map((a) => [a.id, a]));
+    const ipMap = Object.fromEntries(
+      ipRows.map((r) => [r.accountId, r.sendingIp]),
+    );
 
     const rows = {};
     for (const g of grouped) {
@@ -938,81 +1286,56 @@ export const getCampaignProgress = async (req, res) => {
 
       if (!rows[account.id]) {
         rows[account.id] = {
-          email:      account.email,
-          domain:     account.provider,
+          email: account.email,
+          domain: account.provider,
           processing: 0,
-          completed:  0,
-          failed:     0,
-          sendingIp:  ipMap[account.id] || null,
-          eta:        "0m",
+          completed: 0,
+          failed: 0,
+          skipped: 0,
+          sendingIp: ipMap[account.id] || null,
+          eta: "0m",
         };
       }
 
       const n = g._count._all;
-      if      (g.status === "sent")   rows[account.id].completed  += n;
-      else if (g.status === "failed") rows[account.id].failed     += n;
-      else if (g.status === "pending" || g.status === "processing") rows[account.id].processing += n;
+      if (g.status === "sent") rows[account.id].completed += n;
+      else if (g.status === "failed") rows[account.id].failed += n;
+      else if (g.status === "skipped") rows[account.id].skipped += n;
+      else if (g.status === "pending" || g.status === "processing")
+        rows[account.id].processing += n;
     }
 
     for (const [accId, row] of Object.entries(rows)) {
       const provider = (row.domain || "custom").toLowerCase();
-      const limit    = customLimits[accId] || SAFE_LIMITS[provider] || SAFE_LIMITS.custom;
-      row.eta = row.processing === 0
-        ? "Done"
-        : formatDuration((row.processing / limit) * 3_600_000);
+      const limit =
+        customLimits[accId] || SAFE_LIMITS[provider] || SAFE_LIMITS.custom;
+      row.eta =
+        row.processing === 0
+          ? "Done"
+          : formatDuration((row.processing / limit) * 3_600_000);
     }
 
     const result = Object.values(rows);
-    cache.set(cacheKey, result, 4);
+    cache.set(cacheKey, result, 8);
     return res.json({ success: true, data: result });
-
   } catch (err) {
     console.error("Progress API error:", err);
     return res.status(500).json({ success: false });
   }
 };
 
-
 /* ═══════════════════════════════════════════════════════════════════════════
    GET LOCKED ACCOUNTS
 ═══════════════════════════════════════════════════════════════════════════ */
 export const getLockedAccounts = async (req, res) => {
   try {
-    const cacheKey = `locked:${req.user.id}`;
-    const cached = cache.get(cacheKey);
-    if (cached) return res.json({ success: true, data: cached });
-
-    // ⚡ OPTIMISED: previously loaded every `sending` campaign WITH all of its
-    // recipient rows just to collect account ids. Now two narrow queries.
-    const sendingCampaigns = await prisma.campaign.findMany({
-      where:  { status: "sending" },
-      select: { fromAccountIds: true },
-    });
-
-    const busy = new Set();
-    for (const c of sendingCampaigns) {
-      try {
-        JSON.parse(c.fromAccountIds || "[]").forEach(id => busy.add(Number(id)));
-      } catch { /* malformed JSON on this row — skip */ }
-    }
-
-    const assigned = await prisma.campaignRecipient.findMany({
-      where:    { campaign: { status: "sending" }, accountId: { not: null } },
-      select:   { accountId: true },
-      distinct: ["accountId"],
-    });
-    assigned.forEach(r => busy.add(Number(r.accountId)));
-
-    const result = { busy: Array.from(busy) };
-    cache.set(cacheKey, result, 10);
-    return res.json({ success: true, data: result });
-
+    const busy = await getBusyAccountIds();
+    return res.json({ success: true, data: { busy: Array.from(busy) } });
   } catch (err) {
     console.error("getLockedAccounts error:", err);
     res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DELETE CAMPAIGN
@@ -1021,21 +1344,41 @@ export const deleteCampaign = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
 
-    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+    });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    if (campaign.status === "sending") {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Stop the campaign before deleting it",
+        });
+    }
 
-    await prisma.campaignRecipient.deleteMany({ where: { campaignId } });
-    await prisma.campaign.delete({ where: { id: campaignId } });
+    // Recipients cascade from Campaign. Child follow-ups keep existing,
+    // detached from the deleted parent.
+    await prisma.$transaction([
+      prisma.campaign.updateMany({
+        where: { parentCampaignId: campaignId },
+        data: { parentCampaignId: null },
+      }),
+      prisma.campaign.delete({ where: { id: campaignId } }),
+    ]);
 
     invalidateDashboardCache(campaign.userId);
     return res.json({ success: true });
-
   } catch (err) {
     console.error("Delete campaign error:", err);
     res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET CAMPAIGNS FOR FOLLOWUP
@@ -1046,14 +1389,13 @@ export const getCampaignsForFollowup = async (req, res) => {
 
   try {
     const userId = req.user.id;
-    const level  = Math.min(Math.max(Number(req.query.level) || 1, 1), 4);
-    const limit  = Math.min(Math.max(Number(req.query.limit) || 6, 1), 50);
+    const level = Math.min(Math.max(Number(req.query.level) || 1, 1), 4);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 6, 1), 50);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
     const cacheKey = `forFollowup:${userId}:${level}:${offset}:${limit}`;
     const cached = cache.get(cacheKey);
     if (cached) {
-      console.log(`[for-followup] CACHE HIT in ${Date.now() - t0}ms`);
       return res.json({ success: true, data: cached.items, ...cached });
     }
 
@@ -1063,11 +1405,17 @@ export const getCampaignsForFollowup = async (req, res) => {
        even a few hundred rows is a small result set.                     */
     const tQuery = Date.now();
     const all = await prisma.campaign.findMany({
-      where:   { userId },
+      where: { userId },
       orderBy: { createdAt: "desc" },
       select: {
-        id: true, name: true, status: true, sendType: true, subject: true,
-        createdAt: true, fromAccountIds: true, parentCampaignId: true,
+        id: true,
+        name: true,
+        status: true,
+        sendType: true,
+        subject: true,
+        createdAt: true,
+        fromAccountIds: true,
+        parentCampaignId: true,
         estimatedCompletion: true,
       },
     });
@@ -1075,14 +1423,15 @@ export const getCampaignsForFollowup = async (req, res) => {
     mark.campaignRows = all.length;
 
     /* ── Partition in memory (microseconds, no DB round trip) ─────────── */
-    const activeParents  = new Set();
+    const activeParents = new Set();
     const completedCount = {};
-    const baseCampaigns  = [];
+    const baseCampaigns = [];
 
     for (const c of all) {
       if (c.sendType === "followup" && c.parentCampaignId) {
         if (c.status === "completed") {
-          completedCount[c.parentCampaignId] = (completedCount[c.parentCampaignId] || 0) + 1;
+          completedCount[c.parentCampaignId] =
+            (completedCount[c.parentCampaignId] || 0) + 1;
         } else if (["draft", "sending", "scheduled"].includes(c.status)) {
           activeParents.add(c.parentCampaignId);
         }
@@ -1095,7 +1444,7 @@ export const getCampaignsForFollowup = async (req, res) => {
       }
     }
 
-    const eligible = baseCampaigns.filter(c => {
+    const eligible = baseCampaigns.filter((c) => {
       if (activeParents.has(c.id)) return false;
       const done = completedCount[c.id] || 0;
       return done < 4 && done === level - 1;
@@ -1106,33 +1455,34 @@ export const getCampaignsForFollowup = async (req, res) => {
        Slicing happens AFTER filtering — eligibility depends on the whole
        set, so it cannot be pushed into the SQL LIMIT. What this does save
        is the count query below, which now covers only the visible page.  */
-    const total   = eligible.length;
+    const total = eligible.length;
     const pageRows = eligible.slice(offset, offset + limit);
-    const hasMore  = offset + limit < total;
+    const hasMore = offset + limit < total;
     mark.total_eligible = total;
     mark.returned = pageRows.length;
 
     if (pageRows.length === 0) {
       const empty = { items: [], total, hasMore: false, offset, limit };
       cache.set(cacheKey, empty, 20);
-      console.log(`[for-followup] ${Date.now() - t0}ms total`, mark);
       return res.json({ success: true, data: [], ...empty });
     }
 
     /* ── Sent counts, only for the rows actually being returned ────────── */
     const tCounts = Date.now();
     const sentRows = await prisma.campaignRecipient.groupBy({
-      by:     ["campaignId"],
-      where:  { campaignId: { in: pageRows.map(c => c.id) }, status: "sent" },
+      by: ["campaignId"],
+      where: { campaignId: { in: pageRows.map((c) => c.id) }, status: "sent" },
       _count: { _all: true },
     });
     mark.counts = Date.now() - tCounts;
 
-    const sentMap = Object.fromEntries(sentRows.map(r => [r.campaignId, r._count._all]));
+    const sentMap = Object.fromEntries(
+      sentRows.map((r) => [r.campaignId, r._count._all]),
+    );
 
-    const data = pageRows.map(c => ({
+    const data = pageRows.map((c) => ({
       ...c,
-      sentCount:      sentMap[c.id] || 0,
+      sentCount: sentMap[c.id] || 0,
       recipientCount: sentMap[c.id] || 0,
       followupNumber: (completedCount[c.id] || 0) + 1,
     }));
@@ -1145,16 +1495,28 @@ export const getCampaignsForFollowup = async (req, res) => {
     const elapsed = Date.now() - t0;
     mark.total = elapsed;
     mark.waiting = elapsed - (mark.campaigns + (mark.counts || 0));
-    console.log(`[for-followup] ${elapsed}ms`, mark);
+    if (elapsed > 2000) console.warn(`[for-followup] slow: ${elapsed}ms`, mark);
 
-    return res.json({ success: true, data, total, hasMore, offset, limit, _timing: mark });
-
+    return res.json({
+      success: true,
+      data,
+      total,
+      hasMore,
+      offset,
+      limit,
+      _timing: mark,
+    });
   } catch (err) {
-    console.error("Get campaigns for followup error:", err, "after", Date.now() - t0, "ms");
+    console.error(
+      "Get campaigns for followup error:",
+      err,
+      "after",
+      Date.now() - t0,
+      "ms",
+    );
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET FOLLOW-UP PREVIEW  (NEW)
@@ -1186,52 +1548,73 @@ export const getFollowupPreview = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
-      return res.status(400).json({ success: false, message: "Invalid campaign id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
     }
 
     const campaign = await prisma.campaign.findFirst({
-      where:  { id, userId: req.user.id },
+      where: { id, userId: req.user.id },
       select: {
-        id: true, name: true, subject: true, fromAccountIds: true,
-        createdAt: true, bodyHtml: true,
+        id: true,
+        name: true,
+        subject: true,
+        fromAccountIds: true,
+        createdAt: true,
+        bodyHtml: true,
       },
     });
     if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
     }
-        // From-addresses: normal campaigns keep the ids on the campaign, follow-ups
+    // From-addresses: normal campaigns keep the ids on the campaign, follow-ups
     // write fromAccountIds: "[]" and carry the sender per recipient instead.
     let declaredIds = [];
-    try { declaredIds = JSON.parse(campaign.fromAccountIds || "[]").map(Number); } catch {}
+    try {
+      declaredIds = JSON.parse(campaign.fromAccountIds || "[]").map(Number);
+    } catch {}
 
     const assigned = await prisma.campaignRecipient.findMany({
-      where:    { campaignId: id, accountId: { not: null } },
-      select:   { accountId: true },
+      where: { campaignId: id, accountId: { not: null } },
+      select: { accountId: true },
       distinct: ["accountId"],
     });
 
-    const fromAccountIdList = [...new Set([...declaredIds, ...assigned.map(a => a.accountId)])]
-      .filter(Number.isInteger);
+    const fromAccountIdList = [
+      ...new Set([...declaredIds, ...assigned.map((a) => a.accountId)]),
+    ].filter(Number.isInteger);
 
     const accounts = fromAccountIdList.length
       ? await prisma.emailAccount.findMany({
-          where:  { id: { in: fromAccountIdList } },
+          where: { id: { in: fromAccountIdList } },
           select: { id: true, email: true, smtpUser: true },
         })
       : [];
 
     // Mirror processAccountBatched: fromEmail = smtpUser || email
-    const fromAccounts = accounts.map(a => ({ id: a.id, email: a.smtpUser || a.email }));
+    const fromAccounts = accounts.map((a) => ({
+      id: a.id,
+      email: a.smtpUser || a.email,
+    }));
 
     const [sentCount, previewRecipients] = await Promise.all([
-      prisma.campaignRecipient.count({ where: { campaignId: id, status: "sent" } }),
+      prisma.campaignRecipient.count({
+        where: { campaignId: id, status: "sent" },
+      }),
       prisma.campaignRecipient.findMany({
-        where:   { campaignId: id, status: "sent" },
+        where: { campaignId: id, status: "sent" },
         orderBy: { id: "asc" },
         take: 3,
         select: {
-          id: true, email: true, accountId: true,
-          sentSubject: true, sentFromEmail: true, sentBodyHtml: true, sentAt: true,
+          id: true,
+          email: true,
+          accountId: true,
+          sentSubject: true,
+          sentFromEmail: true,
+          sentBodyHtml: true,
+          sentAt: true,
         },
       }),
     ]);
@@ -1242,16 +1625,15 @@ export const getFollowupPreview = async (req, res) => {
         campaign,
         sentCount,
         previewRecipients,
-        previousBody: previewRecipients[0]?.sentBodyHtml || campaign.bodyHtml || "",
+        previousBody:
+          previewRecipients[0]?.sentBodyHtml || campaign.bodyHtml || "",
       },
     });
-
   } catch (err) {
     console.error("getFollowupPreview error:", err);
     return res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET SINGLE CAMPAIGN
@@ -1260,7 +1642,9 @@ export const getSingleCampaign = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
-      return res.status(400).json({ success: false, message: "Invalid campaign id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
     }
 
     const { status, page = "1", pageSize = "200", search } = req.query;
@@ -1269,42 +1653,47 @@ export const getSingleCampaign = async (req, res) => {
 
     // Ownership check — previously any authenticated user could read any campaign.
     const campaign = await prisma.campaign.findFirst({
-      where:  { id, userId: req.user.id },
+      where: { id, userId: req.user.id },
       select: {
-        id: true, name: true, status: true, sendType: true, subject: true,
-        createdAt: true, scheduledAt: true, estimatedCompletion: true,
-        fromAccountIds: true, parentCampaignId: true,
+        id: true,
+        name: true,
+        status: true,
+        sendType: true,
+        subject: true,
+        createdAt: true,
+        scheduledAt: true,
+        estimatedCompletion: true,
+        fromAccountIds: true,
+        parentCampaignId: true,
         // Single campaign only — safe to include the template here. It is
         // deliberately NOT selected in the list endpoints, where it would be
         // multiplied by every campaign on the page.
-        bodyHtml: true, originalBodyHtml: true, senderRole: true,
+        bodyHtml: true,
+        originalBodyHtml: true,
+        senderRole: true,
       },
     });
     if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
     }
 
-    /* ⚡ Stats from a grouped count: 4 rows instead of every recipient. */
-    const grouped = await prisma.campaignRecipient.groupBy({
-      by:     ["status"],
-      where:  { campaignId: id },
-      _count: { _all: true },
-    });
-
-    const raw = { sent: 0, pending: 0, processing: 0, failed: 0 };
-    for (const g of grouped) {
-      if (raw[g.status] !== undefined) raw[g.status] += g._count._all;
-    }
+    /* ⚡ Stats + engagement from one grouped query. */
+    const k = (await getRecipientCounts([id]))[id] || EMPTY_COUNTS;
 
     const stats = {
-      total:      grouped.reduce((s, g) => s + g._count._all, 0),
-      // `processing` now includes in-flight rows, matching the modal's own
-      // copy filter (pending || processing). Previously only `pending` was
-      // counted here, so total !== processing + completed + failed whenever
-      // rows were mid-send.
-      processing: raw.pending + raw.processing,
-      completed:  raw.sent,
-      failed:     raw.failed,
+      total: k.total,
+      // `processing` includes in-flight rows, matching the modal's own
+      // copy filter (pending || processing).
+      processing: k.pending + k.processing,
+      completed: k.sent,
+      failed: k.failed,
+      skipped: k.skipped,
+      replied: k.replied,
+      bounced: k.bounced,
+      unsubscribed: k.unsubscribed,
+      replyRate: k.sent ? Math.round((k.replied / k.sent) * 1000) / 10 : 0,
     };
 
     /* ⚡ Recipients: paginated, and sentBodyHtml is NOT selected. That field
@@ -1312,10 +1701,21 @@ export const getSingleCampaign = async (req, res) => {
        old multi-megabyte response. Fetch one on demand via
        GET /:id/recipients/:recipientId/body                              */
     const statusFilter =
-      status === "completed"  ? { status: "sent" }
-    : status === "processing" ? { status: { in: ["pending", "processing"] } }
-    : status === "failed"     ? { status: "failed" }
-    : {};
+      status === "completed"
+        ? { status: "sent" }
+        : status === "processing"
+          ? { status: { in: ["pending", "processing"] } }
+          : status === "failed"
+            ? { status: "failed" }
+            : status === "skipped"
+              ? { status: "skipped" }
+              : status === "replied"
+                ? { repliedAt: { not: null } }
+                : status === "bounced"
+                  ? { bouncedAt: { not: null } }
+                  : status === "unsubscribed"
+                    ? { unsubscribedAt: { not: null } }
+                    : {};
 
     const recipients = await prisma.campaignRecipient.findMany({
       where: {
@@ -1327,9 +1727,19 @@ export const getSingleCampaign = async (req, res) => {
       take,
       skip,
       select: {
-        id: true, email: true, status: true, accountId: true,
-        sentAt: true, sentSubject: true, sentFromEmail: true,
-        sendingIp: true, error: true,
+        id: true,
+        email: true,
+        status: true,
+        accountId: true,
+        sentAt: true,
+        sentSubject: true,
+        sentFromEmail: true,
+        sendingIp: true,
+        error: true,
+        repliedAt: true,
+        bouncedAt: true,
+        bounceType: true,
+        unsubscribedAt: true,
       },
     });
 
@@ -1341,13 +1751,11 @@ export const getSingleCampaign = async (req, res) => {
         pagination: { page: Number(page), pageSize: take },
       },
     });
-
   } catch (err) {
     console.error("Get single campaign error:", err);
     res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET SINGLE RECIPIENT BODY  (NEW)
@@ -1361,7 +1769,7 @@ export const getSingleCampaign = async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 export const getRecipientBody = async (req, res) => {
   try {
-    const campaignId  = Number(req.params.id);
+    const campaignId = Number(req.params.id);
     const recipientId = Number(req.params.recipientId);
 
     if (!Number.isInteger(campaignId) || !Number.isInteger(recipientId)) {
@@ -1370,25 +1778,27 @@ export const getRecipientBody = async (req, res) => {
 
     const row = await prisma.campaignRecipient.findFirst({
       where: {
-        id:         recipientId,
+        id: recipientId,
         campaignId,
-        campaign:   { userId: req.user.id },
+        campaign: { userId: req.user.id },
       },
       select: {
-        id: true, email: true, sentSubject: true,
-        sentFromEmail: true, sentBodyHtml: true, sentAt: true,
+        id: true,
+        email: true,
+        sentSubject: true,
+        sentFromEmail: true,
+        sentBodyHtml: true,
+        sentAt: true,
       },
     });
 
     if (!row) return res.status(404).json({ success: false });
     return res.json({ success: true, data: row });
-
   } catch (err) {
     console.error("getRecipientBody error:", err);
     return res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET ALL RECIPIENT ADDRESSES  (NEW)
@@ -1410,36 +1820,66 @@ export const getCampaignRecipientEmails = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
-      return res.status(400).json({ success: false, message: "Invalid campaign id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
     }
 
     const owns = await prisma.campaign.findFirst({
-      where:  { id, userId: req.user.id },
+      where: { id, userId: req.user.id },
       select: { id: true },
     });
-    if (!owns) return res.status(404).json({ success: false, message: "Campaign not found" });
+    if (!owns)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
 
-    const { status } = req.query;
+    const { status, forFollowup } = req.query;
     const statusFilter =
-      status === "sent" || status === "completed" ? { status: "sent" }
-    : status === "processing" ? { status: { in: ["pending", "processing"] } }
-    : status === "failed"     ? { status: "failed" }
-    : {};
+      status === "sent" || status === "completed"
+        ? { status: "sent" }
+        : status === "processing"
+          ? { status: { in: ["pending", "processing"] } }
+          : status === "failed"
+            ? { status: "failed" }
+            : status === "skipped"
+              ? { status: "skipped" }
+              : {};
+
+    // ?forFollowup=1 → only people a follow-up may still go to.
+    const followupFilter =
+      forFollowup === "1" || forFollowup === "true"
+        ? {
+            repliedAt: null,
+            unsubscribedAt: null,
+            // Explicit null branch: `bounceType <> 'hard'` is NULL (not true)
+            // for rows that never bounced.
+            OR: [{ bounceType: null }, { bounceType: { not: "hard" } }],
+          }
+        : {};
 
     const recipients = await prisma.campaignRecipient.findMany({
-      where:   { campaignId: id, ...statusFilter },
+      where: { campaignId: id, ...statusFilter, ...followupFilter },
       orderBy: { id: "asc" },
-      select:  { id: true, email: true, accountId: true, status: true, sentFromEmail: true },
+      select: {
+        id: true,
+        email: true,
+        accountId: true,
+        status: true,
+        sentFromEmail: true,
+      },
     });
 
-    return res.json({ success: true, data: recipients, count: recipients.length });
-
+    return res.json({
+      success: true,
+      data: recipients,
+      count: recipients.length,
+    });
   } catch (err) {
     console.error("getCampaignRecipientEmails error:", err);
     return res.status(500).json({ success: false });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    STOP CAMPAIGN
@@ -1448,13 +1888,21 @@ export const stopCampaign = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
 
-    if (!campaignId) return res.status(400).json({ success: false, message: "Invalid campaign id" });
+    if (!campaignId)
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
 
-    const campaign = await prisma.campaign.findFirst({
-      where: { id: campaignId, userId: req.user.id },
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
     });
 
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
 
     if (campaign.status !== "sending") {
       return res.status(400).json({
@@ -1463,17 +1911,24 @@ export const stopCampaign = async (req, res) => {
       });
     }
 
-    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "stopped" } });
-    invalidateDashboardCache(req.user.id);
+    // Conditional: only a campaign that is still sending can be stopped.
+    await prisma.campaign.updateMany({
+      where: { id: campaignId, status: "sending" },
+      data: { status: "stopped" },
+    });
+    invalidateDashboardCache(campaign.userId);
 
-    return res.json({ success: true, message: "Campaign stopped successfully" });
-
+    return res.json({
+      success: true,
+      message: "Campaign stopped successfully",
+    });
   } catch (err) {
     console.error("Stop campaign error:", err);
-    return res.status(500).json({ success: false, message: "Failed to stop campaign" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to stop campaign" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    RESEND (RESUME) CAMPAIGN
@@ -1493,12 +1948,21 @@ export const stopCampaign = async (req, res) => {
 export const resendCampaign = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
-    if (!campaignId) return res.status(400).json({ success: false, message: "Invalid campaign id" });
+    if (!campaignId)
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid campaign id" });
 
-    const campaign = await prisma.campaign.findFirst({
-      where: { id: campaignId, userId: req.user.id },
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+      fromAccountIds: true,
     });
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
 
     if (campaign.status !== "stopped") {
       return res.status(400).json({
@@ -1513,27 +1977,32 @@ export const resendCampaign = async (req, res) => {
 
     // Nothing left to send? Don't spin up a worker for zero recipients —
     // just tell the user so instead of silently no-op-ing.
+    // Rows left in "processing" by the stop are pending work too.
+    await prisma.campaignRecipient.updateMany({
+      where: { campaignId, status: "processing" },
+      data: { status: "pending", updatedAt: new Date() },
+    });
     const remaining = await prisma.campaignRecipient.count({
       where: { campaignId, status: "pending" },
     });
     if (remaining === 0) {
       return res.status(400).json({
         success: false,
-        message: "No pending recipients left — every recipient has already been sent to (or failed permanently).",
+        message:
+          "No pending recipients left — every recipient has already been sent to (or failed permanently).",
       });
     }
 
     // Account lock check — same guard as sendCampaignNow, so a resumed
     // campaign can't grab a sending account another active campaign is using.
-    const activeCampaigns = await prisma.campaign.findMany({
-      where: { status: "sending", NOT: { id: campaignId } },
-    });
-    const locked = new Set();
-    for (const c of activeCampaigns) {
-      try { JSON.parse(c.fromAccountIds || "[]").forEach(id => locked.add(Number(id))); } catch {}
+    const locked = await getBusyAccountIds({ excludeCampaignId: campaignId });
+    let fromIds = [];
+    try {
+      fromIds = JSON.parse(campaign.fromAccountIds || "[]");
+    } catch {
+      /* malformed */
     }
-    const fromIds = JSON.parse(campaign.fromAccountIds || "[]");
-    if (fromIds.find(id => locked.has(Number(id)))) {
+    if (fromIds.find((id) => locked.has(Number(id)))) {
       return res.status(400).json({
         success: false,
         message: "Email account is already used in another active campaign.",
@@ -1542,25 +2011,21 @@ export const resendCampaign = async (req, res) => {
 
     await prisma.campaign.update({
       where: { id: campaignId },
-      data:  { status: "sending", error: null },
+      data: { status: "sending", error: null },
     });
     invalidateDashboardCache(campaign.userId);
-
-    sendBulkCampaign(campaignId).catch(err => {
-      console.error(`Error resending campaign ${campaignId}:`, err);
-    });
 
     return res.json({
       success: true,
       message: `Campaign resumed — ${remaining} recipient(s) remaining`,
     });
-
   } catch (err) {
     console.error("Resend campaign error:", err);
-    return res.status(500).json({ success: false, message: "Failed to resend campaign" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to resend campaign" });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    UPDATE FOLLOWUP RECIPIENTS
@@ -1570,13 +2035,25 @@ export const updateFollowupRecipients = async (req, res) => {
     const { campaignId, deletedRecipientIds } = req.body;
 
     if (!campaignId || !Array.isArray(deletedRecipientIds)) {
-      return res.status(400).json({ success: false, message: "Invalid payload: campaignId and deletedRecipientIds array required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            "Invalid payload: campaignId and deletedRecipientIds array required",
+        });
     }
 
     const campaign = await prisma.campaign.findFirst({
       where: { id: Number(campaignId), userId: req.user.id },
     });
-    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found or access denied" });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Campaign not found or access denied",
+        });
 
     if (deletedRecipientIds.length === 0) {
       return res.json({ success: true, message: "No changes to save" });
@@ -1597,54 +2074,84 @@ export const updateFollowupRecipients = async (req, res) => {
       },
     });
 
-    return res.json({ success: true, message: `Removed ${result.count} recipient(s)` });
-
+    invalidateDashboardCache(req.user.id);
+    return res.json({
+      success: true,
+      message: `Removed ${result.count} recipient(s)`,
+    });
   } catch (err) {
     console.error("Update followup recipients error:", err);
-    return res.status(500).json({ success: false, message: err.message || "Failed to update recipients" });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: err.message || "Failed to update recipients",
+      });
   }
 };
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    FOLLOWUP CLEANUP JOB
 ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * Keeps at most 3 completed follow-ups per parent: when a parent has 4 or
+ * more completed follow-ups older than a day, those are deleted.
+ * Called by worker.js on a timer (single-flight, circuit-breaker aware).
+ */
+export async function runFollowupCleanup() {
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const oldFollowups = await prisma.campaign.findMany({
+    where: {
+      sendType: "followup",
+      status: "completed",
+      parentCampaignId: { not: null },
+      createdAt: { lte: oneDayAgo },
+      // Automated sequence steps are kept: they are that sequence's history.
+      sequenceId: null,
+    },
+    select: { id: true, parentCampaignId: true, userId: true },
+  });
+
+  const countPerParent = {};
+  for (const f of oldFollowups) {
+    countPerParent[f.parentCampaignId] =
+      (countPerParent[f.parentCampaignId] || 0) + 1;
+  }
+
+  const toDelete = oldFollowups.filter(
+    (f) => countPerParent[f.parentCampaignId] >= 4,
+  );
+
+  for (const campaign of toDelete) {
+    // Recipients cascade from Campaign; one statement per campaign.
+    await prisma.campaign
+      .delete({ where: { id: campaign.id } })
+      .catch((err) => {
+        if (err.code !== "P2025") throw err; // already gone
+      });
+    invalidateDashboardCache(campaign.userId);
+  }
+
+  if (toDelete.length) {
+    console.log(
+      `🗑️ Follow-up cleanup: deleted ${toDelete.length} old follow-up campaign(s)`,
+    );
+  }
+}
+
+/**
+ * @deprecated worker.js schedules runFollowupCleanup itself. Kept so older
+ * imports keep working.
+ */
 export const startFollowupCleanupJob = () => {
-  const ONE_HOUR = 60 * 60 * 1000;
-  const ONE_DAY  = 24 * ONE_HOUR;
-
-  setInterval(async () => {
-    try {
-      const oneDayAgo = new Date(Date.now() - ONE_DAY);
-
-      const allFollowups = await prisma.campaign.findMany({
-        where: {
-          sendType:         "followup",
-          status:           "completed",
-          parentCampaignId: { not: null },
-          createdAt:        { lte: oneDayAgo },
-        },
-        select: { id: true, parentCampaignId: true, userId: true },
-      });
-
-      const countPerParent = {};
-      allFollowups.forEach(f => {
-        countPerParent[f.parentCampaignId] = (countPerParent[f.parentCampaignId] || 0) + 1;
-      });
-
-      const toDelete = allFollowups.filter(f => countPerParent[f.parentCampaignId] >= 4);
-
-      for (const campaign of toDelete) {
-        await prisma.campaignRecipient.deleteMany({ where: { campaignId: campaign.id } });
-        await prisma.campaign.delete({ where: { id: campaign.id } });
-        invalidateDashboardCache(campaign.userId);
-        console.log(`🗑️ Auto-deleted old followup campaign ${campaign.id}`);
-      }
-
-    } catch (err) {
-      console.error("Followup cleanup job error:", err);
-    }
-  }, ONE_HOUR);
-
-  console.log("✅ Follow-up cleanup job started");
+  const timer = setInterval(
+    () => {
+      runFollowupCleanup().catch((err) =>
+        console.error("Followup cleanup job error:", err.message),
+      );
+    },
+    60 * 60 * 1000,
+  );
+  timer.unref?.();
 };
