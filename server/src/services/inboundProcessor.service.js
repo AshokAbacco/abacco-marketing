@@ -473,13 +473,10 @@ export async function resumeExpiredPauses() {
 }
 
 async function evaluateAccountHealth(account) {
-  const { sent24, bad24, rate } = await getAccountHealth(Number(account.id));
-  if (bad24 >= PAUSE_MIN_BAD && rate >= PAUSE_RATE) {
-    await pauseAccount(
-      Number(account.id),
-      `High bounce rate: ${bad24} failed of ${sent24} sent in 24h (${(rate * 100).toFixed(1)}%)`,
-    );
-  }
+  // Automatic high-bounce-rate account pausing is disabled.
+  // Bounce detection, recording, suppression, and recipient marking
+  // continue to work normally.
+  return;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
