@@ -1,7 +1,11 @@
-// TopNavbar.jsx - Converted from Sidebar to Top Navigation Bar
+// TopNavbar.jsx - Top Navigation Bar
+// FIX: Inbox group dropdown + user dropdown are now rendered through a React
+// portal into document.body (position: fixed, very high z-index), so they can
+// never be hidden behind page content, sticky headers, blurred cards, etc.
 import React from "react";
+import { createPortal } from "react-dom";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
   Mail,
@@ -23,6 +27,9 @@ import { api } from "../../pages/utils/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
+const INBOX_MENU_WIDTH = 208; // w-52
+const USER_MENU_WIDTH = 224; // w-56
+
 const navigationItems = [
   { name: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
   // "Inbox" is handled separately with a group dropdown
@@ -42,7 +49,18 @@ export default function TopNavbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showInboxDropdown, setShowInboxDropdown] = useState(false);
   const [accountGroups, setAccountGroups] = useState([]);
-  const inboxDropdownRef = useRef(null);
+
+  // Fixed-position coordinates for the portal menus
+  const [inboxPos, setInboxPos] = useState({ top: 0, left: 0 });
+  const [userPos, setUserPos] = useState({ top: 0, right: 0 });
+
+  // Trigger buttons + portal menus (menus live outside the header DOM tree,
+  // so the outside-click handler must know about both)
+  const inboxButtonRef = useRef(null);
+  const inboxMenuRef = useRef(null);
+  const userButtonRef = useRef(null);
+  const userMenuRef = useRef(null);
+
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -58,6 +76,28 @@ export default function TopNavbar() {
       console.error("Failed to fetch groups for navbar:", err);
     }
   };
+
+  // Calculate where the menus should appear (right under their buttons)
+  const updateInboxPos = useCallback(() => {
+    const btn = inboxButtonRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const maxLeft = window.innerWidth - INBOX_MENU_WIDTH - 8;
+    setInboxPos({
+      top: rect.bottom + 8,
+      left: Math.max(8, Math.min(rect.left, maxLeft)),
+    });
+  }, []);
+
+  const updateUserPos = useCallback(() => {
+    const btn = userButtonRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    setUserPos({
+      top: rect.bottom + 8,
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  }, []);
 
   // Fetch user data from localStorage on mount
   useEffect(() => {
@@ -78,22 +118,50 @@ export default function TopNavbar() {
     if (isInboxActive) fetchGroups();
   }, [location.pathname]);
 
-  // Close dropdowns when clicking outside
+  // Close dropdowns when clicking outside (portal-aware)
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (!e.target.closest("#user-menu-container")) {
+      const t = e.target;
+
+      const insideUser =
+        userButtonRef.current?.contains(t) || userMenuRef.current?.contains(t);
+      if (!insideUser) setShowUserMenu(false);
+
+      const insideInbox =
+        inboxButtonRef.current?.contains(t) || inboxMenuRef.current?.contains(t);
+      if (!insideInbox) setShowInboxDropdown(false);
+    };
+
+    const handleEscape = (e) => {
+      if (e.key === "Escape") {
         setShowUserMenu(false);
-      }
-      if (
-        inboxDropdownRef.current &&
-        !inboxDropdownRef.current.contains(e.target)
-      ) {
         setShowInboxDropdown(false);
       }
     };
+
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, []);
+
+  // Keep menus attached to their buttons if the window is resized
+  useEffect(() => {
+    const handleResize = () => {
+      if (showInboxDropdown) updateInboxPos();
+      if (showUserMenu) updateUserPos();
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [showInboxDropdown, showUserMenu, updateInboxPos, updateUserPos]);
+
+  // Close menus on route change
+  useEffect(() => {
+    setShowInboxDropdown(false);
+    setShowUserMenu(false);
+  }, [location.pathname, location.search]);
 
   // Get user's initials for avatar
   const getInitials = (name) => {
@@ -127,6 +195,23 @@ export default function TopNavbar() {
     navigate("/");
   };
 
+  const toggleInboxDropdown = () => {
+    if (!showInboxDropdown) {
+      updateInboxPos();
+      fetchGroups();
+      setShowUserMenu(false);
+    }
+    setShowInboxDropdown((prev) => !prev);
+  };
+
+  const toggleUserMenu = () => {
+    if (!showUserMenu) {
+      updateUserPos();
+      setShowInboxDropdown(false);
+    }
+    setShowUserMenu((prev) => !prev);
+  };
+
   const filteredNavItems = navigationItems.filter((item) => {
     if (item.name === "Admin") return isAdmin();
     if (item.name === "Daily Overview") return isHROrAdmin();
@@ -138,7 +223,7 @@ export default function TopNavbar() {
     <>
       {/* Logout Confirmation Modal */}
       {showLogoutModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-6 transform transition-all">
             {/* Modal Header */}
             <div className="flex items-center gap-3 mb-4">
@@ -180,8 +265,8 @@ export default function TopNavbar() {
         </div>
       )}
 
-      {/* Top Navbar */}
-      <header className="fixed top-0 left-0 right-0 z-50 h-16 bg-blue-50 border-b border-sky-200 shadow-sm">
+      {/* Top Navbar — z-index raised so it always stays above page content */}
+      <header className="fixed top-0 left-0 right-0 z-[1000] h-16 bg-blue-50 border-b border-sky-200 shadow-sm">
         <div className="flex items-center h-full px-4 gap-4">
           {/* Brand */}
           <div className="flex items-center gap-2.5 shrink-0 mr-4">
@@ -224,14 +309,12 @@ export default function TopNavbar() {
                   )}
                 </NavLink>
 
-                {/* Inbox dropdown inserted right after Dashboard */}
+                {/* Inbox dropdown trigger inserted right after Dashboard */}
                 {item.name === "Dashboard" && (
-                  <div className="relative" ref={inboxDropdownRef}>
+                  <div className="relative">
                     <button
-                      onClick={() => {
-                        setShowInboxDropdown((prev) => !prev);
-                        if (!showInboxDropdown) fetchGroups();
-                      }}
+                      ref={inboxButtonRef}
+                      onClick={toggleInboxDropdown}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap
                   ${
                     isInboxActive
@@ -246,57 +329,6 @@ export default function TopNavbar() {
                         className={`transition-transform duration-200 ${showInboxDropdown ? "rotate-180" : ""}`}
                       />
                     </button>
-
-                    {showInboxDropdown && (
-                      <div className="absolute left-0 top-full mt-2 w-52 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden z-50">
-                        <div className="px-3 py-2 border-b border-sky-100 dark:border-sky-900/50">
-                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                            Select Group
-                          </p>
-                        </div>
-
-                        {accountGroups.length > 0 && (
-                          <div>
-                            {accountGroups.map((group) => (
-                              <button
-                                key={group.id}
-                                onClick={() => {
-                                  navigate(`/inbox?groupId=${group.id}`);
-                                  setShowInboxDropdown(false);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
-                              >
-                                <div
-                                  className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
-                                  style={{
-                                    backgroundColor: group.color || "#10b981",
-                                  }}
-                                >
-                                  <Folder className="w-3.5 h-3.5 text-white" />
-                                </div>
-                                <span className="truncate">{group.name}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* All Accounts — always last */}
-                        <div className="border-t border-slate-100 dark:border-slate-700">
-                          <button
-                            onClick={() => {
-                              navigate("/inbox");
-                              setShowInboxDropdown(false);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
-                          >
-                            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center flex-shrink-0">
-                              <Mail className="w-3.5 h-3.5 text-white" />
-                            </div>
-                            <span>All Accounts</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
               </React.Fragment>
@@ -306,10 +338,11 @@ export default function TopNavbar() {
           {/* Notifications */}
           <NotificationBell />
 
-          {/* User Menu */}
-          <div className="relative shrink-0" id="user-menu-container">
+          {/* User Menu trigger */}
+          <div className="relative shrink-0">
             <button
-              onClick={() => setShowUserMenu((prev) => !prev)}
+              ref={userButtonRef}
+              onClick={toggleUserMenu}
               className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-all duration-200"
             >
               <div className="h-8 w-8 rounded-full bg-gradient-to-br from-sky-400 to-blue-500 flex items-center justify-center shadow-md shrink-0">
@@ -330,36 +363,6 @@ export default function TopNavbar() {
                 className={`text-slate-400 transition-transform duration-200 hidden sm:block ${showUserMenu ? "rotate-180" : ""}`}
               />
             </button>
-
-            {/* Dropdown */}
-            {showUserMenu && (
-              <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden z-50">
-                {/* User Info */}
-                <div className="px-4 py-3 border-b border-sky-100 dark:border-sky-900/50">
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                    {userData?.name || "User"}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                    {userData?.email || "user@abacco.com"}
-                  </p>
-                  <span className="inline-block mt-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-400">
-                    {userData?.jobRole || "Role"}
-                  </span>
-                </div>
-
-                {/* Logout */}
-                <button
-                  onClick={() => {
-                    setShowUserMenu(false);
-                    setShowLogoutModal(true);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                >
-                  <LogOut size={16} strokeWidth={2} />
-                  Logout
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Mobile hamburger */}
@@ -377,7 +380,7 @@ export default function TopNavbar() {
 
         {/* Mobile Nav Dropdown */}
         {mobileMenuOpen && (
-          <div className="lg:hidden border-t border-sky-100 dark:border-sky-900/50 bg-white dark:bg-slate-900 px-4 py-3 space-y-1 shadow-lg">
+          <div className="lg:hidden border-t border-sky-100 dark:border-sky-900/50 bg-white dark:bg-slate-900 px-4 py-3 space-y-1 shadow-lg max-h-[calc(100vh-4rem)] overflow-y-auto">
             {filteredNavItems.map((item) => (
               <React.Fragment key={item.name}>
                 <NavLink
@@ -439,6 +442,112 @@ export default function TopNavbar() {
           </div>
         )}
       </header>
+
+      {/* ───────── Portal dropdowns: rendered on <body>, above everything ───────── */}
+
+      {/* Inbox group dropdown */}
+      {showInboxDropdown &&
+        createPortal(
+          <div
+            ref={inboxMenuRef}
+            style={{
+              position: "fixed",
+              top: inboxPos.top,
+              left: inboxPos.left,
+              width: INBOX_MENU_WIDTH,
+              zIndex: 9999,
+            }}
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden"
+          >
+            <div className="px-3 py-2 border-b border-sky-100 dark:border-sky-900/50">
+              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                Select Group
+              </p>
+            </div>
+
+            {accountGroups.length > 0 && (
+              <div className="max-h-72 overflow-y-auto">
+                {accountGroups.map((group) => (
+                  <button
+                    key={group.id}
+                    onClick={() => {
+                      navigate(`/inbox?groupId=${group.id}`);
+                      setShowInboxDropdown(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
+                  >
+                    <div
+                      className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                      style={{ backgroundColor: group.color || "#10b981" }}
+                    >
+                      <Folder className="w-3.5 h-3.5 text-white" />
+                    </div>
+                    <span className="truncate">{group.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* All Accounts — always last */}
+            <div className="border-t border-slate-100 dark:border-slate-700">
+              <button
+                onClick={() => {
+                  navigate("/inbox");
+                  setShowInboxDropdown(false);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"
+              >
+                <div className="w-6 h-6 rounded-md bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                  <Mail className="w-3.5 h-3.5 text-white" />
+                </div>
+                <span>All Accounts</span>
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* User dropdown */}
+      {showUserMenu &&
+        createPortal(
+          <div
+            ref={userMenuRef}
+            style={{
+              position: "fixed",
+              top: userPos.top,
+              right: userPos.right,
+              width: USER_MENU_WIDTH,
+              zIndex: 9999,
+            }}
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-sky-100 dark:border-sky-900/50 overflow-hidden"
+          >
+            {/* User Info */}
+            <div className="px-4 py-3 border-b border-sky-100 dark:border-sky-900/50">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                {userData?.name || "User"}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                {userData?.email || "user@abacco.com"}
+              </p>
+              <span className="inline-block mt-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-400">
+                {userData?.jobRole || "Role"}
+              </span>
+            </div>
+
+            {/* Logout */}
+            <button
+              onClick={() => {
+                setShowUserMenu(false);
+                setShowLogoutModal(true);
+              }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+            >
+              <LogOut size={16} strokeWidth={2} />
+              Logout
+            </button>
+          </div>,
+          document.body
+        )}
     </>
   );
 }
