@@ -98,7 +98,19 @@ function noteSuccess() {
   pausedUntil = 0;
 }
 
+// "Timed out fetching a new connection" means the pool was BUSY, not that
+// the database is down. Pausing every background job for it (as before)
+// also stopped the IMAP reply sync, so replies/notifications stopped
+// arriving. Now the job just tries again on its next tick.
+const isPoolBusy = (err) =>
+  err?.code === "P2024" ||
+  String(err?.message || "").includes("Timed out fetching a new connection");
+
 function noteFailure(label, err) {
+  if (isPoolBusy(err)) {
+    console.warn(`⏳ ${label}: database pool busy — will retry next tick`);
+    return;
+  }
   if (!isDbUnavailableError(err)) {
     console.error(`❌ ${label}:`, err?.message || err);
     captureError(err, { tags: { job: label } });

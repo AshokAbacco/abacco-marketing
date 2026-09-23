@@ -31,7 +31,8 @@ import { PrismaClient } from "@prisma/client";
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const ROLE = (process.env.PROCESS_ROLE || "api").toLowerCase();
-const DEFAULT_POOL = ROLE === "worker" ? 6 : 8;
+// Worker: sending + IMAP reply sync + scheduler share this pool.
+const DEFAULT_POOL = ROLE === "worker" ? 10 : 8;
 
 const POOL_SIZE = positiveInt(process.env.PRISMA_POOL_SIZE, DEFAULT_POOL);
 const POOL_TIMEOUT = positiveInt(process.env.PRISMA_POOL_TIMEOUT, 15); // seconds

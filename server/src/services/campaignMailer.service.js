@@ -674,10 +674,14 @@ const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
    Tune with ACCOUNT_CONCURRENCY. Each slot uses at most one DB connection
    at a time, so keep it ≤ PRISMA_POOL_SIZE - 2.
 ═══════════════════════════════════════════════════════════════════════════ */
-// How many mailboxes may be inside a DB/SMTP step at the same time. Was 4,
-// which made every other mailbox queue ("waiting for next free slot").
-// Slots are held only for the few seconds of one send, never while waiting.
-const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 50;
+// How many mailboxes may be inside a DB/SMTP step at the same time.
+// 4 was too few (mailboxes queued); 50 was too many for the worker's small
+// DB pool — sends grabbed every connection, the IMAP reply sync timed out
+// waiting for one, and the worker paused ALL background jobs (so replies
+// and their notifications stopped arriving). 12 keeps every mailbox moving
+// (~6 emails/second, far above the 5 000/day limit) and leaves connections
+// free for reply sync.
+const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 12;
 const globalAccountLimit = pLimit(ACCOUNT_CONCURRENCY);
 if (process.env.PROCESS_ROLE === "worker") {
   console.log(`🎛️  Global send concurrency cap: ${ACCOUNT_CONCURRENCY}`);
