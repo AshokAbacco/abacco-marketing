@@ -18,26 +18,26 @@ WHERE "sendingPausedAt" IS NOT NULL
        OR "sendingPausedReason" LIKE 'Provider sending limit%'
        OR "sendingPausedReason" LIKE 'Login failed%');
 
--- 3. Campaigns stuck in "stopped" (old Pause button) or "paused" that still
---    have recipients to send → back to "sending". Already-sent recipients
---    are never selected again, so nobody is emailed twice.
+-- 3. Campaigns stuck in "paused" (set by the old automatic startup code, never
+--    by a user) that still have recipients → back to "sending". Campaigns a
+--    USER paused ("stopped") are left alone — they resume with Resend.
 UPDATE "CampaignRecipient" r
 SET "status" = 'pending', "updatedAt" = NOW()
 FROM "Campaign" c
 WHERE r."campaignId" = c."id"
-  AND c."status" IN ('stopped', 'paused')
+  AND c."status" = 'paused'
   AND r."status" = 'processing';
 
 UPDATE "Campaign" c
 SET "status" = 'sending', "error" = NULL
-WHERE c."status" IN ('stopped', 'paused')
+WHERE c."status" = 'paused'
   AND EXISTS (SELECT 1 FROM "CampaignRecipient" r
               WHERE r."campaignId" = c."id" AND r."status" = 'pending');
 
 -- 4. Nothing left to send → completed.
 UPDATE "Campaign" c
 SET "status" = 'completed'
-WHERE c."status" IN ('stopped', 'paused')
+WHERE c."status" = 'paused'
   AND NOT EXISTS (SELECT 1 FROM "CampaignRecipient" r
                   WHERE r."campaignId" = c."id" AND r."status" IN ('pending', 'processing'));
 

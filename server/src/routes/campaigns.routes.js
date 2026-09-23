@@ -14,7 +14,9 @@ import {
   getFollowupPreview,
   getSingleCampaign,
   getCampaignStatusDetails,
+  stopCampaign,
   resendCampaign,
+  cancelPendingRecipients,
   updateFollowupRecipients,
   sendFollowupCampaign,
   getDailyLimitStatus,
@@ -65,8 +67,11 @@ router.get("/:id/recipients/:recipientId/body", protect, getRecipientBody);
 router.post("/:id/send", protect, sendCampaignNow);
 router.post("/:id/schedule", protect, scheduleCampaign);
 router.delete("/:id", protect, deleteCampaign);
-// No Pause/Stop: campaigns never need a manual resume any more.
+// Pause (user only — the system itself never pauses a campaign).
+router.post("/:id/stop", protect, stopCampaign);
 router.post("/:id/resend", protect, resendCampaign);
+// Cancel unsent emails (all, or one mailbox's) — sent emails are kept.
+router.post("/:id/cancel-pending", protect, cancelPendingRecipients);
 
 // Update followup recipients
 router.post("/followup/update-recipients", protect, updateFollowupRecipients);

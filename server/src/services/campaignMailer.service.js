@@ -87,31 +87,75 @@ function setAccountState(accountId, status, durationMs, reason) {
     );
 }
 
-/* ── Shared per-mailbox pacing ────────────────────────────────────────────
-   The hourly limit belongs to the MAILBOX, not to one campaign. Every
-   campaign that uses a mailbox reserves its next send slot here, so two
-   campaigns sharing a mailbox split its hourly limit instead of doubling
-   it. This is what makes it safe to select ALL mailboxes in every
-   campaign (the old "account is busy in another campaign" lock is gone). */
-const mailboxNextSlot = new Map(); // accountId → epoch ms of next free slot
+/* ── Per-mailbox hourly window (shared by every campaign) ─────────────────
+   Each mailbox may send `limit` emails in any rolling 60 minutes (Gmail 40,
+   GSuite 150, Rediff 30, Yahoo 10 …). Sending starts IMMEDIATELY on every
+   mailbox in parallel — no spreading over the hour. When a mailbox has used
+   its limit it waits only until its oldest send in the window is 1 hour old,
+   then continues. Campaigns sharing a mailbox share its hourly limit.
 
-async function waitForMailboxSlot(accountId, delayMs, isStillWanted) {
+   MAILBOX_MIN_GAP_SEC (default 3 s) is a small gap between two emails from
+   the SAME mailbox so a provider doesn't see a machine-gun burst.         */
+const HOUR_MS = 60 * 60_000;
+const MIN_GAP_MS =
+  Math.max(0, Number(process.env.MAILBOX_MIN_GAP_SEC ?? 3)) * 1000;
+const mailboxWindow = new Map(); // accountId → { times: number[], seeded: bool }
+
+async function getWindow(accountId) {
+  let w = mailboxWindow.get(accountId);
+  if (!w) {
+    w = { times: [], seeded: false };
+    mailboxWindow.set(accountId, w);
+  }
+  if (!w.seeded) {
+    // After a worker restart, count what this mailbox already sent in the
+    // last hour so the hourly limit is still respected.
+    w.seeded = true;
+    try {
+      const rows = await prisma.campaignRecipient.findMany({
+        where: {
+          accountId,
+          status: "sent",
+          sentAt: { gte: new Date(Date.now() - HOUR_MS) },
+        },
+        select: { sentAt: true },
+        orderBy: { sentAt: "asc" },
+        take: 1000,
+      });
+      const seeded = rows.map((r) => r.sentAt.getTime());
+      w.times = [...seeded, ...w.times].sort((x, y) => x - y);
+    } catch {
+      w.seeded = false; // try again next time
+    }
+  }
+  return w;
+}
+
+/** Wait until this mailbox may send one more email, then reserve it. */
+async function waitForMailboxSlot(accountId, limit, isStillWanted) {
+  const w = await getWindow(accountId);
   for (;;) {
     const now = Date.now();
-    const next = mailboxNextSlot.get(accountId) || 0;
-    if (next <= now) {
-      mailboxNextSlot.set(accountId, now + delayMs); // reserve (sync = atomic)
-      return true;
+    while (w.times.length && w.times[0] <= now - HOUR_MS) w.times.shift();
+    const last = w.times[w.times.length - 1] || 0;
+    let waitMs = 0;
+    if (w.times.length >= limit)
+      waitMs = w.times[0] + HOUR_MS - now; // hour used up
+    else if (now - last < MIN_GAP_MS) waitMs = last + MIN_GAP_MS - now;
+    if (waitMs <= 0) {
+      w.times.push(now); // reserve (synchronous → no double booking)
+      return now; // slot id
     }
-    await sleep(Math.min(next - now, 60_000));
+    await sleep(Math.min(waitMs, 30_000));
     if (isStillWanted && !(await isStillWanted())) return false;
   }
 }
 
-function extendMailboxSlot(accountId, extraMs) {
-  if (extraMs <= 0) return;
-  const cur = mailboxNextSlot.get(accountId) || Date.now();
-  mailboxNextSlot.set(accountId, cur + extraMs);
+/** Give a reserved slot back (nothing was sent with it). */
+function releaseMailboxSlot(accountId, slot) {
+  const w = mailboxWindow.get(accountId);
+  const i = w ? w.times.lastIndexOf(slot) : -1;
+  if (i >= 0) w.times.splice(i, 1);
 }
 
 // Long waits are chopped into chunks so a deleted campaign / raised cap /
@@ -482,15 +526,37 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Default emails per hour per mailbox (overridable per campaign/mailbox
-// from the Create Campaign screen, or globally with DEFAULT_HOURLY_LIMIT).
+// Emails per HOUR per mailbox, by provider. This is the only per-mailbox
+// limit: it refills every hour and never stops a campaign. The only daily
+// limit is the company-wide DAILY_LIMIT (5 000). A limit picked on the
+// Create Campaign screen overrides these for that campaign.
+export const PROVIDER_HOURLY_LIMITS = Object.freeze({
+  gmail: 40,
+  gsuite: 150,
+  rediff: 30,
+  yahoo: 10,
+});
+// Any provider not listed above (override with DEFAULT_HOURLY_LIMIT).
 export const DEFAULT_HOURLY_LIMIT =
   Number(process.env.DEFAULT_HOURLY_LIMIT) || 10;
+
+export function getDefaultHourlyLimit(provider = "") {
+  const p = String(provider || "")
+    .toLowerCase()
+    .trim();
+  if (PROVIDER_HOURLY_LIMITS[p]) return PROVIDER_HOURLY_LIMITS[p];
+  if (p.includes("workspace") || p.includes("gsuite") || p.includes("g-suite"))
+    return PROVIDER_HOURLY_LIMITS.gsuite;
+  if (p.includes("gmail")) return PROVIDER_HOURLY_LIMITS.gmail;
+  if (p.includes("rediff")) return PROVIDER_HOURLY_LIMITS.rediff;
+  if (p.includes("yahoo")) return PROVIDER_HOURLY_LIMITS.yahoo;
+  return DEFAULT_HOURLY_LIMIT;
+}
 
 function getLimit(provider = "", accountId = null, customLimits = {}) {
   const custom = Number(accountId && customLimits?.[accountId]);
   if (Number.isFinite(custom) && custom > 0) return custom;
-  return DEFAULT_HOURLY_LIMIT;
+  return getDefaultHourlyLimit(provider);
 }
 
 function getDomainLabel(email = "") {
@@ -608,7 +674,10 @@ const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
    Tune with ACCOUNT_CONCURRENCY. Each slot uses at most one DB connection
    at a time, so keep it ≤ PRISMA_POOL_SIZE - 2.
 ═══════════════════════════════════════════════════════════════════════════ */
-const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 4;
+// How many mailboxes may be inside a DB/SMTP step at the same time. Was 4,
+// which made every other mailbox queue ("waiting for next free slot").
+// Slots are held only for the few seconds of one send, never while waiting.
+const ACCOUNT_CONCURRENCY = Number(process.env.ACCOUNT_CONCURRENCY) || 50;
 const globalAccountLimit = pLimit(ACCOUNT_CONCURRENCY);
 if (process.env.PROCESS_ROLE === "worker") {
   console.log(`🎛️  Global send concurrency cap: ${ACCOUNT_CONCURRENCY}`);
@@ -864,10 +933,16 @@ export function isAccountAuthError(err) {
 
 const QUOTA_PAUSE_HOURS = Number(process.env.QUOTA_PAUSE_HOURS) || 24; // legacy, unused
 // Provider said "slow down" (421 / 4.7.28 / rate limited): short rest.
-const RATE_LIMIT_COOLDOWN_MS =
-  (Number(process.env.RATE_LIMIT_COOLDOWN_MIN) || 15) * 60_000;
+// Every mailbox problem (provider limit, "daily limit exceeded", login
+// failure, connection trouble) is retried after RETRY_EVERY_MIN minutes.
+// The only long wait in the system is the company-wide 5 000/day limit.
+const RETRY_EVERY_MS = (Number(process.env.RETRY_EVERY_MIN) || 2) * 60_000;
+const RATE_LIMIT_COOLDOWN_MS = RETRY_EVERY_MS;
+// Provider said the mailbox's quota is used up: retry after this (max 1 h).
+const QUOTA_COOLDOWN_MS = RETRY_EVERY_MS;
 // Login failed: retry this often (so a fixed password resumes by itself).
-const AUTH_RETRY_MS = (Number(process.env.AUTH_RETRY_MIN) || 30) * 60_000;
+// Not shorter: "Too many bad auth attempts" gets worse with fast retries.
+const AUTH_RETRY_MS = RETRY_EVERY_MS;
 // Only these mean the mailbox is done for the whole day.
 const DAILY_QUOTA_RE =
   /(5\.4\.5|user sending quota|daily (user )?sending|exceeded (the )?daily (limit|quota))/i;
@@ -901,11 +976,10 @@ async function getAccountPause(accountId) {
   });
   const expired =
     row?.sendingPausedUntil && row.sendingPausedUntil <= new Date();
-  const value = {
-    paused: Boolean(row?.sendingPausedAt) && !expired,
-    reason: row?.sendingPausedReason || null,
-    at: Date.now(),
-  };
+  // Mailbox "pauses" are no longer used: a mailbox is never paused, only
+  // given a short automatic cooldown (below). Old pause flags are ignored.
+  void expired;
+  const value = { paused: false, reason: null, at: Date.now() };
   pauseCache.set(accountId, value);
 
   // A cooldown saved by a previous worker run is honoured after a restart.
@@ -1252,10 +1326,9 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   try {
     ctx.delayPerEmail = getControlledDelay({ limit: ctx.limit });
 
-    const take = Math.max(
-      1,
-      Math.min(claimSizeFor(ctx.delayPerEmail), capRoom),
-    );
+    // One row per reserved hourly slot (the slot was reserved just before).
+    const take = 1;
+    void capRoom;
 
     const claimed = isFollowup
       ? await prisma.$queryRaw`
@@ -1481,20 +1554,22 @@ async function processRecipient(recipient, ctx) {
       } else if (isQuotaError(err)) {
         // A real DAILY quota (5.4.5 …) rests until the next sending day;
         // a plain "slow down / rate limited" only needs a short cooldown.
+        // Limits refill hourly: rest this mailbox for at most one hour,
+        // never a whole day. Other mailboxes keep sending meanwhile.
         const daily = DAILY_QUOTA_RE.test(
           `${err?.response || ""} ${err?.message || ""}`,
         );
         setAccountState(
           targetAccountId,
           ACCOUNT_STATES.QUOTA_EXHAUSTED,
-          daily ? msUntilNextSendingDay() : RATE_LIMIT_COOLDOWN_MS,
+          daily ? QUOTA_COOLDOWN_MS : RATE_LIMIT_COOLDOWN_MS,
           err.message,
         );
       } else {
         setAccountState(
           targetAccountId,
           ACCOUNT_STATES.COOLDOWN,
-          5 * 60 * 1000,
+          RETRY_EVERY_MS,
           err.message,
         );
       }
@@ -1695,7 +1770,7 @@ async function runBatch(batch, ctx) {
      * sending delay.
      */
     if (!["skipped", "suppressed"].includes(result.outcome)) {
-      await sleep(ctx.delayPerEmail);
+      // No pacing sleep: the mailbox's hourly window controls the speed.
     }
   }
 
@@ -1762,13 +1837,12 @@ async function processAccountBatched({
       const stillSending = async () =>
         (await getCampaignStatus(campaignId).catch(() => "sending")) ===
         "sending";
-      if (
-        !(await waitForMailboxSlot(
-          numericAccountId,
-          ctx.delayPerEmail,
-          stillSending,
-        ))
-      ) {
+      const slot = await waitForMailboxSlot(
+        numericAccountId,
+        ctx.limit,
+        stillSending,
+      );
+      if (!slot) {
         console.log(
           `⏹ Campaign ${campaignId}: no longer sending — ${account.email} exits`,
         );
@@ -1805,6 +1879,7 @@ async function processAccountBatched({
       // Do not wait forever here. Exit this account processor so that
       // a paused/problematic account cannot hold the campaign open.
       if (next.action === "stop") {
+        releaseMailboxSlot(numericAccountId, slot); // nothing sent with it
         console.log(
           `⏹ Campaign ${campaignId}: stopping account processor ` +
             `${account.email}`,
@@ -1814,6 +1889,7 @@ async function processAccountBatched({
 
       // No pending recipients remain for this account.
       if (next.action === "done") {
+        releaseMailboxSlot(numericAccountId, slot); // nothing sent with it
         console.log(
           `✅ Campaign ${campaignId}: account ${account.email} ` +
             `has no pending recipients`,
@@ -1825,17 +1901,13 @@ async function processAccountBatched({
       // database check failed, another worker currently owns rows,
       // daily limit reached, etc.
       if (next.action === "wait") {
+        releaseMailboxSlot(numericAccountId, slot); // nothing sent with it
         await sleep(next.ms);
         continue;
       }
 
       // We received a batch to send.
       if (next.action === "send") {
-        // Reserve the rest of this batch's slots on the shared mailbox clock.
-        extendMailboxSlot(
-          numericAccountId,
-          (next.batch.length - 1) * ctx.delayPerEmail,
-        );
         if (!Array.isArray(next.batch) || next.batch.length === 0) {
           console.warn(
             `⚠️ Campaign ${campaignId} [${account.email}] ` +

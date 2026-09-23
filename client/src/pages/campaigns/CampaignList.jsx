@@ -32,6 +32,7 @@ import {
   Award,
   StopCircle,
   RotateCcw,
+  PauseCircle,
 } from "lucide-react";
 import CreateCampaign from "./campaignPages/CreateCampaign";
 import CampaignDetail from "./campaignPages/CampaignDetail";
@@ -153,7 +154,7 @@ const LIVE_STATUSES = ["sending", "scheduled", "stopped", "paused", "failed"];
 const getCampaignLabel = (campaign) => {
   if (campaign.status === "sending") return "Sending";
   if (campaign.status === "stopped" || campaign.status === "paused")
-    return "Stopped";
+    return "Paused";
   if (campaign.status === "failed") return "Failed";
   if (
     campaign.status === "completed" ||
@@ -260,7 +261,7 @@ const getCampaignMeta = (campaign) => {
       ? "bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200"
       : label === "Sending"
         ? "bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 border-blue-200"
-        : label === "Stopped" || label === "Failed"
+        : label === "Paused" || label === "Failed"
           ? "bg-gradient-to-br from-red-50 to-orange-50 text-red-700 border-red-200"
           : "bg-gradient-to-br from-sky-50 to-blue-50 text-sky-700 border-sky-200";
 
@@ -354,13 +355,35 @@ const DashboardTab = () => {
     }
   };
 
+  // Pause: the email going out this second finishes, then sending stops.
+  // Nothing restarts it until the user clicks Resend.
+  const [pausing, setPausing] = useState(null);
+  const pauseCampaign = async (id) => {
+    if (
+      !window.confirm(
+        "Pause this campaign? Already-sent emails are kept. Click Resend any time to continue where it stopped.",
+      )
+    )
+      return;
+    try {
+      setPausing(id);
+      const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/stop`);
+      alert(res.data.message || "Campaign paused");
+      fetchCampaigns(filter, customDate);
+    } catch (error) {
+      alert(error.response?.data?.message || "Network or server error");
+    } finally {
+      setPausing(null);
+    }
+  };
+
   // Resumes a paused ("stopped") campaign from where it left off — the
   // backend only ever re-selects "pending" recipients, so completed sends
   // are never repeated.
   const resendCampaign = async (id) => {
     try {
       const confirmResend = window.confirm(
-        "Start this campaign again? It continues exactly where it left off — recipients who already received it won't be emailed again.",
+        "Resend this campaign? It continues exactly where it stopped — recipients who already received it won't be emailed again.",
       );
       if (!confirmResend) return;
 
@@ -755,8 +778,28 @@ const DashboardTab = () => {
                                 )}
                               </button>
 
-                              {/* START AGAIN — only for campaigns stopped by the
-                              old Pause button (there is no Pause any more). */}
+                              {/* PAUSE — user only; the system never pauses. */}
+                              {["sending", "scheduled"].includes(
+                                campaign.status,
+                              ) && (
+                                <button
+                                  onClick={() => pauseCampaign(campaign.id)}
+                                  disabled={pausing === campaign.id}
+                                  className="inline-flex items-center gap-1 px-3 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all disabled:opacity-50 font-bold transform hover:scale-105"
+                                >
+                                  {pausing === campaign.id ? (
+                                    <Loader2
+                                      size={12}
+                                      className="animate-spin"
+                                    />
+                                  ) : (
+                                    <PauseCircle size={14} />
+                                  )}
+                                  Pause
+                                </button>
+                              )}
+
+                              {/* RESEND — continue a paused campaign where it stopped. */}
                               {["stopped", "paused", "failed"].includes(
                                 campaign.status,
                               ) &&
@@ -772,12 +815,12 @@ const DashboardTab = () => {
                                           size={12}
                                           className="animate-spin"
                                         />
-                                        Starting...
+                                        Resending...
                                       </>
                                     ) : (
                                       <>
                                         <RotateCcw size={14} />
-                                        Start again
+                                        Resend
                                       </>
                                     )}
                                   </button>
@@ -792,7 +835,12 @@ const DashboardTab = () => {
                               className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30"
                             >
                               <div className="py-5 space-y-4">
-                                <CampaignStatusPanel campaignId={campaign.id} />
+                                <CampaignStatusPanel
+                                  campaignId={campaign.id}
+                                  onChanged={() =>
+                                    fetchCampaigns(filter, customDate)
+                                  }
+                                />
                               </div>
                             </td>
                           </tr>
@@ -895,6 +943,17 @@ const DashboardTab = () => {
                       </button>
                     )}
 
+                    {["sending", "scheduled"].includes(campaign.status) && (
+                      <button
+                        onClick={() => pauseCampaign(campaign.id)}
+                        disabled={pausing === campaign.id}
+                        className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"
+                      >
+                        <PauseCircle size={14} />
+                        Pause
+                      </button>
+                    )}
+
                     {["stopped", "paused", "failed"].includes(
                       campaign.status,
                     ) &&
@@ -907,12 +966,12 @@ const DashboardTab = () => {
                           {resending === campaign.id ? (
                             <>
                               <Loader2 size={12} className="animate-spin" />
-                              Starting...
+                              Resending...
                             </>
                           ) : (
                             <>
                               <RotateCcw size={14} />
-                              Start again
+                              Resend
                             </>
                           )}
                         </button>
@@ -933,7 +992,10 @@ const DashboardTab = () => {
 
                   {isExpanded && campaign.status !== "draft" && (
                     <div className="mt-3 space-y-3">
-                      <CampaignStatusPanel campaignId={campaign.id} />
+                      <CampaignStatusPanel
+                        campaignId={campaign.id}
+                        onChanged={() => fetchCampaigns(filter, customDate)}
+                      />
                     </div>
                   )}
                 </div>

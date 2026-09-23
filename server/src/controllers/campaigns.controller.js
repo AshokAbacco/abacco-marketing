@@ -12,6 +12,8 @@ import {
   getDailyCount,
   DAILY_LIMIT,
   DEFAULT_HOURLY_LIMIT,
+  PROVIDER_HOURLY_LIMITS,
+  getDefaultHourlyLimit,
   resolveOriginalCampaignId,
 } from "../services/campaignMailer.service.js";
 import { buildCampaignStatus } from "../services/campaignStatus.service.js";
@@ -51,55 +53,83 @@ async function findManageableCampaign(req, campaignId, select) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   HELPER — account ids currently busy sending (any user, any campaign).
-   Was: load every "sending" campaign WITH every one of its recipient rows
-   (potentially hundreds of thousands) on every create request.
-   Now: two narrow queries, cached for a few seconds and shared between
-   concurrent callers.
+   HELPER — mailboxes that still have emails to send in a "sending" campaign.
+
+   A mailbox is BUSY only while it still has work left:
+     • normal campaign: every mailbox of the campaign keeps sending from the
+       shared queue, so all its mailboxes are busy until the campaign has no
+       pending / in-flight recipients left;
+     • follow-up: rows are tied to one mailbox, so a mailbox is busy only
+       while IT still has pending / in-flight rows.
+   As soon as a mailbox's part is sent, it is free for a new campaign.
 ───────────────────────────────────────────────────────────────────────── */
-async function getBusyAccountIds({ excludeCampaignId = null } = {}) {
+async function getBusyAccounts() {
   const loadAll = async () => {
     const sending = await prisma.campaign.findMany({
       where: { status: "sending" },
-      select: { id: true, fromAccountIds: true },
+      select: { id: true, name: true, sendType: true, fromAccountIds: true },
     });
-    if (!sending.length) return { byCampaign: [] };
+    if (!sending.length) return [];
 
-    const assigned = await prisma.$queryRaw`
-      SELECT DISTINCT r."campaignId", r."accountId"
+    const rows = await prisma.$queryRaw`
+      SELECT r."campaignId", r."accountId", count(*)::int AS remaining
       FROM "CampaignRecipient" r
       WHERE r."campaignId" = ANY(${sending.map((c) => c.id)}::int[])
-        AND r."accountId" IS NOT NULL
         AND r."status" IN ('pending', 'processing')
+      GROUP BY r."campaignId", r."accountId"
     `;
 
-    const byCampaign = sending.map((c) => {
-      const ids = new Set();
-      try {
-        JSON.parse(c.fromAccountIds || "[]").forEach((id) =>
-          ids.add(Number(id)),
+    const out = []; // { accountId, campaignId, campaignName, remaining }
+    for (const c of sending) {
+      const mine = rows.filter((r) => r.campaignId === c.id);
+      const total = mine.reduce((sum, r) => sum + r.remaining, 0);
+      if (!total) continue; // nothing left → no mailbox is busy with it
+
+      if (c.sendType === "followup") {
+        for (const r of mine) {
+          if (r.accountId == null) continue;
+          out.push({
+            accountId: Number(r.accountId),
+            campaignId: c.id,
+            campaignName: c.name,
+            remaining: r.remaining,
+          });
+        }
+      } else {
+        const ids = new Set(
+          mine
+            .map((r) => r.accountId)
+            .filter((x) => x != null)
+            .map(Number),
         );
-      } catch {
-        /* malformed */
+        try {
+          JSON.parse(c.fromAccountIds || "[]").forEach((id) =>
+            ids.add(Number(id)),
+          );
+        } catch {
+          /* malformed */
+        }
+        for (const id of ids)
+          out.push({
+            accountId: id,
+            campaignId: c.id,
+            campaignName: c.name,
+            remaining: total,
+          });
       }
-      return { id: c.id, ids };
-    });
-    const index = new Map(byCampaign.map((c) => [c.id, c.ids]));
-    for (const row of assigned)
-      index.get(row.campaignId)?.add(Number(row.accountId));
-
-    return {
-      byCampaign: byCampaign.map((c) => ({ id: c.id, ids: [...c.ids] })),
-    };
+    }
+    return out;
   };
+  return getOrSet("busyAccounts", 5, loadAll);
+}
 
-  const data = await getOrSet("busyAccounts", 5, loadAll);
-  const busy = new Set();
-  for (const c of data.byCampaign) {
-    if (excludeCampaignId && c.id === excludeCampaignId) continue;
-    c.ids.forEach((id) => busy.add(id));
-  }
-  return busy;
+async function getBusyAccountIds({ excludeCampaignId = null } = {}) {
+  const list = await getBusyAccounts();
+  return new Set(
+    list
+      .filter((b) => b.campaignId !== excludeCampaignId)
+      .map((b) => b.accountId),
+  );
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -202,20 +232,22 @@ function countFields(k) {
 /* ─────────────────────────────────────────────────────────────────────────
    HELPER — per-provider hourly send limits (shared by progress + create)
 ───────────────────────────────────────────────────────────────────────── */
-// Emails per hour per mailbox when the user doesn't pick one (default 10).
-const hourlyLimitFor = (customLimits, accountId) => {
+// Emails per hour per mailbox: the user's pick, else the provider default
+// (gmail 40, gsuite 150, rediff 30, yahoo 10, others 10).
+const hourlyLimitFor = (customLimits, accountId, provider) => {
   const n = Number(customLimits?.[accountId]);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_HOURLY_LIMIT;
+  return Number.isFinite(n) && n > 0 ? n : getDefaultHourlyLimit(provider);
 };
 
-/** Keep only positive integer limits (1–1000/hr) for the selected mailboxes,
- *  and fill every selected mailbox that has none with the default. */
-function normalizeCustomLimits(customLimits, accountIds) {
+/** One explicit limit (1–1000/hr) per selected mailbox. */
+function normalizeCustomLimits(customLimits, accounts) {
   const out = {};
-  for (const id of accountIds) {
-    const n = Math.round(Number(customLimits?.[id]));
-    out[id] =
-      Number.isFinite(n) && n > 0 ? Math.min(n, 1000) : DEFAULT_HOURLY_LIMIT;
+  for (const a of accounts) {
+    const n = Math.round(Number(customLimits?.[a.id]));
+    out[a.id] =
+      Number.isFinite(n) && n > 0
+        ? Math.min(n, 1000)
+        : getDefaultHourlyLimit(a.provider);
   }
   return out;
 }
@@ -442,9 +474,19 @@ export const createCampaign = async (req, res) => {
       if (blocked) return res.status(blocked.status).json(blocked.body);
     }
 
-    // 3️⃣ (Removed) account lock. Mailboxes may be used by several campaigns
-    //    at once: the worker shares each mailbox's hourly limit between
-    //    them, so selecting ALL mailboxes is always allowed and safe.
+    // 3️⃣ A mailbox that still has emails to send in another campaign can't
+    //    be used until its part of that campaign is finished.
+    {
+      const busy = await getBusyAccountIds();
+      const taken = fromAccountIds.map(Number).filter((id) => busy.has(id));
+      if (taken.length) {
+        return res.status(400).json({
+          success: false,
+          busyAccountIds: taken,
+          message: `${taken.length} selected mailbox(es) are still sending another campaign. They become available as soon as their emails there are sent.`,
+        });
+      }
+    }
 
     // 4️⃣ Provider limit / estimated completion
     const fromIds = [
@@ -479,7 +521,7 @@ export const createCampaign = async (req, res) => {
         .json({ success: false, message: "No valid recipients" });
     }
 
-    const limits = normalizeCustomLimits(customLimits, fromIds);
+    const limits = normalizeCustomLimits(customLimits, accounts);
     let totalHourlyCapacity = 0;
     for (const acc of accounts) totalHourlyCapacity += limits[acc.id];
 
@@ -1247,7 +1289,7 @@ export const getCampaignProgress = async (req, res) => {
     }
 
     for (const [accId, row] of Object.entries(rows)) {
-      const limit = hourlyLimitFor(customLimits, accId);
+      const limit = hourlyLimitFor(customLimits, accId, row.domain);
       row.eta =
         row.processing === 0
           ? "Done"
@@ -1299,15 +1341,17 @@ export const getCampaignStatusDetails = async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 export const getLockedAccounts = async (req, res) => {
   try {
-    // Nothing is locked any more. `inUse` tells the UI which mailboxes are
-    // already sending another campaign (their hourly limit will be shared).
-    const inUse = await getBusyAccountIds();
+    // Mailboxes that still have emails to send in a sending campaign.
+    const details = await getBusyAccounts();
+    const busy = [...new Set(details.map((d) => d.accountId))];
     return res.json({
       success: true,
       data: {
-        busy: [],
-        inUse: Array.from(inUse),
+        busy,
+        busyDetails: details,
+        inUse: [],
         defaultHourlyLimit: DEFAULT_HOURLY_LIMIT,
+        providerHourlyLimits: PROVIDER_HOURLY_LIMITS,
       },
     });
   } catch (err) {
@@ -1881,23 +1925,40 @@ export const stopCampaign = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Campaign not found" });
 
-    if (campaign.status !== "sending") {
+    if (!["sending", "scheduled"].includes(campaign.status)) {
       return res.status(400).json({
         success: false,
-        message: `Cannot stop campaign with status: ${campaign.status}`,
+        message: `Cannot pause a campaign that is ${campaign.status}`,
       });
     }
 
-    // Conditional: only a campaign that is still sending can be stopped.
-    await prisma.campaign.updateMany({
-      where: { id: campaignId, status: "sending" },
-      data: { status: "stopped" },
+    // USER pause. The worker finishes the email going out this second and
+    // then stops; nothing restarts it until the user clicks Resend.
+    const who = req.user.name || req.user.email || "user";
+    const updated = await prisma.campaign.updateMany({
+      where: { id: campaignId, status: { in: ["sending", "scheduled"] } },
+      data: {
+        status: "stopped",
+        error: `Paused by ${who} on ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`,
+      },
+    });
+    // Rows claimed but not yet sent go back to the queue.
+    await prisma.campaignRecipient.updateMany({
+      where: {
+        campaignId,
+        status: "processing",
+        updatedAt: { lt: new Date(Date.now() - 60_000) },
+      },
+      data: { status: "pending", updatedAt: new Date() },
     });
     invalidateDashboardCache(campaign.userId);
+    delByPrefix("progress:");
 
     return res.json({
-      success: true,
-      message: "Campaign stopped successfully",
+      success: updated.count > 0,
+      message: updated.count
+        ? "Campaign paused. Already-sent emails are kept — click Resend to continue where it stopped."
+        : "Campaign was not sending",
     });
   } catch (err) {
     console.error("Stop campaign error:", err);
@@ -1922,6 +1983,96 @@ export const stopCampaign = async (req, res) => {
    crashed instead, worker.js's stuck-email sweep already resets those rows
    back to "pending" on its own schedule.
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   CANCEL UNSENT EMAILS  —  POST /api/campaigns/:id/cancel-pending
+   Body (optional): { accountId }  → only that mailbox's unsent emails.
+
+   Keeps everything already sent (history, replies, follow-up chain) and
+   marks the unsent recipients "skipped" with reason "Cancelled by user".
+   When nothing is left, the campaign becomes "completed" and its mailboxes
+   are free for new campaigns. Better than deleting the campaign, which
+   would also erase the sent emails and their replies.
+═══════════════════════════════════════════════════════════════════════════ */
+export const cancelPendingRecipients = async (req, res) => {
+  try {
+    const campaignId = Number(req.params.id);
+    const campaign = await findManageableCampaign(req, campaignId, {
+      id: true,
+      userId: true,
+      status: true,
+    });
+    if (!campaign)
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+
+    const accountId =
+      req.body?.accountId != null && req.body.accountId !== ""
+        ? Number(req.body.accountId)
+        : null;
+    if (accountId !== null && !Number.isInteger(accountId))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailbox" });
+
+    // Only "pending" rows: a row already "processing" is being sent this
+    // second and is allowed to finish (it can't be un-sent).
+    const cancelled = await prisma.campaignRecipient.updateMany({
+      where: {
+        campaignId,
+        status: "pending",
+        ...(accountId !== null ? { accountId } : {}),
+      },
+      data: {
+        status: "skipped",
+        error: `Cancelled by ${req.user.name || req.user.email || "user"}`,
+        updatedAt: new Date(),
+      },
+    });
+
+    const left = await prisma.campaignRecipient.count({
+      where: { campaignId, status: { in: ["pending", "processing"] } },
+    });
+
+    let status = campaign.status;
+    if (
+      left === 0 &&
+      ["sending", "stopped", "paused", "scheduled", "draft"].includes(
+        campaign.status,
+      )
+    ) {
+      const sent = await prisma.campaignRecipient.count({
+        where: { campaignId, status: "sent" },
+      });
+      status = sent > 0 || cancelled.count > 0 ? "completed" : campaign.status;
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { status },
+      });
+    }
+
+    invalidateDashboardCache(campaign.userId);
+    delByPrefix(`progress:`); // status panel micro-cache
+
+    return res.json({
+      success: true,
+      cancelled: cancelled.count,
+      remaining: left,
+      status,
+      message:
+        `${cancelled.count} unsent email(s) cancelled` +
+        (left
+          ? ` — ${left} other email(s) still sending.`
+          : " — campaign marked completed. Sent emails are kept."),
+    });
+  } catch (err) {
+    console.error("cancelPendingRecipients error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to cancel unsent emails" });
+  }
+};
+
 export const resendCampaign = async (req, res) => {
   try {
     const campaignId = Number(req.params.id);
@@ -1944,13 +2095,11 @@ export const resendCampaign = async (req, res) => {
     if (!["stopped", "paused", "failed"].includes(campaign.status)) {
       return res.status(400).json({
         success: false,
-        message: `Cannot restart campaign with status: ${campaign.status}`,
+        message: `Cannot resend a campaign that is ${campaign.status}`,
       });
     }
-
-    // 🌐 Global daily-limit check
-    const blocked = await checkGlobalSendingRules(campaign.userId);
-    if (blocked) return res.status(blocked.status).json(blocked.body);
+    // (No daily-limit block: if the company 5 000/day is used up, the
+    //  campaign simply waits for the 5 PM reset and the CRM shows that.)
 
     // Nothing left to send? Don't spin up a worker for zero recipients —
     // just tell the user so instead of silently no-op-ing.
@@ -1975,10 +2124,11 @@ export const resendCampaign = async (req, res) => {
       data: { status: "sending", error: null },
     });
     invalidateDashboardCache(campaign.userId);
+    delByPrefix("progress:");
 
     return res.json({
       success: true,
-      message: `Campaign resumed — ${remaining} recipient(s) remaining`,
+      message: `Campaign resumed — ${remaining} email(s) left. Already-sent recipients won't be emailed again.`,
     });
   } catch (err) {
     console.error("Resend campaign error:", err);

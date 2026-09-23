@@ -14,7 +14,7 @@ import prisma from "../prismaClient.js";
 import {
   getDailyCount,
   DAILY_LIMIT,
-  DEFAULT_HOURLY_LIMIT,
+  getDefaultHourlyLimit,
 } from "./campaignMailer.service.js";
 import {
   getAccountCap,
@@ -123,7 +123,7 @@ function explainPending(row) {
     return `Will be retried after a temporary error — ${err.replace(/^Retry \d+\/\d+ scheduled:\s*/i, "") || "temporary error"}`;
   if (err.startsWith("Recovered from stuck"))
     return "Re-queued after a worker restart (will be sent normally)";
-  return "Queued — waiting for the next free send slot (hourly limit per mailbox)";
+  return "Queued — goes out as soon as a mailbox has room in its hourly limit";
 }
 
 function explainSkipped(err) {
@@ -211,7 +211,9 @@ export async function buildCampaignStatus(campaignId) {
         FROM "CampaignRecipient"
         WHERE "campaignId" = ${campaignId} AND "accountId" IS NOT NULL
         GROUP BY "accountId"`,
-      prisma.crmSetting.findUnique({ where: { key: HEARTBEAT_KEY } }).catch(() => null),
+      prisma.crmSetting
+        .findUnique({ where: { key: HEARTBEAT_KEY } })
+        .catch(() => null),
       getDailyCount(campaign.userId).catch(() => 0),
       prisma.campaign.findMany({
         where: { status: "sending", id: { not: campaignId } },
@@ -225,7 +227,9 @@ export async function buildCampaignStatus(campaignId) {
   const nextResetAt = new Date(now + msToReset);
 
   // Worker health
-  const hbAt = heartbeat?.value?.at ? new Date(heartbeat.value.at).getTime() : null;
+  const hbAt = heartbeat?.value?.at
+    ? new Date(heartbeat.value.at).getTime()
+    : null;
   const worker = {
     online: hbAt != null && now - hbAt < WORKER_STALE_MS,
     lastSeenAt: hbAt ? new Date(hbAt) : null,
@@ -272,6 +276,17 @@ export async function buildCampaignStatus(campaignId) {
       })
     : [];
 
+  // Each mailbox's use of its hourly limit, across ALL campaigns.
+  const hourRows = mailboxIds.length
+    ? await prisma.$queryRaw`
+        SELECT "accountId", count(*)::int AS n, min("sentAt") AS oldest
+        FROM "CampaignRecipient"
+        WHERE "accountId" = ANY(${mailboxIds}::int[])
+          AND "status" = 'sent' AND "sentAt" >= NOW() - interval '1 hour'
+        GROUP BY "accountId"`
+    : [];
+  const hourUse = new Map(hourRows.map((r) => [Number(r.accountId), r]));
+
   const capInfo = await Promise.all(
     accounts.map(async (a) => {
       const [cap, sent] = await Promise.all([
@@ -287,20 +302,29 @@ export async function buildCampaignStatus(campaignId) {
   const mailboxes = accounts.map((a) => {
     const row = perAcc.get(a.id) || {};
     const cap = capById.get(a.id) || { cap: Infinity, sentToday: 0 };
-    const limit = Number(customLimits[a.id]) > 0 ? Number(customLimits[a.id]) : DEFAULT_HOURLY_LIMIT;
+    const limit =
+      Number(customLimits[a.id]) > 0
+        ? Number(customLimits[a.id])
+        : getDefaultHourlyLimit(a.provider);
     const shared = sharedBy.get(a.id) || [];
     const effectiveHourly = limit / (1 + shared.length);
-    const capRemaining = Number.isFinite(cap.cap) ? Math.max(0, cap.cap - cap.sentToday) : null;
-    const cooldownUntil = a.sendingCooldownUntil && a.sendingCooldownUntil.getTime() > now ? a.sendingCooldownUntil : null;
-    const [cdKind, ...cdRest] = String(a.sendingCooldownReason || "").split(":");
+    const capRemaining = Number.isFinite(cap.cap)
+      ? Math.max(0, cap.cap - cap.sentToday)
+      : null;
+    const cooldownUntil =
+      a.sendingCooldownUntil && a.sendingCooldownUntil.getTime() > now
+        ? a.sendingCooldownUntil
+        : null;
+    const [cdKind, ...cdRest] = String(a.sendingCooldownReason || "").split(
+      ":",
+    );
     const cdText = cdRest.join(":").trim();
-    const adminPaused =
-      a.sendingPausedAt && (!a.sendingPausedUntil || a.sendingPausedUntil.getTime() > now);
+    const adminPaused = false; // mailbox pauses no longer exist
     const ownPending = (row.pending || 0) + (row.processing || 0);
 
     let state = "sending";
     let severity = "ok";
-    let message = `Sending about ${Math.round(effectiveHourly * 10) / 10}/hr`;
+    let message = `Sending now — up to ${limit}/hr`;
     let resumesAt = null;
     let etaAvailableAt = now;
     let etaExcluded = false;
@@ -312,7 +336,8 @@ export async function buildCampaignStatus(campaignId) {
     } else if (a.deleted) {
       state = "removed";
       severity = "error";
-      message = "Mailbox was deleted — its share is sent by the other mailboxes";
+      message =
+        "Mailbox was deleted — its share is sent by the other mailboxes";
       etaExcluded = true;
     } else if (adminPaused) {
       state = "admin_paused";
@@ -324,46 +349,68 @@ export async function buildCampaignStatus(campaignId) {
     } else if (cooldownUntil && cdKind === "AUTH_ERROR") {
       state = "login_failed";
       severity = "error";
-      message = `Login failed — fix the password in Email Accounts. Retries automatically${cdText ? ` (${cdText})` : ""}`;
+      message = `Login failed — retrying every 2 minutes; if it keeps failing, fix the password in Email Accounts${cdText ? ` (${cdText})` : ""}`;
       resumesAt = cooldownUntil;
       etaAvailableAt = Infinity;
       etaExcluded = true;
     } else if (cooldownUntil && cdKind === "QUOTA_EXHAUSTED") {
       state = "provider_limit";
       severity = "warning";
-      message = `Provider asked to slow down / quota reached — resumes automatically${cdText ? ` (${cdText})` : ""}`;
+      message = `Provider refused (limit/quota) — retrying automatically every 2 minutes${cdText ? ` (${cdText})` : ""}`;
       resumesAt = cooldownUntil;
       etaAvailableAt = cooldownUntil.getTime();
     } else if (cooldownUntil) {
       state = "cooldown";
       severity = "warning";
-      message = `Short cooldown after a connection problem${cdText ? ` (${cdText})` : ""}`;
+      message = `Connection problem — retrying in 2 minutes${cdText ? ` (${cdText})` : ""}`;
       resumesAt = cooldownUntil;
       etaAvailableAt = cooldownUntil.getTime();
     } else if (capRemaining === 0) {
       state = "daily_cap";
       severity = "warning";
-      message = `Daily cap reached (${cap.sentToday}/${cap.cap}${cap.source === "warmup" ? `, warm-up day ${cap.warmupDay}` : ""}) — resumes at the 5 PM reset`;
+      message = `Daily cap reached (${cap.sentToday}/${cap.cap}) — resumes at the 5 PM reset`;
       resumesAt = nextResetAt;
     } else if (companyBlocked) {
       state = "company_limit";
       severity = "warning";
       message = `Company daily limit reached (${sentToday}/${DAILY_LIMIT}) — resumes at the 5 PM reset`;
       resumesAt = nextResetAt;
+    } else if ((hourUse.get(a.id)?.n || 0) >= limit) {
+      const used = hourUse.get(a.id);
+      state = "hourly_limit";
+      severity = "info";
+      resumesAt = new Date(new Date(used.oldest).getTime() + HOUR);
+      message = `Used its ${limit}/hr — sends again at ${resumesAt.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" })} (limit refills every hour)`;
     } else if (isFollowup && ownPending === 0) {
       state = "done";
       severity = "ok";
       message = "Nothing left for this mailbox";
     }
 
+    // Cooldown just ended but the provider refused again recently and nothing
+    // has gone out since: say so instead of a plain "Sending".
+    const cdEnded =
+      a.sendingCooldownUntil && a.sendingCooldownUntil.getTime() <= now
+        ? a.sendingCooldownUntil.getTime()
+        : null;
+    const lastOk = row.lastSentAt ? new Date(row.lastSentAt).getTime() : 0;
+    if (
+      state === "sending" &&
+      cdEnded &&
+      now - cdEnded < 10 * 60_000 &&
+      lastOk < cdEnded - 2 * 60_000 &&
+      ["QUOTA_EXHAUSTED", "AUTH_ERROR"].includes(cdKind)
+    ) {
+      state = cdKind === "AUTH_ERROR" ? "login_failed" : "provider_limit";
+      severity = cdKind === "AUTH_ERROR" ? "error" : "warning";
+      message = `${cdKind === "AUTH_ERROR" ? "Login keeps failing" : "Provider keeps refusing"} — retrying every 2 minutes${cdText ? ` (${cdText})` : ""}. You can cancel this mailbox's unsent emails below.`;
+    }
+
     if (state === "sending" && shared.length) {
       message += ` (hourly limit shared with ${shared.length} other sending campaign${shared.length > 1 ? "s" : ""})`;
     }
 
-    const spacing = HOUR / Math.max(effectiveHourly, 0.0001);
-    const last = row.lastSentAt ? new Date(row.lastSentAt).getTime() : null;
-    const nextSendAt =
-      state === "sending" ? new Date(Math.max(now, last ? last + spacing : now)) : resumesAt;
+    const nextSendAt = state === "sending" ? new Date(now) : resumesAt;
 
     return {
       id: a.id,
@@ -399,11 +446,17 @@ export async function buildCampaignStatus(campaignId) {
   // ETA
   let eta = { at: null, in: null, ratePerHour: 0, note: null };
   if (remaining === 0) {
-    eta = { at: k.lastSentAt || null, in: null, ratePerHour: 0, note: "Nothing left to send" };
+    eta = {
+      at: k.lastSentAt || null,
+      in: null,
+      ratePerHour: 0,
+      note: "Nothing left to send",
+    };
   } else if (["sending", "scheduled"].includes(campaign.status)) {
-    const start = campaign.status === "scheduled" && campaign.scheduledAt
-      ? Math.max(now, campaign.scheduledAt.getTime())
-      : now;
+    const start =
+      campaign.status === "scheduled" && campaign.scheduledAt
+        ? Math.max(now, campaign.scheduledAt.getTime())
+        : now;
     const at = simulateEta({
       now: start,
       remaining,
@@ -426,7 +479,7 @@ export async function buildCampaignStatus(campaignId) {
           .reduce((s, m) => s + m.effectiveHourly, 0),
       ),
       note: at
-        ? `Based on each mailbox's hourly limit and daily cap${excluded ? `; ${excluded} blocked mailbox(es) not counted` : ""}.`
+        ? `Based on each mailbox's hourly limit${excluded ? `; ${excluded} blocked mailbox(es) not counted` : ""}.`
         : "Cannot estimate — no mailbox is able to send. Fix the blocked mailboxes below.",
     };
   }
@@ -434,7 +487,9 @@ export async function buildCampaignStatus(campaignId) {
 
   // Why pending / failed / skipped
   const pendingReasons = groupReasons(
-    reasonRows.filter((r) => r.status === "pending" || r.status === "processing"),
+    reasonRows.filter(
+      (r) => r.status === "pending" || r.status === "processing",
+    ),
     explainPending,
   );
   const failedReasons = groupReasons(
@@ -447,7 +502,17 @@ export async function buildCampaignStatus(campaignId) {
   );
 
   // Headline
-  const summary = summarize({ campaign, k, remaining, worker, mailboxes, company, eta, now, isFollowup });
+  const summary = summarize({
+    campaign,
+    k,
+    remaining,
+    worker,
+    mailboxes,
+    company,
+    eta,
+    now,
+    isFollowup,
+  });
 
   return {
     campaign: {
@@ -475,7 +540,9 @@ export async function buildCampaignStatus(campaignId) {
       bounced: k.bounced || 0,
       unsubscribed: k.unsubscribed || 0,
       remaining,
-      percent: k.total ? Math.round(((k.total - remaining) / k.total) * 1000) / 10 : 0,
+      percent: k.total
+        ? Math.round(((k.total - remaining) / k.total) * 1000) / 10
+        : 0,
       sentLastHour: k.sentLastHour || 0,
       sentLast24h: k.sentLast24h || 0,
     },
@@ -490,7 +557,27 @@ export async function buildCampaignStatus(campaignId) {
   };
 }
 
-function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, now }) {
+/** "2 × 30/hr = 60/hr" or "40/hr + 10/hr = 50/hr" (campaign total). */
+function rateBreakdown(list) {
+  const limits = list.map((m) => m.effectiveHourly);
+  const total = Math.round(limits.reduce((a, b) => a + b, 0));
+  if (limits.length === 1) return `${total}/hr`;
+  const same = limits.every((l) => l === limits[0]);
+  return same
+    ? `${limits.length} × ${limits[0]}/hr = ${total}/hr`
+    : `${limits.map((l) => `${l}/hr`).join(" + ")} = ${total}/hr`;
+}
+
+function summarize({
+  campaign,
+  k,
+  remaining,
+  worker,
+  mailboxes,
+  company,
+  eta,
+  now,
+}) {
   const fmt = (d) =>
     d
       ? new Date(d).toLocaleString("en-IN", {
@@ -504,14 +591,35 @@ function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, no
 
   switch (campaign.status) {
     case "draft":
-      return { code: "draft", severity: "info", title: "Draft", message: "Created but never started." };
+      return {
+        code: "draft",
+        severity: "info",
+        title: "Draft",
+        message: "Created but never started.",
+      };
     case "scheduled": {
       const at = campaign.scheduledAt?.getTime();
       if (at && at > now)
-        return { code: "scheduled", severity: "info", title: "Scheduled", message: `Starts automatically at ${fmt(at)} IST.` };
+        return {
+          code: "scheduled",
+          severity: "info",
+          title: "Scheduled",
+          message: `Starts automatically at ${fmt(at)} IST.`,
+        };
       if (!worker.online)
-        return { code: "worker_offline", severity: "error", title: "Not starting — worker offline", message: "The start time has passed but the background worker is not running, so nothing can start. Restart the worker service (npm run start:worker)." };
-      return { code: "starting", severity: "info", title: "Starting", message: "Start time reached — the worker picks it up within a minute." };
+        return {
+          code: "worker_offline",
+          severity: "error",
+          title: "Not starting — worker offline",
+          message:
+            "The start time has passed but the background worker is not running, so nothing can start. Restart the worker service (npm run start:worker).",
+        };
+      return {
+        code: "starting",
+        severity: "info",
+        title: "Starting",
+        message: "Start time reached — the worker picks it up within a minute.",
+      };
     }
     case "completed":
       return {
@@ -521,14 +629,31 @@ function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, no
         message: `Finished${k.lastSentAt ? ` at ${fmt(k.lastSentAt)} IST` : ""}: ${k.sent} sent, ${k.failed} failed, ${k.skipped} skipped.`,
       };
     case "failed":
-      return { code: "failed", severity: "error", title: "Failed", message: campaign.error || "Every recipient failed. See the failure reasons below." };
+      return {
+        code: "failed",
+        severity: "error",
+        title: "Failed",
+        message:
+          campaign.error ||
+          "Every recipient failed. See the failure reasons below.",
+      };
     case "stopped":
     case "paused":
-      return { code: "stopped", severity: "warning", title: "Stopped (old pause)", message: `Stopped by the old Pause button with ${remaining} still to send. Click "Start again" — already-sent recipients are never emailed twice.` };
+      return {
+        code: "paused",
+        severity: "warning",
+        title: "Paused",
+        message: `${campaign.error && campaign.error.startsWith("Paused by") ? campaign.error + ". " : "Paused. "}${remaining} email(s) still to send — click Resend to continue exactly where it stopped. Already-sent recipients are never emailed twice.`,
+      };
     case "sending":
       break;
     default:
-      return { code: campaign.status, severity: "info", title: campaign.status, message: "" };
+      return {
+        code: campaign.status,
+        severity: "info",
+        title: campaign.status,
+        message: "",
+      };
   }
 
   if (!worker.online) {
@@ -540,11 +665,20 @@ function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, no
     };
   }
   if (remaining === 0) {
-    return { code: "finishing", severity: "ok", title: "Finishing", message: "All recipients processed — marking the campaign complete." };
+    return {
+      code: "finishing",
+      severity: "ok",
+      title: "Finishing",
+      message: "All recipients processed — marking the campaign complete.",
+    };
   }
 
   const sending = mailboxes.filter((m) => m.state === "sending");
-  const blocked = mailboxes.filter((m) => !["sending", "done", "not_running"].includes(m.state));
+  const blocked = mailboxes.filter(
+    (m) =>
+      !["sending", "done", "not_running", "hourly_limit"].includes(m.state),
+  );
+  const hourlyFull = mailboxes.filter((m) => m.state === "hourly_limit");
   const byState = {};
   for (const m of blocked) byState[m.state] = (byState[m.state] || 0) + 1;
   const LABEL = {
@@ -564,16 +698,40 @@ function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, no
     .filter((t) => t && t > now)
     .sort((a, b) => a - b)[0];
 
-  if (!sending.length) {
-    const hard = blocked.every((m) => ["login_failed", "admin_paused", "removed"].includes(m.state));
+  if (!sending.length && hourlyFull.length && !blocked.length) {
+    const next = hourlyFull
+      .map((m) => new Date(m.resumesAt).getTime())
+      .sort((a, b) => a - b)[0];
     return {
-      code: company.remainingToday <= 0 ? "company_limit" : hard ? "blocked" : "waiting",
+      code: "hourly_limit",
+      severity: "info",
+      title: "Sending (hourly limits used)",
+      message: `All mailboxes used their hourly limit. ${remaining} left — sending continues at ${fmt(next)} IST${eta.at ? `, expected to finish ${fmt(eta.at)} IST (in ${eta.in})` : ""}. No action needed.`,
+      resumesAt: new Date(next),
+    };
+  }
+
+  if (!sending.length) {
+    const hard = blocked.every((m) =>
+      ["login_failed", "admin_paused", "removed"].includes(m.state),
+    );
+    return {
+      code:
+        company.remainingToday <= 0
+          ? "company_limit"
+          : hard
+            ? "blocked"
+            : "waiting",
       severity: hard ? "error" : "warning",
-      title: hard ? "Blocked — action needed" : "Waiting (will resume automatically)",
+      title: hard
+        ? "Blocked — action needed"
+        : "Waiting (will resume automatically)",
       message:
         `${remaining} recipient(s) left, but no mailbox can send right now: ${blockedText || "no mailboxes"}.` +
         (nextResume ? ` Next mailbox resumes at ${fmt(nextResume)} IST.` : "") +
-        (hard ? " Fix the mailboxes listed below — sending restarts by itself." : " No action needed."),
+        (hard
+          ? " Fix the mailboxes listed below — sending restarts by itself."
+          : " No action needed."),
       resumesAt: nextResume ? new Date(nextResume) : null,
     };
   }
@@ -583,9 +741,11 @@ function summarize({ campaign, k, remaining, worker, mailboxes, company, eta, no
     severity: blocked.length ? "info" : "ok",
     title: "Sending",
     message:
-      `Sending with ${sending.length} of ${mailboxes.length} mailbox(es) at ~${eta.ratePerHour}/hr. ` +
+      `Sending with ${sending.length} of ${mailboxes.length} mailbox(es) — ${rateBreakdown(sending)} in total. ` +
       `${remaining} left${eta.at ? `, expected to finish ${fmt(eta.at)} IST (in ${eta.in})` : ""}.` +
       (k.processing ? ` ${k.processing} going out right now.` : "") +
-      (blocked.length ? ` ${blocked.length} mailbox(es) waiting: ${blockedText}.` : ""),
+      (blocked.length
+        ? ` ${blocked.length} mailbox(es) waiting: ${blockedText}.`
+        : ""),
   };
 }

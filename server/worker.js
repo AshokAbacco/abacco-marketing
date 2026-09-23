@@ -231,6 +231,37 @@ async function writeHeartbeat() {
   });
 }
 
+/**
+ * No mailbox is ever paused, and no wait is longer than an hour. Old data
+ * from the previous engine (24 h quota pauses, never-ending "Login failed"
+ * pauses) is cleared every time the worker starts.
+ */
+async function clearOldPauses() {
+  // Cooldowns are 2 minutes now; anything longer is left over from old code.
+  const inAnHour = new Date(Date.now() + 5 * 60_000);
+  const [paused, cooldowns] = await Promise.all([
+    prisma.emailAccount.updateMany({
+      where: { sendingPausedAt: { not: null } },
+      data: {
+        sendingPausedAt: null,
+        sendingPausedReason: null,
+        sendingPausedUntil: null,
+      },
+    }),
+    prisma.emailAccount.updateMany({
+      where: { sendingCooldownUntil: { gt: inAnHour } },
+      data: { sendingCooldownUntil: null, sendingCooldownReason: null },
+    }),
+    // NOTE: campaigns paused by a USER ("stopped") are left alone — only
+    // the user's Resend button restarts them.
+  ]);
+  if (paused.count || cooldowns.count) {
+    console.log(
+      `🧹 Cleared ${paused.count} mailbox pause(s), ${cooldowns.count} long cooldown(s)`,
+    );
+  }
+}
+
 /** Optional storage cleanup — see FOLLOWUP_BODY_RETENTION_DAYS. */
 async function trimFollowupBodies() {
   if (FOLLOWUP_BODY_RETENTION_DAYS <= 0) return;
@@ -282,6 +313,7 @@ async function startWorker() {
   if (shuttingDown) return;
 
   console.log("⚙️ Initial recovery and resume...");
+  await job("clearOldPauses", clearOldPauses)();
   await job("recoverStuckEmails", recoverStuckEmails)();
   await job("resumeSendingCampaigns", resumeSendingCampaigns)();
   await job("resumeAccountDeletions", () => resumeAccountDeletions(prisma))();
