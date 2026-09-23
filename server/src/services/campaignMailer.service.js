@@ -1008,22 +1008,29 @@ async function sendWithRetry(
 
 const CAMPAIGN_VERBOSE = process.env.CAMPAIGN_VERBOSE === "true";
 
-function getControlledDelay({ limit, remainingEmails, estimatedCompletion }) {
-  // Base delay from the provider's hourly limit (strict ceiling on speed).
-  const baseDelay = (60 * 60 * 1000) / Math.max(limit, 1);
+// function getControlledDelay({ limit, remainingEmails, estimatedCompletion }) {
+//   // Base delay from the provider's hourly limit (strict ceiling on speed).
+//   const baseDelay = (60 * 60 * 1000) / Math.max(limit, 1);
 
-  // Speed up (never beyond the hourly limit) if behind schedule.
-  if (estimatedCompletion) {
-    const remainingTimeMs =
-      new Date(estimatedCompletion).getTime() - Date.now();
-    if (remainingTimeMs > 0 && remainingEmails > 0) {
-      const requiredDelay = remainingTimeMs / remainingEmails;
-      return Math.max(200, Math.min(baseDelay, requiredDelay));
-    }
-  }
-  return baseDelay;
+//   // Speed up (never beyond the hourly limit) if behind schedule.
+//   if (estimatedCompletion) {
+//     const remainingTimeMs =
+//       new Date(estimatedCompletion).getTime() - Date.now();
+//     if (remainingTimeMs > 0 && remainingEmails > 0) {
+//       const requiredDelay = remainingTimeMs / remainingEmails;
+//       return Math.max(200, Math.min(baseDelay, requiredDelay));
+//     }
+//   }
+//   return baseDelay;
+// }
+
+function getControlledDelay({ limit }) {
+  // Strict pacing from the per-account hourly limit set in the UI.
+  // Never speed up to "catch up" to estimatedCompletion — that is only
+  // an estimate for display; the /hr limit is what protects the mailbox.
+  const perHour = Math.max(Number(limit) || 1, 1);
+  return (60 * 60 * 1000) / perHour;
 }
-
 function claimSizeFor(delayMs) {
   return Math.max(
     1,
@@ -1173,14 +1180,26 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     return { action: "wait", ms: 5000 };
   }
 
+  ctx.delayPerEmail = getControlledDelay({ limit: ctx.limit });
+  try {
+    const [row] = await prisma.$queryRaw`
+      SELECT MAX("sentAt") AS last
+      FROM "CampaignRecipient"
+      WHERE "accountId" = ${accountId} AND "sentAt" IS NOT NULL
+    `;
+    if (row?.last) {
+      const waitMs =
+        new Date(row.last).getTime() + ctx.delayPerEmail - Date.now();
+      if (waitMs > 1000) {
+        return { action: "wait", ms: Math.min(waitMs, 60_000) };
+      }
+    }
+  } catch (err) {
+    return { action: "wait", ms: 5000 };
+  }
+
   // [7] Atomic claim (Dynamic reassignment for normal campaigns)
   try {
-    ctx.delayPerEmail = getControlledDelay({
-      limit: ctx.limit,
-      remainingEmails: remaining,
-      estimatedCompletion: ctx.campaign.estimatedCompletion,
-    });
-
     const take = Math.max(
       1,
       Math.min(claimSizeFor(ctx.delayPerEmail), capRoom),
