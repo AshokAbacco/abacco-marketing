@@ -160,7 +160,7 @@ async function recoverStuckEmails() {
     data: {
       status: "pending",
       retryCount: { increment: 1 },
-      error: "Recovered from stuck processing",
+      error: "Recovered from stuck processing (Worker or Network timeout)",
       updatedAt: new Date(),
     },
   });
@@ -173,7 +173,7 @@ async function recoverStuckEmails() {
     },
     data: {
       status: "failed",
-      error: `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded after being stuck`,
+      error: `Max retries (${MAX_TRANSIENT_RETRIES}) exceeded after persistent timeout`,
       updatedAt: new Date(),
     },
   });
@@ -184,11 +184,7 @@ async function recoverStuckEmails() {
     console.log(`❌ Marked ${failed.count} stuck emails as failed`);
 }
 
-/**
- * Start send loops for campaigns in "sending" that this process isn't
- * already running. Runs every few seconds, so it must be cheap:
- * one indexed query, plus one count per NEW campaign only.
- */
+/** Check sending campaigns and restart processors if work remains. */
 async function resumeSendingCampaigns() {
   const campaigns = await prisma.campaign.findMany({
     where: { status: "sending" },
@@ -203,14 +199,13 @@ async function resumeSendingCampaigns() {
     });
 
     if (remaining === 0) {
-      // Nothing left — let sendBulkCampaign settle the final status.
+      // Nothing left — trigger the function to resolve it to "completed" cleanly.
       sendBulkCampaign(id).catch((err) =>
         console.error(`❌ Finalize error for campaign ${id}:`, err.message),
       );
       continue;
     }
 
-    console.log(`▶️ Starting campaign ${id} (${remaining} remaining)`);
     sendBulkCampaign(id).catch((err) =>
       console.error(`❌ Send loop error for campaign ${id}:`, err.message),
     );

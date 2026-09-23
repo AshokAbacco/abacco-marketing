@@ -35,6 +35,36 @@ import {
 } from "./sendingLimits.service.js";
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   ACCOUNT STATE MANAGEMENT (Lightweight Cooldowns)
+   Replaces rigid DB pauses for temporary provider quotas.
+═══════════════════════════════════════════════════════════════════════════ */
+const ACCOUNT_STATES = {
+  AVAILABLE: "AVAILABLE",
+  COOLDOWN: "COOLDOWN",
+  QUOTA_EXHAUSTED: "QUOTA_EXHAUSTED",
+  AUTH_ERROR: "AUTH_ERROR",
+};
+
+const accountStateCache = new Map(); // accountId -> { status, until, reason }
+
+function getAccountState(accountId) {
+  const state = accountStateCache.get(Number(accountId));
+  if (state && state.until && Date.now() > state.until) {
+    accountStateCache.delete(Number(accountId));
+    return { status: ACCOUNT_STATES.AVAILABLE };
+  }
+  return state || { status: ACCOUNT_STATES.AVAILABLE };
+}
+
+function setAccountState(accountId, status, durationMs, reason) {
+  accountStateCache.set(Number(accountId), {
+    status,
+    until: durationMs ? Date.now() + durationMs : null,
+    reason,
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    SECTION 1 — GLOBAL DAILY LIMIT HELPERS
    ─────────────────────────────────────────────────────────────────────────
    Business rules:
@@ -858,37 +888,109 @@ function toPlainText(html) {
 
 async function sendWithRetry(
   sendFn,
-  { retries = 3, attemptTimeoutMs = 20000 } = {},
+  { retries = 3, attemptTimeoutMs = 20000, transporter = null } = {},
 ) {
   let lastError;
+
   for (let i = 1; i <= retries; i++) {
     let timer;
+    let timedOut = false;
+
     try {
-      return await Promise.race([
-        sendFn(),
-        new Promise((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("SMTP attempt timed out")),
-            attemptTimeoutMs,
+      const sendPromise = Promise.resolve().then(() => sendFn());
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+
+          const timeoutError = new Error(
+            `SMTP attempt timed out after ${attemptTimeoutMs}ms`,
           );
-        }),
-      ]);
+
+          timeoutError.code = "ETIMEDOUT";
+          timeoutError.smtpTimeout = true;
+
+          reject(timeoutError);
+        }, attemptTimeoutMs);
+      });
+
+      return await Promise.race([sendPromise, timeoutPromise]);
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️ SMTP attempt ${i}/${retries} failed:`, err.message);
 
-      // Fail fast, don't burn retries.
-      if (isQuotaError(err) || isAccountAuthError(err) || isPermanentError(err))
-        throw err;
+      console.warn(`⚠️ SMTP attempt ${i}/${retries} failed: ${err.message}`);
 
-      if (i < retries) {
-        const backoff = Math.min(2000 * 2 ** (i - 1), 15000);
-        await sleep(backoff);
+      /*
+       * If the timeout won the race, sendMail() itself may still be
+       * running in the background because Promise.race() cannot cancel
+       * an already-running promise.
+       *
+       * Do not immediately start another SMTP attempt on the same
+       * potentially stuck pooled connection.
+       */
+      if (timedOut) {
+        console.error(
+          `⏱️ SMTP attempt ${i}/${retries} timed out — ` +
+            `connection may still be busy`,
+        );
+
+        /*
+         * If a transporter was supplied, close its pooled SMTP
+         * connections so a new connection can be established for
+         * the next attempt.
+         */
+        if (transporter) {
+          try {
+            transporter.close();
+          } catch (closeErr) {
+            console.warn(
+              `⚠️ Failed to close SMTP transporter after timeout: ` +
+                `${closeErr.message}`,
+            );
+          }
+        }
       }
+
+      /*
+       * These errors should not be retried because they indicate an
+       * account/quota/permanent recipient problem.
+       */
+      if (
+        isQuotaError(err) ||
+        isAccountAuthError(err) ||
+        isPermanentError(err)
+      ) {
+        throw err;
+      }
+
+      /*
+       * No more attempts.
+       */
+      if (i >= retries) {
+        break;
+      }
+
+      /*
+       * Exponential backoff:
+       * attempt 1 → 2s
+       * attempt 2 → 4s
+       * attempt 3 → stop
+       */
+      const backoff = Math.min(2000 * 2 ** (i - 1), 15000);
+
+      console.log(
+        `🔄 SMTP retry ${i + 1}/${retries} in ` +
+          `${Math.ceil(backoff / 1000)}s`,
+      );
+
+      await sleep(backoff);
     } finally {
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   }
+
   throw lastError;
 }
 
@@ -953,73 +1055,102 @@ async function getCampaignStatus(campaignId) {
 
 /**
  * Claim the next rows for one account. Runs inside a global slot.
- * Returns { action: "send", batch } | { action: "wait", ms } | "stop" | "done".
+ * Determines shared-queue access based on campaign type.
  */
 async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
-  const { account } = ctx;
+  const { account, campaign } = ctx;
+  const isFollowup = campaign.sendType === "followup";
 
-  // [A] Campaign still sending?
+  // [1] Campaign still sending?
   let status;
   try {
     status = await getCampaignStatus(campaignId);
   } catch (err) {
-    console.error(
-      `⚠️ [${account.email}] status check failed (${err.message}) — retrying in 5s`,
-    );
     return { action: "wait", ms: 5000 };
   }
+
   if (status !== "sending") {
-    console.log(
-      `⏹ Campaign ${campaignId} is ${status} — halting ${account.email}`,
-    );
     return { action: "stop" };
   }
 
-  // [A2] Sending account paused (bounce spike, quota, login failure)?
+  // [2] Check actually pending recipients FIRST
+  let remaining = 0;
+  try {
+    if (isFollowup) {
+      const res = await prisma.$queryRaw`
+        SELECT COUNT(*)::int AS count FROM "CampaignRecipient" 
+        WHERE "campaignId" = ${campaignId} AND "accountId" = ${accountId} AND "status" = 'pending'
+      `;
+      remaining = res[0]?.count || 0;
+    } else {
+      const res = await prisma.$queryRaw`
+        SELECT COUNT(*)::int AS count FROM "CampaignRecipient" 
+        WHERE "campaignId" = ${campaignId} AND "status" = 'pending'
+      `;
+      remaining = res[0]?.count || 0;
+    }
+  } catch (err) {
+    return { action: "wait", ms: 5000 };
+  }
+
+  // [3] If zero remaining, stop this processor cleanly.
+  if (remaining === 0) {
+    return { action: "done" };
+  }
+
+  // [4] Check sender/account runtime availability
+  const state = getAccountState(accountId);
+  if (
+    state.status === ACCOUNT_STATES.QUOTA_EXHAUSTED ||
+    state.status === ACCOUNT_STATES.AUTH_ERROR
+  ) {
+    if (!ctx.stateLogged) {
+      console.warn(
+        `⏸️ [${account.email}] state is ${state.status} (${state.reason || "N/A"}) — stopping processor. Queue is released.`,
+      );
+      ctx.stateLogged = true;
+    }
+    return { action: "stop" };
+  }
+  if (state.status === ACCOUNT_STATES.COOLDOWN) {
+    return { action: "wait", ms: Math.max(5000, state.until - Date.now()) };
+  }
+  ctx.stateLogged = false;
+
+  // Fallback to manual DB pause checks
   try {
     const pause = await getAccountPause(accountId);
     if (pause.paused) {
       if (!ctx.pauseLogged) {
         console.warn(
-          `⏸️  ${account.email} is paused (${pause.reason || "no reason"}) — its recipients wait`,
+          `⏸️ [${account.email}] is manually paused — stopping processor.`,
         );
         ctx.pauseLogged = true;
       }
-      return { action: "wait", ms: PAUSED_RECHECK_MS };
+      return { action: "stop" };
     }
     ctx.pauseLogged = false;
   } catch (err) {
     return { action: "wait", ms: 5000 };
   }
 
-  // [B] Global daily limit
+  // [5] Global daily limit
   let dailyCount;
   try {
     dailyCount = await getDailyCount(userId);
   } catch (err) {
-    console.error(
-      `⚠️ [${account.email}] daily count failed (${err.message}) — retrying in 5s`,
-    );
     return { action: "wait", ms: 5000 };
   }
+
   if (dailyCount >= DAILY_LIMIT) {
     const waitMs = msUntilNextWindow();
     console.log(
-      `🚫 Daily limit reached for user ${userId}. ${account.email} sleeping ${Math.ceil(waitMs / 60000)} min.`,
+      `🚫 Daily limit reached for user ${userId}. Stopping ${account.email} until next window.`,
     );
-    // Push the deadline forward so pacing doesn't panic after the reset.
-    if (ctx.campaign.estimatedCompletion) {
-      ctx.campaign = {
-        ...ctx.campaign,
-        estimatedCompletion: new Date(
-          new Date(ctx.campaign.estimatedCompletion).getTime() + waitMs,
-        ),
-      };
-    }
-    return { action: "wait", ms: waitMs };
+    return { action: "stop" };
   }
 
-  // [B2] This mailbox's own daily cap (warm-up / provider / manual)
+  // [6] This mailbox's own daily cap
   let capRoom = Infinity;
   try {
     const [{ cap, source, warmupDay }, sentToday] = await Promise.all([
@@ -1027,66 +1158,60 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       getAccountSentToday(accountId),
     ]);
     capRoom = cap - sentToday;
+
     if (capRoom <= 0) {
-      const waitMs = msUntilNextWindow();
       if (!ctx.capLogged) {
         console.log(
-          `📵 ${account.email} reached its daily cap (${sentToday}/${cap}` +
-            `${source === "warmup" ? `, warm-up day ${warmupDay}` : `, ${source}`}) — resuming in ${Math.ceil(waitMs / 60000)} min`,
+          `📵 ${account.email} reached daily cap (${sentToday}/${cap}). Stopping processor.`,
         );
         ctx.capLogged = true;
       }
-      return { action: "wait", ms: Math.min(waitMs, CAP_RECHECK_MS) };
+      return { action: "stop" }; // Exit processor so campaign isn't held hostage
     }
     ctx.capLogged = false;
   } catch (err) {
-    console.error(
-      `⚠️ [${account.email}] daily cap check failed (${err.message}) — retrying in 5s`,
-    );
     return { action: "wait", ms: 5000 };
   }
 
-  // [C] Pace + [D] atomic claim
+  // [7] Atomic claim (Dynamic reassignment for normal campaigns)
   try {
-    const remaining = await prisma.campaignRecipient.count({
-      where: { campaignId, accountId, status: "pending" },
-    });
-    if (remaining === 0) return { action: "done" };
-
     ctx.delayPerEmail = getControlledDelay({
       limit: ctx.limit,
       remainingEmails: remaining,
       estimatedCompletion: ctx.campaign.estimatedCompletion,
     });
-    // Never claim more than the mailbox may still send today.
+
     const take = Math.max(
       1,
       Math.min(claimSizeFor(ctx.delayPerEmail), capRoom),
     );
 
-    /* ONE statement, safe across processes:
-       • FOR UPDATE SKIP LOCKED — two senders never pick the same rows
-       • AND status = 'pending' — compare-and-set on the outer UPDATE
-       • RETURNING — we send exactly the rows we won
-       Replaces a findMany + up to 10 separate UPDATEs per batch.        */
-    const claimed = await prisma.$queryRaw`
-      UPDATE "CampaignRecipient"
-      SET "status" = 'processing', "updatedAt" = NOW()
-      WHERE "id" IN (
-        SELECT "id" FROM "CampaignRecipient"
-        WHERE "campaignId" = ${campaignId}
-          AND "accountId"  = ${accountId}
-          AND "status"     = 'pending'
-        ORDER BY "id"
-        LIMIT ${take}
-        FOR UPDATE SKIP LOCKED
-      )
-      AND "status" = 'pending'
-      RETURNING "id", "email", "retryCount"
-    `;
+    const claimed = isFollowup
+      ? await prisma.$queryRaw`
+          UPDATE "CampaignRecipient"
+          SET "status" = 'processing', "updatedAt" = NOW()
+          WHERE "id" IN (
+            SELECT "id" FROM "CampaignRecipient"
+            WHERE "campaignId" = ${campaignId} 
+              AND "accountId" = ${accountId} 
+              AND "status" = 'pending'
+            ORDER BY "id" LIMIT ${take}
+            FOR UPDATE SKIP LOCKED
+          ) RETURNING "id", "email", "retryCount"
+        `
+      : await prisma.$queryRaw`
+          UPDATE "CampaignRecipient"
+          SET "status" = 'processing', "updatedAt" = NOW(), "accountId" = ${accountId}
+          WHERE "id" IN (
+            SELECT "id" FROM "CampaignRecipient"
+            WHERE "campaignId" = ${campaignId} 
+              AND "status" = 'pending'
+            ORDER BY "id" LIMIT ${take}
+            FOR UPDATE SKIP LOCKED
+          ) RETURNING "id", "email", "retryCount"
+        `;
 
     if (claimed.length === 0) {
-      // Rows exist but another sender holds them right now.
       return { action: "wait", ms: 2000 };
     }
 
@@ -1094,15 +1219,15 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
 
     if (CAMPAIGN_VERBOSE || take > 1) {
       console.log(
-        `[${account.email}] remaining=${remaining} delay=${(ctx.delayPerEmail / 1000).toFixed(1)}s claimed=${claimed.length}`,
+        `[${account.email}] remaining=${remaining} ` +
+          `delay=${(ctx.delayPerEmail / 1000).toFixed(1)}s ` +
+          `claimed=${claimed.length}`,
       );
     }
 
     return { action: "send", batch: claimed };
   } catch (err) {
-    console.error(
-      `⚠️ [${account.email}] claim failed (${err.message}) — retrying in 5s`,
-    );
+    console.error(`⚠️ [${account.email}] claim failed: ${err.message}`);
     return { action: "wait", ms: 5000 };
   }
 }
@@ -1128,44 +1253,87 @@ async function writeWithRetry(fn, label, attempts = 6) {
 
 /**
  * Send one claimed row. Runs inside a global slot.
- * @returns {Promise<{ outcome: "sent"|"failed"|"retry"|"skipped"|"stop", retryDelayMs?: number }>}
+ * @returns {Promise<{ outcome: "sent"|"failed"|"retry"|"skipped"|"stop"|"account_error", retryDelayMs?: number }>}
  */
 async function processRecipient(recipient, ctx) {
   const { campaign } = ctx;
 
-  // Stop honoured between emails, not only between batches. Unsent rows go
-  // back to "pending" so Resume picks them up.
+  // Stop honoured between emails, not only between batches.
+  // Unsent rows go back to "pending" so Resume can pick them up.
   let status;
+
   try {
     status = await getCampaignStatus(campaign.id);
   } catch {
-    status = "sending"; // transient — the heartbeat below will surface a real outage
+    // Transient DB problem. Keep processing state for now; the recovery
+    // sweep can safely return the row to pending if necessary.
+    status = "sending";
   }
+
   if (status !== "sending") {
     await prisma.campaignRecipient
       .updateMany({
-        where: { id: recipient.id, status: "processing" },
-        data: { status: "pending", updatedAt: new Date() },
+        where: {
+          id: recipient.id,
+          status: "processing",
+        },
+        data: {
+          status: "pending",
+          updatedAt: new Date(),
+        },
       })
       .catch(() => {});
+
     return { outcome: "stop" };
   }
 
-  // Heartbeat + ownership check. If the recovery sweep already reset this
-  // row (because the batch waited too long), someone else may send it —
-  // so we must not.
-  const own = await prisma.campaignRecipient.updateMany({
-    where: { id: recipient.id, status: "processing" },
-    data: { updatedAt: new Date() },
-  });
-  if (own.count === 0) return { outcome: "skipped" };
+  /*
+   * HEARTBEAT + OWNERSHIP CHECK
+   *
+   * If the recovery worker already changed this row from "processing"
+   * back to "pending", this processor no longer owns it.
+   *
+   * Do not send it again.
+   */
+  let own;
+
+  try {
+    own = await prisma.campaignRecipient.updateMany({
+      where: {
+        id: recipient.id,
+        status: "processing",
+      },
+      data: {
+        updatedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error(
+      `⚠️ [${ctx.account.email}] heartbeat failed for ` +
+        `${recipient.email}: ${err.message}`,
+    );
+
+    // Leave the row as processing. The recovery sweep will handle it.
+    throw err;
+  }
+
+  if (own.count === 0) {
+    return { outcome: "skipped" };
+  }
 
   const assignment = ctx.assign(recipient.id);
 
+  /*
+   * INVALID EMAIL
+   *
+   * This is a recipient problem, not an SMTP/account problem.
+   */
   if (!EMAIL_FORMAT_RE.test(recipient.email || "")) {
     await prisma.campaignRecipient
       .update({
-        where: { id: recipient.id },
+        where: {
+          id: recipient.id,
+        },
         data: {
           status: "failed",
           error: "Invalid email address format",
@@ -1173,80 +1341,154 @@ async function processRecipient(recipient, ctx) {
         },
       })
       .catch(() => {});
+
     return { outcome: "failed" };
   }
 
-  // Do-not-contact list — checked at the last moment, so an opt-out that
-  // arrived while the campaign was running is still honoured.
+  /*
+   * SUPPRESSION / DO-NOT-CONTACT CHECK
+   */
   const suppression = await getSuppression(recipient.email);
+
   if (suppression.suppressed) {
     await markSkipped(recipient.id, `Suppressed: ${suppression.reason}`);
+
     return { outcome: "suppressed" };
   }
 
   try {
     const sent =
       campaign.sendType === "followup"
-        ? await sendOneFollowup({ recipient, ctx, assignment })
-        : await sendOneNormal({ recipient, ctx, assignment });
-    if (sent === "skipped") return { outcome: "suppressed" };
-    return { outcome: sent ? "sent" : "failed" };
+        ? await sendOneFollowup({
+            recipient,
+            ctx,
+            assignment,
+          })
+        : await sendOneNormal({
+            recipient,
+            ctx,
+            assignment,
+          });
+
+    if (sent === "skipped") {
+      return { outcome: "suppressed" };
+    }
+
+    return {
+      outcome: sent ? "sent" : "failed",
+    };
   } catch (err) {
+    /*
+     * IMPORTANT:
+     *
+     * SMTP may have accepted the message but the subsequent DB update
+     * may have failed. Never retry a message when the send operation
+     * explicitly tells us that it was already accepted.
+     */
     if (err?.alreadySent) {
-      // SMTP accepted the email but the status write kept failing. Leave
-      // the row as-is; never retry an email that already went out.
       return { outcome: "sent" };
     }
 
+    /*
+     * ACCOUNT-LEVEL FAILURE
+     * The recipient itself is NOT failed. Put it back into pending.
+     */
     if (err?.accountPaused || isQuotaError(err) || isAccountAuthError(err)) {
-      // The ACCOUNT can't send right now. The recipient did nothing wrong:
-      // put it back in the queue untouched and rest the account.
-      const accountId = err?.accountId || ctx.account.id;
+      const targetAccountId = err?.accountId || ctx.account.id;
+
+      if (isAccountAuthError(err)) {
+        setAccountState(
+          targetAccountId,
+          ACCOUNT_STATES.AUTH_ERROR,
+          null,
+          err.message,
+        );
+        await pauseForAccountError(targetAccountId, err).catch(() => {}); // Keep DB pause for Auth UI visibility
+      } else if (isQuotaError(err)) {
+        setAccountState(
+          targetAccountId,
+          ACCOUNT_STATES.QUOTA_EXHAUSTED,
+          QUOTA_PAUSE_HOURS * 3600 * 1000,
+          err.message,
+        );
+      } else {
+        setAccountState(
+          targetAccountId,
+          ACCOUNT_STATES.COOLDOWN,
+          5 * 60 * 1000,
+          err.message,
+        );
+      }
+
       console.warn(
-        `⏸️  ${recipient.email} requeued — account ${accountId} can't send: ${err.message}`,
+        `⏸️ ${recipient.email} requeued — account ${targetAccountId} unavailable: ${err.message}`,
       );
-      await pauseForAccountError(accountId, err);
+
+      // Release recipient safely
       await prisma.campaignRecipient
         .updateMany({
           where: { id: recipient.id, status: "processing" },
           data: {
             status: "pending",
             updatedAt: new Date(),
-            error: `Waiting: ${String(err.message).slice(0, 200)}`,
+            error: `Waiting: ${String(err.message || "Account cannot send").slice(0, 200)}`,
           },
         })
-        .catch(() => {});
-      return { outcome: "account_paused" };
+        .catch((releaseErr) => {
+          console.error(
+            `⚠️ [${ctx.account.email}] failed to requeue ${recipient.email}: ${releaseErr.message}`,
+          );
+        });
+
+      return { outcome: "account_error" };
     }
 
+    /*
+     * RECIPIENT-LEVEL / NORMAL SEND FAILURE
+     */
     console.error(`❌ Failed → ${recipient.email}: ${err.message}`);
 
     const permanent = isPermanentError(err);
     const nextRetryCount = (recipient.retryCount || 0) + 1;
     const errMsg = err.message?.slice(0, 500) || "Unknown error";
 
+    /*
+     * TRANSIENT ERROR
+     *
+     * Return the recipient to pending and retry it later.
+     */
     if (!permanent && nextRetryCount <= MAX_TRANSIENT_RETRIES) {
       await prisma.campaignRecipient
         .update({
-          where: { id: recipient.id },
+          where: {
+            id: recipient.id,
+          },
           data: {
             status: "pending",
             retryCount: nextRetryCount,
             lastTriedAt: new Date(),
             updatedAt: new Date(),
-            error: `Retry ${nextRetryCount}/${MAX_TRANSIENT_RETRIES} scheduled: ${errMsg}`,
+            error:
+              `Retry ${nextRetryCount}/${MAX_TRANSIENT_RETRIES} ` +
+              `scheduled: ${errMsg}`,
           },
         })
         .catch(() => {});
+
       return {
         outcome: "retry",
         retryDelayMs: Math.min(2000 * nextRetryCount, 10_000),
       };
     }
 
+    /*
+     * PERMANENT ERROR OR MAX RETRIES EXCEEDED
+     */
     await prisma.campaignRecipient
       .update({
-        where: { id: recipient.id },
+        where: {
+          id: recipient.id,
+        },
         data: {
           status: "failed",
           retryCount: nextRetryCount,
@@ -1258,7 +1500,10 @@ async function processRecipient(recipient, ctx) {
         },
       })
       .catch(() => {});
-    return { outcome: "failed" };
+
+    return {
+      outcome: "failed",
+    };
   }
 }
 
@@ -1272,20 +1517,71 @@ async function runBatch(batch, ctx) {
     const recipient = batch[i];
 
     let result;
+
     try {
       result = await globalAccountLimit(() => processRecipient(recipient, ctx));
     } catch (err) {
-      // DB outage during heartbeat/assignment. Leave the row in
-      // "processing"; the recovery sweep will return it to "pending".
+      /*
+       * DB outage / unexpected error during heartbeat or assignment.
+       *
+       * Do NOT immediately mark the recipient failed.
+       * Leave it as "processing" so the worker's recovery sweep can
+       * safely return it to "pending".
+       */
       console.error(
-        `⚠️ [${ctx.account.email}] send step failed (${err.message}) — pausing 10s`,
+        `⚠️ [${ctx.account.email}] send step failed (${err.message}) ` +
+          `— leaving row for recovery and pausing 10s`,
       );
+
       await sleep(10_000);
       continue;
     }
 
-    if (result.outcome === "stop" || result.outcome === "account_paused") {
-      // Return the rest of this batch to the queue.
+    /*
+     * STOP
+     *
+     * Campaign was stopped/completed, or another condition explicitly
+     * requested the account processor to stop.
+     */
+    if (result.outcome === "stop") {
+      const rest = batch.slice(i + 1).map((r) => r.id);
+
+      if (rest.length) {
+        await prisma.campaignRecipient
+          .updateMany({
+            where: {
+              id: { in: rest },
+              status: "processing",
+            },
+            data: {
+              status: "pending",
+              updatedAt: new Date(),
+            },
+          })
+          .catch((err) => {
+            console.error(
+              `⚠️ [${ctx.account.email}] failed to release remaining ` +
+                `batch rows: ${err.message}`,
+            );
+          });
+      }
+
+      console.log(
+        `⏹ [${ctx.account.email}] batch stopped — ` +
+          `${rest.length} remaining recipient(s) returned to pending`,
+      );
+
+      return "stop";
+    }
+
+    /*
+     * ACCOUNT ERROR / PAUSE
+     * Stop processing so `processAccountBatched` exits and the queue unlocks.
+     */
+    if (
+      result.outcome === "account_error" ||
+      result.outcome === "account_paused"
+    ) {
       const rest = batch.slice(i + 1).map((r) => r.id);
       if (rest.length) {
         await prisma.campaignRecipient
@@ -1293,18 +1589,36 @@ async function runBatch(batch, ctx) {
             where: { id: { in: rest }, status: "processing" },
             data: { status: "pending", updatedAt: new Date() },
           })
-          .catch(() => {});
+          .catch((err) => {
+            console.error(
+              `⚠️ [${ctx.account.email}] failed to release rows: ${err.message}`,
+            );
+          });
       }
-      // A paused account goes back to the claim loop, which waits.
-      return result.outcome === "stop" ? "stop" : "continue";
+      console.warn(
+        `⏸️ [${ctx.account.email}] account unavailable — stopping processor. Released ${rest.length} rows to pending.`,
+      );
+      return "stop";
     }
 
-    if (result.retryDelayMs) await sleep(result.retryDelayMs);
+    /*
+     * Retry delay requested by processRecipient().
+     */
+    if (result.retryDelayMs) {
+      await sleep(result.retryDelayMs);
+    }
 
-    // Pacing only after a real send attempt.
-    if (!["skipped", "suppressed"].includes(result.outcome))
+    /*
+     * Pacing only after a real send attempt.
+     *
+     * Skipped/suppressed recipients should not consume the normal
+     * sending delay.
+     */
+    if (!["skipped", "suppressed"].includes(result.outcome)) {
       await sleep(ctx.delayPerEmail);
+    }
   }
+
   return "continue";
 }
 
@@ -1324,12 +1638,16 @@ async function processAccountBatched({
 
   try {
     const primary = await senders.get(accountId);
+
     if (!primary) {
-      console.error(`❌ Invalid or missing SMTP account: ${accountId}`);
+      console.error(
+        `❌ Campaign ${campaignId}: invalid or missing SMTP account ${accountId}`,
+      );
       return;
     }
 
     const { account, transporter, fromEmail } = primary;
+
     const limit = getLimit(account.provider || "", account.id, customLimits);
 
     const ctx = {
@@ -1343,31 +1661,127 @@ async function processAccountBatched({
       senders,
       limit,
       delayPerEmail: (60 * 60 * 1000) / Math.max(limit, 1),
+
+      // Runtime flags used by claimNextBatch().
+      pauseLogged: false,
+      capLogged: false,
+      stateLogged: false,
     };
 
     const numericAccountId = Number(accountId);
 
-    while (true) {
-      const next = await globalAccountLimit(() =>
-        claimNextBatch({
-          campaignId,
-          accountId: numericAccountId,
-          userId,
-          ctx,
-        }),
-      );
+    console.log(
+      `▶️ Campaign ${campaignId}: starting account processor ` +
+        `${account.email} (accountId=${numericAccountId}, limit=${limit})`,
+    );
 
-      if (next.action === "stop" || next.action === "done") return;
+    while (true) {
+      let next;
+
+      try {
+        next = await globalAccountLimit(() =>
+          claimNextBatch({
+            campaignId,
+            accountId: numericAccountId,
+            userId,
+            ctx,
+          }),
+        );
+      } catch (err) {
+        console.error(
+          `❌ Campaign ${campaignId} [${account.email}] ` +
+            `claim processor error: ${err.message}`,
+        );
+
+        // Do not kill the entire worker because one account's claim failed.
+        await sleep(5000);
+        continue;
+      }
+
+      // Campaign stopped / completed / account paused.
+      //
+      // claimNextBatch() returns "stop" when:
+      //   - campaign is no longer sending, OR
+      //   - this sending account has been paused.
+      //
+      // IMPORTANT:
+      // Do not wait forever here. Exit this account processor so that
+      // a paused/problematic account cannot hold the campaign open.
+      if (next.action === "stop") {
+        console.log(
+          `⏹ Campaign ${campaignId}: stopping account processor ` +
+            `${account.email}`,
+        );
+        return;
+      }
+
+      // No pending recipients remain for this account.
+      if (next.action === "done") {
+        console.log(
+          `✅ Campaign ${campaignId}: account ${account.email} ` +
+            `has no pending recipients`,
+        );
+        return;
+      }
+
+      // Temporary condition:
+      // database check failed, another worker currently owns rows,
+      // daily limit reached, etc.
       if (next.action === "wait") {
         await sleep(next.ms);
         continue;
       }
 
-      const r = await runBatch(next.batch, ctx);
-      if (r === "stop") return;
+      // We received a batch to send.
+      if (next.action === "send") {
+        if (!Array.isArray(next.batch) || next.batch.length === 0) {
+          console.warn(
+            `⚠️ Campaign ${campaignId} [${account.email}] ` +
+              `received an empty send batch — retrying`,
+          );
+
+          await sleep(2000);
+          continue;
+        }
+
+        let result;
+
+        try {
+          result = await runBatch(next.batch, ctx);
+        } catch (err) {
+          console.error(
+            `❌ Campaign ${campaignId} [${account.email}] ` +
+              `batch failed: ${err.message}`,
+          );
+
+          // runBatch() should normally handle individual recipient
+          // failures itself. If an unexpected batch-level error occurs,
+          // wait briefly and allow the next worker iteration to recover
+          // processing rows through the stuck-row recovery mechanism.
+          await sleep(5000);
+          continue;
+        }
+
+        // runBatch() can explicitly tell this account processor to stop.
+        if (result === "stop") {
+          console.log(
+            `⏹ Campaign ${campaignId}: runBatch requested stop for ` +
+              `${account.email}`,
+          );
+          return;
+        }
+      }
     }
   } finally {
-    senders.closeAll();
+    // Always close/release sender resources for this account processor.
+    try {
+      senders.closeAll();
+    } catch (err) {
+      console.error(
+        `⚠️ Campaign ${campaignId}: failed to close sender cache ` +
+          `for account ${accountId}: ${err.message}`,
+      );
+    }
   }
 }
 
@@ -1475,6 +1889,7 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
   // Personalisation: {{firstName}}, {{company|your team}} … (Phase 3)
   const needsVars = hasMergeFields(rawSubject) || hasMergeFields(rawBody);
   const vars = needsVars ? await mergeVarsFor(recipient.email) : null;
+
   const personalSubject = needsVars
     ? renderMergeFields(rawSubject || "", vars, { html: false })
     : rawSubject;
@@ -1485,9 +1900,11 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
   let body = normalizeHtmlForEmail(
     needsVars ? renderMergeFields(rawBody || "", vars) : rawBody || "",
   );
+
   const baseStyles = extractBaseStyles(body);
 
   const unsafeColors = ["#fff", "#ffffff", "white", "transparent"];
+
   if (
     !baseStyles.color ||
     unsafeColors.includes(baseStyles.color.toLowerCase())
@@ -1507,13 +1924,16 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
     recipientId: recipient.id,
     fromEmail,
   });
+
   const html = buildNormalEmailHtml(
     body,
     signature,
     baseStyles,
     unsub.footerHtml,
   );
+
   const text = toPlainText(html);
+
   const messageId = buildCampaignMessageId(
     campaign.id,
     recipient.id,
@@ -1536,12 +1956,22 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
           ...unsub.headers,
         },
       }),
-    { retries: 3, attemptTimeoutMs: 20000 },
+    {
+      retries: 3,
+      attemptTimeoutMs: 20000,
+      transporter,
+    },
   );
 
-  // The email is out. Record that FIRST — if this failed and we threw, the
-  // row would go back to "pending" and the person would get it twice.
+  /*
+   * The SMTP server accepted the email.
+   *
+   * Record the send before doing the remaining non-critical logging.
+   * If markSent() fails, it throws alreadySent=true so the recipient
+   * will not be sent again.
+   */
   recordAccountSend(account.id);
+
   await markSent(recipient.id, {
     accountId: account.id,
     sentBodyHtml: html,
@@ -1549,6 +1979,7 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
     sentFromEmail: fromEmail,
     sendingIp: smtpIp,
   });
+
   recordDailySend(campaign);
 
   await logSentMessage({
@@ -1799,7 +2230,11 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
           messageId,
           headers,
         }),
-      { retries: 3, attemptTimeoutMs: 20000 },
+      {
+        retries: 3,
+        attemptTimeoutMs: 20000,
+        transporter: actualTransporter,
+      },
     );
   } catch (err) {
     if (isQuotaError(err) || isAccountAuthError(err)) {
@@ -2082,9 +2517,16 @@ async function _sendBulkCampaignInner(campaignId) {
     };
 
   // ── 7. Dispatch per-account loops ──────────────────────────────────────
+  // Fetch ALL accounts ever mapped to this campaign to spin up active worker pools.
+  const allCampaignAccounts = await prisma.campaignRecipient.findMany({
+    where: { campaignId },
+    select: { accountId: true },
+    distinct: ["accountId"],
+  });
+
   const accountIds = [
     ...new Set(
-      pendingRecipients
+      allCampaignAccounts
         .map((r) => r.accountId)
         .filter(Boolean)
         .map(Number),
@@ -2092,16 +2534,22 @@ async function _sendBulkCampaignInner(campaignId) {
   ];
 
   if (!accountIds.length) {
-    await failCampaign(
-      campaignId,
-      "No sender accounts assigned to pending recipients",
-    );
+    await failCampaign(campaignId, "No sender accounts assigned to campaign");
     return;
   }
 
+  // High-visibility telemetry log for debugging
+  const initStats = await prisma.campaignRecipient.groupBy({
+    by: ["status"],
+    where: { campaignId },
+    _count: { _all: true },
+  });
+  const printStats = initStats
+    .map((s) => `${s.status}: ${s._count._all}`)
+    .join(" | ");
+
   console.log(
-    `🚀 Campaign ${campaignId}: ${count} pending across ${accountIds.length} account(s); ` +
-      `shared send cap ${ACCOUNT_CONCURRENCY}`,
+    `🚀 Campaign ${campaignId} Dispatcher: \n   Accounts: ${accountIds.length} \n   Stats: ${printStats}`,
   );
 
   // Free the big arrays before the long-running loops.
