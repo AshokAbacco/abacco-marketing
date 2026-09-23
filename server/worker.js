@@ -28,6 +28,7 @@ const { startCampaignScheduler } =
 const {
   sendBulkCampaign,
   isCampaignActive,
+  getActiveCampaignIds,
   flushDailyLog,
   MAX_TRANSIENT_RETRIES,
 } = await import("./src/services/campaignMailer.service.js");
@@ -212,6 +213,24 @@ async function resumeSendingCampaigns() {
   }
 }
 
+/**
+ * Heartbeat: lets the CRM tell "worker is down, nothing can send" apart
+ * from a campaign that is simply waiting (daily cap, cooldown, …).
+ */
+const WORKER_HEARTBEAT_KEY = "worker.heartbeat";
+async function writeHeartbeat() {
+  const value = {
+    at: new Date().toISOString(),
+    pid: process.pid,
+    activeCampaigns: getActiveCampaignIds(),
+  };
+  await prisma.crmSetting.upsert({
+    where: { key: WORKER_HEARTBEAT_KEY },
+    update: { value },
+    create: { key: WORKER_HEARTBEAT_KEY, value },
+  });
+}
+
 /** Optional storage cleanup — see FOLLOWUP_BODY_RETENTION_DAYS. */
 async function trimFollowupBodies() {
   if (FOLLOWUP_BODY_RETENTION_DAYS <= 0) return;
@@ -273,6 +292,7 @@ async function startWorker() {
   );
 
   every(RESUME_TICK_MS, "resumeSendingCampaigns", resumeSendingCampaigns);
+  every(ms("WORKER_HEARTBEAT_MS", 30_000), "heartbeat", writeHeartbeat)();
   every(RECOVERY_TICK_MS, "recoverStuckEmails", recoverStuckEmails);
   every(DELETION_TICK_MS, "resumeAccountDeletions", () =>
     resumeAccountDeletions(prisma),

@@ -9,10 +9,10 @@
 //    squishing columns unreadably). On small screens it's replaced with a
 //    stacked card list — same data, same actions, no sideways scrolling
 //    required to read a single row.
-//  - CampaignProgress's inner table also got a horizontal-scroll wrapper —
-//    it has 6 columns and was overflowing raw before.
+//  - Expanded rows show CampaignStatusPanel (why pending / waiting, ETA,
+//    per-mailbox state). There is no Pause button any more.
 //  - Stat cards go 2-up on mobile instead of stacking to one column.
-import { useState, useEffect, useMemo, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import {
   LayoutDashboard,
   Send,
@@ -25,22 +25,19 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronUp,
-  Clock,
-  Play,
-  CheckCircle2,
   Loader2,
   Search,
   Zap,
   Target,
   Award,
   StopCircle,
-  PauseCircle,
   RotateCcw,
 } from "lucide-react";
 import CreateCampaign from "./campaignPages/CreateCampaign";
 import CampaignDetail from "./campaignPages/CampaignDetail";
 import CampaignView from "./campaignPages/Schedulemodal";
 import DailyLimitBanner from "./campaignPages/DailyLimitBanner";
+import CampaignStatusPanel from "./campaignPages/CampaignStatusPanel";
 
 import { api } from "../utils/api";
 import { startVisiblePolling } from "../utils/polling";
@@ -132,227 +129,6 @@ export default function CampaignList() {
   );
 }
 
-const CampaignProgress = ({ campaignId }) => {
-  const [rows, setRows] = useState([]);
-
-  useEffect(() => {
-    fetchProgress();
-    // 10 s is plenty for a progress bar; paused in background tabs.
-    return startVisiblePolling(fetchProgress, 10000);
-  }, [campaignId]);
-
-  const fetchProgress = async () => {
-    try {
-      const res = await api.get(
-        `${API_BASE_URL}/api/campaigns/${campaignId}/progress`,
-      );
-      if (res.data.success) setRows(res.data.data);
-    } catch (error) {
-      console.error("Failed to fetch progress:", error);
-    }
-  };
-
-  return (
-    <div className="mt-4 bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 rounded-2xl p-4 sm:p-5 border border-sky-200/50 shadow-sm">
-      <div className="flex items-center gap-2 mb-4">
-        <div className="p-1.5 bg-sky-100 rounded-lg">
-          <Activity className="text-slate-600" size={16} />
-        </div>
-        <h4 className="text-sm font-bold text-sky-900">
-          Live Progress Tracking
-        </h4>
-        <span className="ml-auto text-xs bg-sky-100 text-sky-700 px-2 py-1 rounded-full font-medium">
-          Real-time
-        </span>
-      </div>
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-sky-100 shadow-sm overflow-x-auto">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="bg-gradient-to-r from-sky-50 to-blue-50 border-b border-sky-100">
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                Email
-              </th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                Domain
-              </th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                Processing
-              </th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                Completed
-              </th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                Sending IP
-              </th>
-              <th className="px-4 py-3.5 text-left text-xs font-bold text-sky-600 uppercase tracking-wide">
-                ETA
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-sky-100">
-            {rows.map((r) => (
-              <tr
-                key={r.email}
-                className="hover:bg-sky-50/50 transition-colors"
-              >
-                <td className="px-4 py-3.5 text-slate-800 font-medium">
-                  {r.email}
-                </td>
-                <td className="px-4 py-3.5 text-slate-600">{r.domain}</td>
-                <td className="px-4 py-3.5">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-200">
-                    {r.processing}
-                  </span>
-                </td>
-                <td className="px-4 py-3.5">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-sky-100 text-sky-700 border border-sky-200">
-                    {r.completed}
-                  </span>
-                </td>
-                <td className="px-4 py-3.5 text-slate-600">
-                  {r.sendingIp || "—"}
-                </td>
-                <td className="px-4 py-3.5">
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-semibold border border-purple-200 whitespace-nowrap">
-                    <Clock size={12} />
-                    {r.processing > 0 ? `Sending  • ETA ${r.eta}` : `Completed`}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-const CampaignTiming = ({ campaign }) => {
-  // ✅ FIX: estimatedCompletion is calculated ONCE at campaign creation in the
-  // controller (recipients / hourlyCapacity) and stored in DB.
-  // Do NOT recalculate on the frontend — the old live-rate formula caused the
-  // Est. Completion time to keep shifting every 5s as the observed rate
-  // fluctuated. The per-account countdown ETA lives in the progress table below.
-  const isActive = campaign.status === "sending";
-
-  const timing = useMemo(() => {
-    const isCompleted =
-      campaign.status === "completed" ||
-      campaign.status === "completed_with_errors";
-    if (!isActive && !isCompleted) {
-      return {
-        startTime: null,
-        endTime: null,
-        estimatedCompletion: null,
-        duration: null,
-      };
-    }
-
-    // Use campaign.createdAt as start time — always available and never stale.
-    const startTime = campaign.createdAt ? new Date(campaign.createdAt) : null;
-
-    // End time: from recipients for completed campaigns
-    const endTime =
-      isCompleted && campaign.lastSentAt ? new Date(campaign.lastSentAt) : null;
-
-    // ✅ Always use the DB-stored estimatedCompletion — fixed at creation, never drifts.
-    const estimatedCompletion = campaign.estimatedCompletion
-      ? new Date(campaign.estimatedCompletion)
-      : null;
-
-    let duration = null;
-    if (startTime && endTime) {
-      const durationMs = endTime - startTime;
-      const hours = Math.floor(durationMs / 3600000);
-      const minutes = Math.floor((durationMs % 3600000) / 60000);
-      duration = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-    }
-
-    return { startTime, endTime, duration, estimatedCompletion };
-  }, [campaign, isActive]);
-
-  return (
-    <div className="bg-gradient-to-br from-sky-50 via-blue-50 to-blue-50 rounded-2xl p-4 sm:p-5 border border-sky-200/50 shadow-sm">
-      <div className="flex items-center gap-2 mb-4">
-        <div className="p-1.5 bg-sky-100 rounded-lg">
-          <Clock className="text-slate-600" size={16} />
-        </div>
-        <h4 className="text-sm font-bold text-sky-700">Campaign Timeline</h4>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {timing.startTime && (
-          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-sky-200/50 shadow-sm hover:shadow-md transition-all hover:border-sky-300">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="p-1 bg-sky-100 rounded-lg">
-                <Play className="text-slate-600" size={14} />
-              </div>
-              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">
-                Start Time
-              </span>
-            </div>
-            <p className="text-sm font-bold text-slate-900">
-              {timing.startTime.toLocaleString("en-US", {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })}
-            </p>
-          </div>
-        )}
-
-        {timing.endTime && (
-          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-sky-200/50 shadow-sm hover:shadow-md transition-all hover:border-sky-300">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="p-1 bg-sky-100 rounded-lg">
-                <CheckCircle2 className="text-slate-600" size={14} />
-              </div>
-              <span className="text-xs font-bold text-sky-700 uppercase tracking-wide">
-                End Time
-              </span>
-            </div>
-            <p className="text-sm font-bold text-slate-900">
-              {timing.endTime.toLocaleString("en-US", {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })}
-            </p>
-          </div>
-        )}
-
-        {timing.estimatedCompletion && (
-          <div className="group relative bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-amber-200/50 shadow-sm hover:shadow-md transition-all hover:border-amber-300">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="p-1 bg-amber-100 rounded-lg">
-                <Activity
-                  className={`text-amber-600 ${isActive ? "animate-pulse" : ""}`}
-                  size={14}
-                />
-              </div>
-              <span className="text-xs font-bold text-amber-700 uppercase tracking-wide">
-                {isActive ? "Est. Completion" : "Was Est. At"}
-              </span>
-            </div>
-            <p className="text-sm font-bold text-slate-900">
-              {timing.estimatedCompletion.toLocaleString("en-US", {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })}
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
 const TabButton = ({ active, onClick, icon, label }) => (
   <button
     onClick={onClick}
@@ -371,9 +147,14 @@ const TabButton = ({ active, onClick, icon, label }) => (
   </button>
 );
 
+// Campaigns whose one-line "why" is shown right in the list.
+const LIVE_STATUSES = ["sending", "scheduled", "stopped", "paused", "failed"];
+
 const getCampaignLabel = (campaign) => {
   if (campaign.status === "sending") return "Sending";
-  if (campaign.status === "stopped") return "Stopped";
+  if (campaign.status === "stopped" || campaign.status === "paused")
+    return "Stopped";
+  if (campaign.status === "failed") return "Failed";
   if (
     campaign.status === "completed" ||
     campaign.status === "completed_with_errors"
@@ -392,6 +173,12 @@ const STATUS_CONFIG = {
     icon: <Activity size={14} className="animate-pulse" />,
   },
   stopped: {
+    bg: "bg-gradient-to-br from-red-50 to-orange-50",
+    text: "text-red-700",
+    border: "border-red-200",
+    icon: <StopCircle size={14} />,
+  },
+  failed: {
     bg: "bg-gradient-to-br from-red-50 to-orange-50",
     text: "text-red-700",
     border: "border-red-200",
@@ -473,7 +260,7 @@ const getCampaignMeta = (campaign) => {
       ? "bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200"
       : label === "Sending"
         ? "bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 border-blue-200"
-        : label === "Stopped"
+        : label === "Stopped" || label === "Failed"
           ? "bg-gradient-to-br from-red-50 to-orange-50 text-red-700 border-red-200"
           : "bg-gradient-to-br from-sky-50 to-blue-50 text-sky-700 border-sky-200";
 
@@ -567,34 +354,13 @@ const DashboardTab = () => {
     }
   };
 
-  const stopCampaign = async (id) => {
-    try {
-      const confirmStop = window.confirm(
-        "Are you sure you want to stop this campaign?",
-      );
-      if (!confirmStop) return;
-
-      const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/stop`);
-
-      if (res.data.success) {
-        alert("Campaign stopped successfully!");
-        fetchCampaigns(filter, customDate);
-      } else {
-        alert(res.data.message || "Failed to stop campaign");
-      }
-    } catch (error) {
-      console.error("Stop campaign error:", error);
-      alert(error.response?.data?.message || "Network or server error");
-    }
-  };
-
   // Resumes a paused ("stopped") campaign from where it left off — the
   // backend only ever re-selects "pending" recipients, so completed sends
   // are never repeated.
   const resendCampaign = async (id) => {
     try {
       const confirmResend = window.confirm(
-        "Resend this campaign? It will pick up exactly where it left off — recipients who already received it won't be emailed again.",
+        "Start this campaign again? It continues exactly where it left off — recipients who already received it won't be emailed again.",
       );
       if (!confirmResend) return;
 
@@ -887,6 +653,12 @@ const DashboardTab = () => {
                             >
                               {label}
                             </span>
+                            {LIVE_STATUSES.includes(campaign.status) && (
+                              <CampaignStatusPanel
+                                campaignId={campaign.id}
+                                compact
+                              />
+                            )}
                           </td>
 
                           <td className="px-6 py-1">
@@ -946,10 +718,7 @@ const DashboardTab = () => {
                           </td>
                           <td className="px-6 py-4 text-center">
                             <div className="flex flex-wrap gap-2 justify-center">
-                              {(campaign.status === "sending" ||
-                                campaign.status === "completed" ||
-                                campaign.status ===
-                                  "completed_with_errors") && (
+                              {campaign.status !== "draft" && (
                                 <button
                                   onClick={() => toggleRow(campaign.id)}
                                   className="inline-flex items-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-100 to-blue-100 hover:from-sky-200 hover:to-blue-200 text-sky-700 rounded-xl transition-all text-xs font-bold border border-sky-200 shadow-sm transform hover:scale-105"
@@ -986,66 +755,48 @@ const DashboardTab = () => {
                                 )}
                               </button>
 
-                              {/* 🔥 PAUSE BUTTON — stops the send immediately;
-                              already-sent recipients are untouched and the
-                              rest stay "pending" for Resend to pick up. */}
-                              {campaign.status === "sending" && (
-                                <button
-                                  onClick={() => stopCampaign(campaign.id)}
-                                  className="inline-flex items-center gap-1 px-3 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs hover:shadow-lg shadow-orange-500/30 transition-all font-bold transform hover:scale-105"
-                                >
-                                  <PauseCircle size={14} />
-                                  Pause
-                                </button>
-                              )}
-
-                              {/* 🔄 RESEND BUTTON — resumes a paused campaign
-                              from where it stopped, no duplicate sends. */}
-                              {campaign.status === "stopped" && (
-                                <button
-                                  onClick={() => resendCampaign(campaign.id)}
-                                  disabled={resending === campaign.id}
-                                  className="inline-flex items-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
-                                >
-                                  {resending === campaign.id ? (
-                                    <>
-                                      <Loader2
-                                        size={12}
-                                        className="animate-spin"
-                                      />
-                                      Resending...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <RotateCcw size={14} />
-                                      Resend
-                                    </>
-                                  )}
-                                </button>
-                              )}
+                              {/* START AGAIN — only for campaigns stopped by the
+                              old Pause button (there is no Pause any more). */}
+                              {["stopped", "paused", "failed"].includes(
+                                campaign.status,
+                              ) &&
+                                campaign.pendingCount > 0 && (
+                                  <button
+                                    onClick={() => resendCampaign(campaign.id)}
+                                    disabled={resending === campaign.id}
+                                    className="inline-flex items-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs hover:shadow-lg shadow-sky-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold transform hover:scale-105"
+                                  >
+                                    {resending === campaign.id ? (
+                                      <>
+                                        <Loader2
+                                          size={12}
+                                          className="animate-spin"
+                                        />
+                                        Starting...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <RotateCcw size={14} />
+                                        Start again
+                                      </>
+                                    )}
+                                  </button>
+                                )}
                             </div>
                           </td>
                         </tr>
-                        {isExpanded &&
-                          (campaign.status === "sending" ||
-                            campaign.status === "completed" ||
-                            campaign.status === "completed_with_errors") && (
-                            <tr>
-                              <td
-                                colSpan={5}
-                                className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30"
-                              >
-                                <div className="py-5 space-y-4">
-                                  <CampaignTiming campaign={campaign} />
-                                  {campaign.status === "sending" && (
-                                    <CampaignProgress
-                                      campaignId={campaign.id}
-                                    />
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
+                        {isExpanded && campaign.status !== "draft" && (
+                          <tr>
+                            <td
+                              colSpan={5}
+                              className="px-6 py-0 bg-gradient-to-br from-sky-50/30 via-blue-50/30 to-blue-50/30"
+                            >
+                              <div className="py-5 space-y-4">
+                                <CampaignStatusPanel campaignId={campaign.id} />
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                       </Fragment>
                     );
                   })}
@@ -1087,6 +838,9 @@ const DashboardTab = () => {
                           {date}
                         </span>
                       </div>
+                      {LIVE_STATUSES.includes(campaign.status) && (
+                        <CampaignStatusPanel campaignId={campaign.id} compact />
+                      )}
                     </div>
                   </div>
 
@@ -1122,9 +876,7 @@ const DashboardTab = () => {
                   </div>
 
                   <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-sky-100">
-                    {(campaign.status === "sending" ||
-                      campaign.status === "completed" ||
-                      campaign.status === "completed_with_errors") && (
+                    {campaign.status !== "draft" && (
                       <button
                         onClick={() => toggleRow(campaign.id)}
                         className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-100 to-blue-100 text-sky-700 rounded-xl transition-all text-xs font-bold border border-sky-200"
@@ -1143,35 +895,28 @@ const DashboardTab = () => {
                       </button>
                     )}
 
-                    {campaign.status === "sending" && (
-                      <button
-                        onClick={() => stopCampaign(campaign.id)}
-                        className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl text-xs font-bold"
-                      >
-                        <PauseCircle size={14} />
-                        Pause
-                      </button>
-                    )}
-
-                    {campaign.status === "stopped" && (
-                      <button
-                        onClick={() => resendCampaign(campaign.id)}
-                        disabled={resending === campaign.id}
-                        className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"
-                      >
-                        {resending === campaign.id ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" />
-                            Resending...
-                          </>
-                        ) : (
-                          <>
-                            <RotateCcw size={14} />
-                            Resend
-                          </>
-                        )}
-                      </button>
-                    )}
+                    {["stopped", "paused", "failed"].includes(
+                      campaign.status,
+                    ) &&
+                      campaign.pendingCount > 0 && (
+                        <button
+                          onClick={() => resendCampaign(campaign.id)}
+                          disabled={resending === campaign.id}
+                          className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"
+                        >
+                          {resending === campaign.id ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" />
+                              Starting...
+                            </>
+                          ) : (
+                            <>
+                              <RotateCcw size={14} />
+                              Start again
+                            </>
+                          )}
+                        </button>
+                      )}
 
                     <button
                       onClick={() => handleDelete(campaign.id)}
@@ -1186,17 +931,11 @@ const DashboardTab = () => {
                     </button>
                   </div>
 
-                  {isExpanded &&
-                    (campaign.status === "sending" ||
-                      campaign.status === "completed" ||
-                      campaign.status === "completed_with_errors") && (
-                      <div className="mt-3 space-y-3">
-                        <CampaignTiming campaign={campaign} />
-                        {campaign.status === "sending" && (
-                          <CampaignProgress campaignId={campaign.id} />
-                        )}
-                      </div>
-                    )}
+                  {isExpanded && campaign.status !== "draft" && (
+                    <div className="mt-3 space-y-3">
+                      <CampaignStatusPanel campaignId={campaign.id} />
+                    </div>
+                  )}
                 </div>
               );
             })}

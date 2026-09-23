@@ -28,6 +28,7 @@ import {
 } from "./automation.service.js";
 import {
   getSendingDayStart,
+  msUntilNextSendingDay,
   getAccountSentToday,
   getAccountCap,
   recordAccountSend,
@@ -56,13 +57,67 @@ function getAccountState(accountId) {
   return state || { status: ACCOUNT_STATES.AVAILABLE };
 }
 
+/**
+ * Put a mailbox into a TEMPORARY waiting state. Every state now expires on
+ * its own (there is no permanent / manual-resume state any more), and the
+ * state is written to EmailAccount.sendingCooldownUntil/Reason so that:
+ *   • the CRM can show WHY a mailbox is waiting and WHEN it resumes, and
+ *   • a worker restart keeps honouring the cooldown.
+ */
 function setAccountState(accountId, status, durationMs, reason) {
-  accountStateCache.set(Number(accountId), {
-    status,
-    until: durationMs ? Date.now() + durationMs : null,
-    reason,
-  });
+  const id = Number(accountId);
+  const ms = Math.max(60_000, Number(durationMs) || 0);
+  const until = Date.now() + ms;
+  accountStateCache.set(id, { status, until, reason });
+  pauseCache.delete(id);
+  prisma.emailAccount
+    .update({
+      where: { id },
+      data: {
+        sendingCooldownUntil: new Date(until),
+        sendingCooldownReason: `${status}: ${String(reason || "").slice(0, 250)}`,
+      },
+      select: { id: true },
+    })
+    .catch((err) =>
+      console.error(
+        `⚠️ Could not save cooldown for account ${id}:`,
+        err.message,
+      ),
+    );
 }
+
+/* ── Shared per-mailbox pacing ────────────────────────────────────────────
+   The hourly limit belongs to the MAILBOX, not to one campaign. Every
+   campaign that uses a mailbox reserves its next send slot here, so two
+   campaigns sharing a mailbox split its hourly limit instead of doubling
+   it. This is what makes it safe to select ALL mailboxes in every
+   campaign (the old "account is busy in another campaign" lock is gone). */
+const mailboxNextSlot = new Map(); // accountId → epoch ms of next free slot
+
+async function waitForMailboxSlot(accountId, delayMs, isStillWanted) {
+  for (;;) {
+    const now = Date.now();
+    const next = mailboxNextSlot.get(accountId) || 0;
+    if (next <= now) {
+      mailboxNextSlot.set(accountId, now + delayMs); // reserve (sync = atomic)
+      return true;
+    }
+    await sleep(Math.min(next - now, 60_000));
+    if (isStillWanted && !(await isStillWanted())) return false;
+  }
+}
+
+function extendMailboxSlot(accountId, extraMs) {
+  if (extraMs <= 0) return;
+  const cur = mailboxNextSlot.get(accountId) || Date.now();
+  mailboxNextSlot.set(accountId, cur + extraMs);
+}
+
+// Long waits are chopped into chunks so a deleted campaign / raised cap /
+// fixed password is noticed quickly.
+const MAX_WAIT_CHUNK_MS = Number(process.env.MAX_WAIT_CHUNK_MS) || 5 * 60_000;
+const capWait = (ms) => Math.max(5_000, Math.min(ms, MAX_WAIT_CHUNK_MS));
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SECTION 1 — GLOBAL DAILY LIMIT HELPERS
@@ -427,20 +482,15 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-const SAFE_LIMITS = {
-  gmail: 50,
-  gsuite: 80,
-  rediff: 40,
-  amazon: 60,
-  custom: 60,
-};
+// Default emails per hour per mailbox (overridable per campaign/mailbox
+// from the Create Campaign screen, or globally with DEFAULT_HOURLY_LIMIT).
+export const DEFAULT_HOURLY_LIMIT =
+  Number(process.env.DEFAULT_HOURLY_LIMIT) || 10;
 
 function getLimit(provider = "", accountId = null, customLimits = {}) {
-  if (accountId && customLimits[accountId]) {
-    return customLimits[accountId];
-  }
-  const key = provider.toLowerCase();
-  return SAFE_LIMITS[key] || SAFE_LIMITS.custom;
+  const custom = Number(accountId && customLimits?.[accountId]);
+  if (Number.isFinite(custom) && custom > 0) return custom;
+  return DEFAULT_HOURLY_LIMIT;
 }
 
 function getDomainLabel(email = "") {
@@ -812,7 +862,15 @@ export function isAccountAuthError(err) {
   );
 }
 
-const QUOTA_PAUSE_HOURS = Number(process.env.QUOTA_PAUSE_HOURS) || 24;
+const QUOTA_PAUSE_HOURS = Number(process.env.QUOTA_PAUSE_HOURS) || 24; // legacy, unused
+// Provider said "slow down" (421 / 4.7.28 / rate limited): short rest.
+const RATE_LIMIT_COOLDOWN_MS =
+  (Number(process.env.RATE_LIMIT_COOLDOWN_MIN) || 15) * 60_000;
+// Login failed: retry this often (so a fixed password resumes by itself).
+const AUTH_RETRY_MS = (Number(process.env.AUTH_RETRY_MIN) || 30) * 60_000;
+// Only these mean the mailbox is done for the whole day.
+const DAILY_QUOTA_RE =
+  /(5\.4\.5|user sending quota|daily (user )?sending|exceeded (the )?daily (limit|quota))/i;
 // How often a loop waiting on a paused account re-checks it.
 const PAUSED_RECHECK_MS =
   Number(process.env.PAUSED_ACCOUNT_RECHECK_MS) || 60_000;
@@ -837,6 +895,8 @@ async function getAccountPause(accountId) {
       sendingPausedAt: true,
       sendingPausedReason: true,
       sendingPausedUntil: true,
+      sendingCooldownUntil: true,
+      sendingCooldownReason: true,
     },
   });
   const expired =
@@ -847,6 +907,17 @@ async function getAccountPause(accountId) {
     at: Date.now(),
   };
   pauseCache.set(accountId, value);
+
+  // A cooldown saved by a previous worker run is honoured after a restart.
+  const cd = row?.sendingCooldownUntil;
+  if (cd && cd > new Date() && !accountStateCache.has(Number(accountId))) {
+    const [kind] = String(row.sendingCooldownReason || "COOLDOWN").split(":");
+    accountStateCache.set(Number(accountId), {
+      status: ACCOUNT_STATES[kind] || ACCOUNT_STATES.COOLDOWN,
+      until: cd.getTime(),
+      reason: row.sendingCooldownReason,
+    });
+  }
   return value;
 }
 
@@ -1008,29 +1079,19 @@ async function sendWithRetry(
 
 const CAMPAIGN_VERBOSE = process.env.CAMPAIGN_VERBOSE === "true";
 
-// function getControlledDelay({ limit, remainingEmails, estimatedCompletion }) {
-//   // Base delay from the provider's hourly limit (strict ceiling on speed).
-//   const baseDelay = (60 * 60 * 1000) / Math.max(limit, 1);
-
-//   // Speed up (never beyond the hourly limit) if behind schedule.
-//   if (estimatedCompletion) {
-//     const remainingTimeMs =
-//       new Date(estimatedCompletion).getTime() - Date.now();
-//     if (remainingTimeMs > 0 && remainingEmails > 0) {
-//       const requiredDelay = remainingTimeMs / remainingEmails;
-//       return Math.max(200, Math.min(baseDelay, requiredDelay));
-//     }
-//   }
-//   return baseDelay;
-// }
-
 function getControlledDelay({ limit }) {
-  // Strict pacing from the per-account hourly limit set in the UI.
-  // Never speed up to "catch up" to estimatedCompletion — that is only
-  // an estimate for display; the /hr limit is what protects the mailbox.
-  const perHour = Math.max(Number(limit) || 1, 1);
-  return (60 * 60 * 1000) / perHour;
+  // The hourly limit is a HARD ceiling per mailbox.
+  //
+  // BUG FIXED: this used to "catch up" towards estimatedCompletion using
+  // remainingTime / remainingEmails — but remainingEmails is the WHOLE
+  // campaign's queue, and every mailbox applied that delay on its own. With
+  // 10 mailboxes at 10/hr each mailbox actually sent ~100/hr. Providers then
+  // answered with rate-limit errors, the engine locked the mailbox for 24 h,
+  // and the per-mailbox daily cap was burnt in the first hour — which is
+  // exactly the "campaign paused and never starts again" symptom.
+  return (60 * 60 * 1000) / Math.max(Number(limit) || 1, 1);
 }
+
 function claimSizeFor(delayMs) {
   return Math.max(
     1,
@@ -1105,41 +1166,40 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     return { action: "done" };
   }
 
-  // [4] Check sender/account runtime availability
-  const state = getAccountState(accountId);
-  if (
-    state.status === ACCOUNT_STATES.QUOTA_EXHAUSTED ||
-    state.status === ACCOUNT_STATES.AUTH_ERROR
-  ) {
-    if (!ctx.stateLogged) {
-      console.warn(
-        `⏸️ [${account.email}] state is ${state.status} (${state.reason || "N/A"}) — stopping processor. Queue is released.`,
-      );
-      ctx.stateLogged = true;
-    }
-    return { action: "stop" };
-  }
-  if (state.status === ACCOUNT_STATES.COOLDOWN) {
-    return { action: "wait", ms: Math.max(5000, state.until - Date.now()) };
-  }
-  ctx.stateLogged = false;
-
-  // Fallback to manual DB pause checks
+  // [4] Mailbox availability. Every problem is TEMPORARY: the processor
+  //     waits and retries by itself. Nothing ever needs a manual "resume".
+  //     (Other mailboxes keep draining the shared queue meanwhile.)
+  let pause;
   try {
-    const pause = await getAccountPause(accountId);
-    if (pause.paused) {
-      if (!ctx.pauseLogged) {
-        console.warn(
-          `⏸️ [${account.email}] is manually paused — stopping processor.`,
-        );
-        ctx.pauseLogged = true;
-      }
-      return { action: "stop" };
-    }
-    ctx.pauseLogged = false;
+    pause = await getAccountPause(accountId); // also restores saved cooldowns
   } catch (err) {
     return { action: "wait", ms: 5000 };
   }
+
+  const state = getAccountState(accountId);
+  if (state.status !== ACCOUNT_STATES.AVAILABLE) {
+    if (!ctx.stateLogged) {
+      console.warn(
+        `⏳ [${account.email}] ${state.status} (${state.reason || "N/A"}) — ` +
+          `waiting until ${new Date(state.until).toISOString()}, will retry automatically.`,
+      );
+      ctx.stateLogged = true;
+    }
+    return { action: "wait", ms: capWait((state.until || 0) - Date.now()) };
+  }
+  ctx.stateLogged = false;
+
+  if (pause.paused) {
+    // Only an admin can set this (Deliverability page). Wait, don't exit.
+    if (!ctx.pauseLogged) {
+      console.warn(
+        `⏳ [${account.email}] paused by admin (${pause.reason || "no reason"}) — waiting.`,
+      );
+      ctx.pauseLogged = true;
+    }
+    return { action: "wait", ms: capWait(PAUSED_RECHECK_MS) };
+  }
+  ctx.pauseLogged = false;
 
   // [5] Global daily limit
   let dailyCount;
@@ -1150,12 +1210,16 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   }
 
   if (dailyCount >= DAILY_LIMIT) {
-    const waitMs = msUntilNextWindow();
-    console.log(
-      `🚫 Daily limit reached for user ${userId}. Stopping ${account.email} until next window.`,
-    );
-    return { action: "stop" };
+    if (!ctx.dailyLogged) {
+      console.log(
+        `🚫 Company daily limit reached for user ${userId} (${dailyCount}/${DAILY_LIMIT}). ` +
+          `${account.email} waits for the 5 PM reset.`,
+      );
+      ctx.dailyLogged = true;
+    }
+    return { action: "wait", ms: capWait(msUntilNextWindow()) };
   }
+  ctx.dailyLogged = false;
 
   // [6] This mailbox's own daily cap
   let capRoom = Infinity;
@@ -1169,37 +1233,25 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     if (capRoom <= 0) {
       if (!ctx.capLogged) {
         console.log(
-          `📵 ${account.email} reached daily cap (${sentToday}/${cap}). Stopping processor.`,
+          `📵 ${account.email} reached its daily cap (${sentToday}/${cap}). ` +
+            `Waiting for the 5 PM reset (other mailboxes keep sending).`,
         );
         ctx.capLogged = true;
       }
-      return { action: "stop" }; // Exit processor so campaign isn't held hostage
+      return {
+        action: "wait",
+        ms: capWait(Math.min(msUntilNextSendingDay(), CAP_RECHECK_MS)),
+      };
     }
     ctx.capLogged = false;
   } catch (err) {
     return { action: "wait", ms: 5000 };
   }
 
-  ctx.delayPerEmail = getControlledDelay({ limit: ctx.limit });
-  try {
-    const [row] = await prisma.$queryRaw`
-      SELECT MAX("sentAt") AS last
-      FROM "CampaignRecipient"
-      WHERE "accountId" = ${accountId} AND "sentAt" IS NOT NULL
-    `;
-    if (row?.last) {
-      const waitMs =
-        new Date(row.last).getTime() + ctx.delayPerEmail - Date.now();
-      if (waitMs > 1000) {
-        return { action: "wait", ms: Math.min(waitMs, 60_000) };
-      }
-    }
-  } catch (err) {
-    return { action: "wait", ms: 5000 };
-  }
-
   // [7] Atomic claim (Dynamic reassignment for normal campaigns)
   try {
+    ctx.delayPerEmail = getControlledDelay({ limit: ctx.limit });
+
     const take = Math.max(
       1,
       Math.min(claimSizeFor(ctx.delayPerEmail), capRoom),
@@ -1415,19 +1467,27 @@ async function processRecipient(recipient, ctx) {
     if (err?.accountPaused || isQuotaError(err) || isAccountAuthError(err)) {
       const targetAccountId = err?.accountId || ctx.account.id;
 
-      if (isAccountAuthError(err)) {
+      if (err?.accountPaused) {
+        // Admin pause on another mailbox — claimNextBatch handles the wait.
+      } else if (isAccountAuthError(err)) {
+        // Retried automatically — once the password is fixed, sending
+        // continues on the next attempt without anyone clicking anything.
         setAccountState(
           targetAccountId,
           ACCOUNT_STATES.AUTH_ERROR,
-          null,
+          AUTH_RETRY_MS,
           err.message,
         );
-        await pauseForAccountError(targetAccountId, err).catch(() => {}); // Keep DB pause for Auth UI visibility
       } else if (isQuotaError(err)) {
+        // A real DAILY quota (5.4.5 …) rests until the next sending day;
+        // a plain "slow down / rate limited" only needs a short cooldown.
+        const daily = DAILY_QUOTA_RE.test(
+          `${err?.response || ""} ${err?.message || ""}`,
+        );
         setAccountState(
           targetAccountId,
           ACCOUNT_STATES.QUOTA_EXHAUSTED,
-          QUOTA_PAUSE_HOURS * 3600 * 1000,
+          daily ? msUntilNextSendingDay() : RATE_LIMIT_COOLDOWN_MS,
           err.message,
         );
       } else {
@@ -1615,9 +1675,10 @@ async function runBatch(batch, ctx) {
           });
       }
       console.warn(
-        `⏸️ [${ctx.account.email}] account unavailable — stopping processor. Released ${rest.length} rows to pending.`,
+        `⏳ [${ctx.account.email}] mailbox temporarily unavailable — released ${rest.length} row(s) to pending; ` +
+          `will retry automatically.`,
       );
-      return "stop";
+      return "continue";
     }
 
     /*
@@ -1697,6 +1758,23 @@ async function processAccountBatched({
     while (true) {
       let next;
 
+      // Shared hourly pacing across every campaign using this mailbox.
+      const stillSending = async () =>
+        (await getCampaignStatus(campaignId).catch(() => "sending")) ===
+        "sending";
+      if (
+        !(await waitForMailboxSlot(
+          numericAccountId,
+          ctx.delayPerEmail,
+          stillSending,
+        ))
+      ) {
+        console.log(
+          `⏹ Campaign ${campaignId}: no longer sending — ${account.email} exits`,
+        );
+        return;
+      }
+
       try {
         next = await globalAccountLimit(() =>
           claimNextBatch({
@@ -1753,6 +1831,11 @@ async function processAccountBatched({
 
       // We received a batch to send.
       if (next.action === "send") {
+        // Reserve the rest of this batch's slots on the shared mailbox clock.
+        extendMailboxSlot(
+          numericAccountId,
+          (next.batch.length - 1) * ctx.delayPerEmail,
+        );
         if (!Array.isArray(next.batch) || next.batch.length === 0) {
           console.warn(
             `⚠️ Campaign ${campaignId} [${account.email}] ` +
@@ -2306,6 +2389,10 @@ export function isCampaignActive(campaignId) {
   return activeCampaigns.has(Number(campaignId));
 }
 
+export function getActiveCampaignIds() {
+  return [...activeCampaigns];
+}
+
 export async function sendBulkCampaign(campaignId) {
   campaignId = Number(campaignId);
   if (activeCampaigns.has(campaignId)) return;
@@ -2355,14 +2442,9 @@ async function _sendBulkCampaignInner(campaignId) {
   const { userId } = campaign;
 
   // ── 2. Global gate — daily limit ──────────────────────────────────────
+  // (No up-front sleep any more: each mailbox processor waits for the
+  //  5 PM reset itself, and the CRM shows "waiting for daily reset".)
   const sentToday = await getDailyCount(userId, { fresh: true });
-  if (sentToday >= DAILY_LIMIT) {
-    const waitMs = msUntilNextWindow();
-    console.log(
-      `🚫 Daily limit reached before start of campaign ${campaignId}. Sleeping ${Math.ceil(waitMs / 60000)} min.`,
-    );
-    await sleep(waitMs);
-  }
 
   console.log(
     `📦 Campaign ${campaignId} loaded (type=${campaign.sendType}, sentToday=${sentToday})`,

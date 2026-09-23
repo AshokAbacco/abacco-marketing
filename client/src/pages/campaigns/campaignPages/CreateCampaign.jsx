@@ -127,6 +127,8 @@ const COLOR_FAMILIES = [
 ];
 
 const LIMIT_OPTIONS = [10, 20, 30, 40, 50, 60, 70, 80, 100, 150, 200];
+// Emails per hour per mailbox unless the user picks something else.
+const DEFAULT_HOURLY_LIMIT = 10;
 
 export default function CreateCampaign() {
   const [accounts, setAccounts] = useState([]);
@@ -150,6 +152,11 @@ export default function CreateCampaign() {
   const [lockedLoading, setLockedLoading] = useState(true); // true until first fetch completes
   const fetchLockedRef = useRef(null); // stable ref so dropdown can trigger it
   const [customLimits, setCustomLimits] = useState({});
+  // Limit/hr applied to every selected mailbox without its own override.
+  const [bulkLimit, setBulkLimit] = useState(DEFAULT_HOURLY_LIMIT);
+  // Mailboxes already sending another campaign (allowed — the hourly
+  // limit is shared between the campaigns).
+  const [sharedAccounts, setSharedAccounts] = useState([]);
   const [customLimitEditing, setCustomLimitEditing] = useState({}); // accountId -> boolean, shows manual number input
   const [customLimitDraft, setCustomLimitDraft] = useState({}); // accountId -> string, raw text while typing
 
@@ -270,11 +277,13 @@ export default function CreateCampaign() {
         const data = await res.json();
         if (!isMounted) return;
         if (data.success) {
-          if (Array.isArray(data.data)) {
-            setLockedAccounts(data.data);
-          } else {
-            setLockedAccounts(data.data?.busy || []);
-          }
+          // Nothing is locked any more: every mailbox can be selected.
+          setLockedAccounts([]);
+          setSharedAccounts(
+            (Array.isArray(data.data) ? data.data : data.data?.inUse || []).map(
+              Number,
+            ),
+          );
         }
       } catch (err) {
         console.error("Failed to fetch locked accounts", err);
@@ -473,7 +482,10 @@ export default function CreateCampaign() {
             campaignType === "scheduled"
               ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString()
               : null,
-          customLimits: customLimits,
+          // Every selected mailbox gets an explicit limit (default 10/hr).
+          customLimits: Object.fromEntries(
+            selectedFroms.map((id) => [id, getActualLimit(id)]),
+          ),
           senderRole,
         }),
       });
@@ -549,26 +561,26 @@ export default function CreateCampaign() {
     }
   };
 
-  const LIMITS = {
-    gmail: 50,
-    gsuite: 80,
-    rediff: 40,
-    amazon: 60,
-    custom: 60,
-  };
+  // Same default for every provider; change it for all selected mailboxes
+  // with the "Limit per hour for all selected" control.
+  const getDefaultLimit = () => bulkLimit;
 
-  const getDefaultLimit = (provider) => {
-    const key = (provider || "custom").toLowerCase();
-    return LIMITS[key] || LIMITS.custom;
-  };
+  const getActualLimit = (accountId) =>
+    customLimits[accountId] ? customLimits[accountId] : bulkLimit;
 
-  const getActualLimit = (accountId) => {
-    if (customLimits[accountId]) {
-      return customLimits[accountId];
-    }
-    const acc = accounts.find((a) => a.id === accountId);
-    if (!acc) return 60;
-    return getDefaultLimit(acc.provider);
+  const selectAccounts = (ids) =>
+    setSelectedFroms((prev) => [...new Set([...prev, ...ids])]);
+  const unselectAccounts = (ids) =>
+    setSelectedFroms((prev) => prev.filter((id) => !ids.includes(id)));
+
+  // Set one limit for every selected mailbox (clears per-mailbox overrides).
+  const applyLimitToSelected = (value) => {
+    setBulkLimit(value);
+    setCustomLimits((prev) => {
+      const next = { ...prev };
+      selectedFroms.forEach((id) => delete next[id]);
+      return next;
+    });
   };
 
   const getCapacity = () => {
@@ -579,15 +591,9 @@ export default function CreateCampaign() {
     return total;
   };
 
-  const availableAccounts =
-    campaignType === "scheduled"
-      ? accounts
-      : accounts.filter((acc) => !lockedAccounts.includes(Number(acc.id)));
-
-  const lockedAccountsList =
-    campaignType === "scheduled"
-      ? []
-      : accounts.filter((acc) => lockedAccounts.includes(Number(acc.id)));
+  // All mailboxes are always selectable (no more "in use / locked").
+  const availableAccounts = accounts;
+  const lockedAccountsList = [];
 
   const lockedAccountsCount = lockedAccountsList.length;
 
@@ -817,6 +823,11 @@ export default function CreateCampaign() {
                           <p className="text-xs text-sky-600 font-medium">
                             {acc.provider?.toUpperCase()} • Limit:{" "}
                             {getActualLimit(acc.id)}/hr
+                            {sharedAccounts.includes(Number(acc.id)) && (
+                              <span className="ml-1 text-amber-600">
+                                • also sending another campaign (limit shared)
+                              </span>
+                            )}
                           </p>
                         </div>
                         {(() => {
@@ -934,8 +945,62 @@ export default function CreateCampaign() {
                       </label>
                     );
 
+                    const allIds = availableAccounts.map((a) => a.id);
+                    const allSelected =
+                      allIds.length > 0 &&
+                      allIds.every((id) => selectedFroms.includes(id));
+
                     return (
                       <div className="p-2">
+                        {/* ── Bulk actions: select all + one limit for all ── */}
+                        <div className="sticky top-0 z-10 -mx-2 -mt-2 mb-2 px-3 py-2.5 bg-sky-50/95 backdrop-blur border-b border-sky-200 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              allSelected
+                                ? unselectAccounts(allIds)
+                                : selectAccounts(allIds)
+                            }
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-600 text-white hover:bg-sky-700"
+                          >
+                            {allSelected
+                              ? "Unselect all"
+                              : `Select all (${allIds.length})`}
+                          </button>
+                          {selectedFroms.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFroms([])}
+                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-sky-200 text-sky-700 hover:bg-sky-100"
+                            >
+                              Clear
+                            </button>
+                          )}
+                          <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-700">
+                            Limit per hour for all selected
+                            <select
+                              value={bulkLimit}
+                              onChange={(e) =>
+                                applyLimitToSelected(Number(e.target.value))
+                              }
+                              className="border border-sky-300 rounded-lg px-2 py-1 text-xs font-bold bg-white"
+                            >
+                              {LIMIT_OPTIONS.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}/hr
+                                  {opt === DEFAULT_HOURLY_LIMIT
+                                    ? " (default)"
+                                    : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <p className="w-full text-[11px] text-slate-500">
+                            {selectedFroms.length} selected · total capacity ~
+                            {getCapacity()}/hr · mailboxes already sending
+                            another campaign share their hourly limit.
+                          </p>
+                        </div>
                         {/* Grouped accounts — only show groups that have at least one available account */}
                         {groupsWithAccounts
                           .filter((group) => group.accounts.length > 0)
@@ -985,6 +1050,34 @@ export default function CreateCampaign() {
                                     {isExpanded ? "▾" : "▸"}
                                   </span>
                                 </button>
+                                {group.accounts.length > 0 && (
+                                  <div className="flex gap-3 px-2 pb-1 text-[11px] font-semibold">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        selectAccounts(
+                                          group.accounts.map((a) => a.id),
+                                        )
+                                      }
+                                      className="text-sky-700 hover:underline"
+                                    >
+                                      Select all in group
+                                    </button>
+                                    {groupSelectedCount > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          unselectAccounts(
+                                            group.accounts.map((a) => a.id),
+                                          )
+                                        }
+                                        className="text-slate-500 hover:underline"
+                                      >
+                                        Clear group
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                                 {/* Accounts under this group */}
                                 {isExpanded && (
                                   <div className="ml-4 pl-2 border-l-2 border-sky-100 space-y-0.5">
@@ -1025,57 +1118,6 @@ export default function CreateCampaign() {
                       </div>
                     );
                   })()}
-
-                  {/* Locked / In Use accounts — with loading skeleton */}
-                  {lockedLoading ? (
-                    <div className="border-t border-sky-200 p-3">
-                      <div className="flex items-center gap-2 mb-2 px-2">
-                        <div className="w-3 h-3 rounded-full bg-slate-200 animate-pulse" />
-                        <div className="h-3 w-40 bg-slate-200 rounded animate-pulse" />
-                      </div>
-                      {[1, 2].map((i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-3 p-3 rounded-lg mb-2 bg-slate-50"
-                        >
-                          <div className="w-4 h-4 rounded-full bg-slate-200 animate-pulse flex-shrink-0" />
-                          <div className="flex-1 space-y-1.5">
-                            <div className="h-3 w-48 bg-slate-200 rounded animate-pulse" />
-                            <div className="h-2.5 w-32 bg-slate-100 rounded animate-pulse" />
-                          </div>
-                          <div className="h-6 w-28 bg-slate-200 rounded-lg animate-pulse" />
-                        </div>
-                      ))}
-                    </div>
-                  ) : lockedAccountsList.length > 0 ? (
-                    <div className="border-t border-sky-200 p-3">
-                      {/* Campaign-busy accounts */}
-                      {lockedAccountsList.length > 0 && (
-                        <>
-                          <h4 className="text-xs font-bold text-red-700 uppercase tracking-wide mb-2 px-2 flex items-center gap-1.5">
-                            <Lock size={12} />
-                            Currently In Use (Unavailable)
-                          </h4>
-                          {lockedAccountsList.map((acc) => (
-                            <div
-                              key={acc.id}
-                              className="flex items-center gap-3 p-3 bg-red-50/50 rounded-lg opacity-60 mb-2"
-                            >
-                              <Lock size={14} className="text-red-500" />
-                              <div className="flex-1">
-                                <p className="text-sm font-semibold text-slate-700">
-                                  {acc.email}
-                                </p>
-                                <p className="text-xs text-red-600 font-medium">
-                                  Busy sending another campaign
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  ) : null}
                 </div>
               )}
             </div>

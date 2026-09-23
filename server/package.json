@@ -17,7 +17,8 @@
     "db:phase1": "psql \"$DATABASE_URL\" -f prisma/manual/2026_10_phase1_engagement.sql",
     "crm:migrate-leads": "node scripts/migrateLeadsToCrm.js",
     "test": "node ../tests/run-all.mjs",
-    "db:backup": "bash scripts/backupDatabase.sh"
+    "db:backup": "bash scripts/backupDatabase.sh",
+    "db:unblock": "psql \"$DATABASE_URL\" -f prisma/manual/2026_09_campaign_unblock.sql"
   },
   "keywords": [
     "node",
