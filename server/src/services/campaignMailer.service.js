@@ -115,6 +115,19 @@ function setAccountState(accountId, status, durationMs, reason) {
 const HOUR_MS = 60 * 60_000;
 const MIN_GAP_MS =
   Math.max(0, Number(process.env.MAILBOX_MIN_GAP_SEC ?? 3)) * 1000;
+/* Send mode for campaigns with several mailboxes:
+     "together"  (default) — all mailboxes send in the SAME round:
+                 0:00 → acc1, acc2, acc3 · 1:30 → acc1, acc2, acc3 · …
+     "staggered" — mailboxes take turns, spread across the interval:
+                 0:00 acc1 · 0:30 acc2 · 1:00 acc3 · 1:30 acc1 · …
+   Each mailbox still sends exactly 1 email per interval either way.
+   Switch with CAMPAIGN_SEND_MODE=staggered.                              */
+export const SEND_MODE =
+  String(process.env.CAMPAIGN_SEND_MODE || "together").toLowerCase() ===
+  "staggered"
+    ? "staggered"
+    : "together";
+
 const STILL_WANTED_EVERY_MS =
   Number(process.env.STILL_WANTED_CHECK_MS) || 60_000;
 const mailboxWindow = new Map(); // accountId → { times: number[], seeded: bool, seeding: Promise|null }
@@ -170,9 +183,19 @@ async function getWindow(accountId) {
  * @param {number} limit          emails per hour for this mailbox
  * @param {() => Promise<boolean>} [isStillWanted]
  * @param {number} [notBefore]    epoch ms — don't send earlier (start stagger)
+ * @param {number} [gridOrigin]   epoch ms — "together" mode: sends only on
+ *                                round ticks gridOrigin + k × interval, so
+ *                                every mailbox of the campaign fires in the
+ *                                same round and they never drift apart.
  * @returns {Promise<number|false>} slot id, or false if no longer wanted
  */
-async function waitForMailboxSlot(accountId, limit, isStillWanted, notBefore = 0) {
+async function waitForMailboxSlot(
+  accountId,
+  limit,
+  isStillWanted,
+  notBefore = 0,
+  gridOrigin = 0,
+) {
   const w = await getWindow(accountId);
   const intervalMs = getSendIntervalMs(limit);
   let lastWantedCheck = Date.now();
@@ -181,18 +204,36 @@ async function waitForMailboxSlot(accountId, limit, isStillWanted, notBefore = 0
     while (w.times.length && w.times[0] <= now - HOUR_MS) w.times.shift();
     const last = w.times[w.times.length - 1] || 0;
 
-    let waitMs = 0;
+    // Earliest moment the next email may go (independent of `now`).
+    let earliest = 0;
     // Rule 1 — even spacing: one email per interval.
-    if (last) waitMs = Math.max(waitMs, last + intervalMs - now);
+    if (last) earliest = Math.max(earliest, last + intervalMs);
     // Rule 2 — hard hourly ceiling (rolling 60 minutes).
     if (w.times.length >= limit)
-      waitMs = Math.max(waitMs, w.times[0] + HOUR_MS - now);
-    // Start stagger so several mailboxes don't fire at the same second.
-    if (notBefore) waitMs = Math.max(waitMs, notBefore - now);
+      earliest = Math.max(earliest, w.times[0] + HOUR_MS);
+    // Staggered mode: offset of this mailbox's first send.
+    if (notBefore) earliest = Math.max(earliest, notBefore);
+    // Together mode: snap UP to the next round tick.
+    if (gridOrigin) {
+      earliest =
+        earliest <= gridOrigin
+          ? gridOrigin
+          : gridOrigin +
+            Math.ceil((earliest - gridOrigin) / intervalMs) * intervalMs;
+    }
 
+    const waitMs = earliest - now;
     if (waitMs <= 0) {
-      w.times.push(now); // reserve (synchronous → no double booking)
-      return now; // slot id
+      // Reserve synchronously (no double booking). In together mode the
+      // reservation is stamped with the current round tick (not the exact
+      // wake-up ms), so the next round is exactly one interval later and
+      // a few ms of timer lateness can't push this mailbox a round behind.
+      const slot = gridOrigin
+        ? gridOrigin +
+          Math.floor((now - gridOrigin) / intervalMs) * intervalMs
+        : now;
+      w.times.push(slot);
+      return slot; // slot id
     }
     await sleep(Math.min(waitMs, 30_000));
     // A Stop/Pause is noticed within a minute while waiting; checking on
@@ -1890,6 +1931,7 @@ async function processAccountBatched({
   customLimits,
   userId,
   startOffsetMs = 0,
+  gridOrigin = 0,
 }) {
   const senders = createSenderCache();
 
@@ -1931,7 +1973,8 @@ async function processAccountBatched({
     console.log(
       `▶️ Campaign ${campaignId}: starting account processor ` +
         `${account.email} (accountId=${numericAccountId}, limit=${limit}/hr, ` +
-        `1 email every ${(getSendIntervalMs(limit) / 60_000).toFixed(1)} min` +
+        `1 email every ${(getSendIntervalMs(limit) / 60_000).toFixed(1)} min, ` +
+        `mode=${gridOrigin ? "together" : "staggered"}` +
         (startOffsetMs > 0
           ? `, first send in ${Math.round(startOffsetMs / 1000)}s`
           : "") +
@@ -1953,6 +1996,7 @@ async function processAccountBatched({
         ctx.limit,
         stillSending,
         notBefore,
+        gridOrigin,
       );
       notBefore = 0;
       if (!slot) {
@@ -2848,23 +2892,79 @@ async function _sendBulkCampaignInner(campaignId) {
     const n = Number(customLimits?.[id]);
     return sum + (Number.isFinite(n) && n > 0 ? n : DEFAULT_HOURLY_LIMIT);
   }, 0);
-  const staggerStepMs = HOUR_MS / Math.max(totalHourly, 1);
+  const staggerStepMs =
+    SEND_MODE === "staggered" ? HOUR_MS / Math.max(totalHourly, 1) : 0;
+  // Together mode: one shared round clock for every mailbox of this run.
+  // (Worker restarts / supervisor restarts reuse or re-create it, so the
+  // mailboxes are always re-aligned to the same rounds.)
+  const gridOrigin = SEND_MODE === "together" ? Date.now() : 0;
+  console.log(
+    `🕒 Campaign ${campaignId}: send mode = ${SEND_MODE} ` +
+      `(${accountIds.length} mailbox(es), ${totalHourly}/hr in total)`,
+  );
+
+  // Each mailbox runs under a small supervisor. BUG FIXED: if a mailbox's
+  // processor died (e.g. its account lookup failed during a database blip
+  // — "Timed out fetching a new connection"), it was never started again
+  // while the OTHER mailboxes kept the campaign active. The resume tick
+  // skips active campaigns, so that mailbox sat at "0 sent / N pending"
+  // until every other mailbox had finished. Now it restarts itself.
+  const superviseAccount = async (accountId, index) => {
+    const isFollowup = campaign.sendType === "followup";
+    let attempt = 0;
+    for (;;) {
+      const startedAt = Date.now();
+      try {
+        await processAccountBatched({
+          campaignId,
+          accountId,
+          campaign,
+          assign,
+          originalCampaignId,
+          customLimits,
+          userId,
+          startOffsetMs:
+            attempt === 0 ? Math.round(index * staggerStepMs) : 0,
+          gridOrigin,
+        });
+      } catch (err) {
+        console.error(
+          `❌ Campaign ${campaignId}: mailbox ${accountId} processor error: ${err.message}`,
+        );
+      }
+
+      // Should this mailbox keep going?
+      let keepGoing = false;
+      try {
+        statusCache.delete(campaignId);
+        const status = await getCampaignStatus(campaignId);
+        if (status === "sending") {
+          const pending = await prisma.campaignRecipient.count({
+            where: isFollowup
+              ? { campaignId, accountId, status: "pending" }
+              : { campaignId, status: "pending" },
+          });
+          keepGoing = pending > 0;
+        }
+      } catch {
+        keepGoing = true; // database blip — assume work remains, retry later
+      }
+      if (!keepGoing) return;
+
+      // A processor that ran a long time before exiting resets the backoff.
+      if (Date.now() - startedAt > 10 * 60_000) attempt = 0;
+      attempt += 1;
+      const backoff = Math.min(10_000 * 2 ** (attempt - 1), 5 * 60_000);
+      console.warn(
+        `🔁 Campaign ${campaignId}: mailbox ${accountId} stopped with work left — ` +
+          `restarting in ${Math.round(backoff / 1000)}s (attempt ${attempt})`,
+      );
+      await sleep(backoff);
+    }
+  };
 
   await Promise.all(
-    accountIds.map((accountId, index) =>
-      processAccountBatched({
-        campaignId,
-        accountId,
-        campaign,
-        assign,
-        originalCampaignId,
-        customLimits,
-        userId,
-        startOffsetMs: Math.round(index * staggerStepMs),
-      }).catch((err) => {
-        console.error(`❌ Account ${accountId} processor error:`, err.message);
-      }),
-    ),
+    accountIds.map((accountId, index) => superviseAccount(accountId, index)),
   );
 
   // ── 8. Final status ────────────────────────────────────────────────────
