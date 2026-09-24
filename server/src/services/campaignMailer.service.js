@@ -115,6 +115,8 @@ function setAccountState(accountId, status, durationMs, reason) {
 const HOUR_MS = 60 * 60_000;
 const MIN_GAP_MS =
   Math.max(0, Number(process.env.MAILBOX_MIN_GAP_SEC ?? 3)) * 1000;
+const STILL_WANTED_EVERY_MS =
+  Number(process.env.STILL_WANTED_CHECK_MS) || 60_000;
 const mailboxWindow = new Map(); // accountId → { times: number[], seeded: bool, seeding: Promise|null }
 
 /** Even spacing between two emails from one mailbox at `limit`/hour. */
@@ -173,6 +175,7 @@ async function getWindow(accountId) {
 async function waitForMailboxSlot(accountId, limit, isStillWanted, notBefore = 0) {
   const w = await getWindow(accountId);
   const intervalMs = getSendIntervalMs(limit);
+  let lastWantedCheck = Date.now();
   for (;;) {
     const now = Date.now();
     while (w.times.length && w.times[0] <= now - HOUR_MS) w.times.shift();
@@ -192,7 +195,12 @@ async function waitForMailboxSlot(accountId, limit, isStillWanted, notBefore = 0
       return now; // slot id
     }
     await sleep(Math.min(waitMs, 30_000));
-    if (isStillWanted && !(await isStillWanted())) return false;
+    // A Stop/Pause is noticed within a minute while waiting; checking on
+    // every 30 s wake-up of every mailbox was needless database load.
+    if (isStillWanted && Date.now() - lastWantedCheck >= STILL_WANTED_EVERY_MS) {
+      lastWantedCheck = Date.now();
+      if (!(await isStillWanted())) return false;
+    }
   }
 }
 
@@ -1230,18 +1238,56 @@ function claimSizeFor(delayMs) {
    One cached lookup per campaign every few seconds is plenty — a Stop
    click is honoured within STATUS_TTL_MS.                                */
 const STATUS_TTL_MS = 3_000;
-const statusCache = new Map(); // campaignId → { status, at }
+// After a failed lookup, don't query again for this long — serve the last
+// known status instead. Without this, every waiting mailbox of every
+// campaign re-queried on each wake-up during a database blip, filled the
+// whole pool with `campaign.findUnique` calls, and starved the real sends
+// ("Timed out fetching a new connection … heartbeat failed").
+const STATUS_ERROR_BACKOFF_MS =
+  Number(process.env.STATUS_ERROR_BACKOFF_MS) || 15_000;
+const statusCache = new Map(); // campaignId → { status, at, failedAt }
+const statusInflight = new Map(); // campaignId → Promise<status>
 
 async function getCampaignStatus(campaignId) {
   const hit = statusCache.get(campaignId);
-  if (hit && Date.now() - hit.at < STATUS_TTL_MS) return hit.status;
-  const row = await prisma.campaign.findUnique({
-    where: { id: campaignId },
-    select: { status: true },
-  });
-  const status = row?.status ?? null;
-  statusCache.set(campaignId, { status, at: Date.now() });
-  return status;
+  const now = Date.now();
+  if (hit && now - hit.at < STATUS_TTL_MS) return hit.status;
+  // Recent failure: use the last known status (or re-throw if none).
+  if (hit?.failedAt && now - hit.failedAt < STATUS_ERROR_BACKOFF_MS) {
+    if (hit.status !== undefined) return hit.status;
+    throw new Error("Campaign status unavailable (database backoff)");
+  }
+
+  // Many mailboxes asking at the same moment share ONE query.
+  if (statusInflight.has(campaignId)) return statusInflight.get(campaignId);
+
+  const p = (async () => {
+    try {
+      const row = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        select: { status: true },
+      });
+      const status = row?.status ?? null;
+      statusCache.set(campaignId, { status, at: Date.now() });
+      return status;
+    } catch (err) {
+      const prev = statusCache.get(campaignId);
+      statusCache.set(campaignId, {
+        status: prev?.status,
+        at: prev?.at ?? 0,
+        failedAt: Date.now(),
+      });
+      if (prev?.status !== undefined && isDbUnavailableError(err)) {
+        return prev.status; // keep going on the last known status
+      }
+      throw err;
+    } finally {
+      statusInflight.delete(campaignId);
+    }
+  })();
+
+  statusInflight.set(campaignId, p);
+  return p;
 }
 
 /**
