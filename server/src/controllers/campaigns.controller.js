@@ -67,13 +67,7 @@ async function getBusyAccounts() {
   const loadAll = async () => {
     const sending = await prisma.campaign.findMany({
       where: { status: "sending" },
-      select: {
-        id: true,
-        name: true,
-        sendType: true,
-        fromAccountIds: true,
-        customLimits: true,
-      },
+      select: { id: true, name: true, sendType: true, fromAccountIds: true },
     });
     if (!sending.length) return [];
 
@@ -85,32 +79,13 @@ async function getBusyAccounts() {
       GROUP BY r."campaignId", r."accountId"
     `;
 
-    const now = Date.now();
-    const out = []; // { accountId, campaignId, campaignName, remaining, estimatedCompletion }
+    const out = []; // { accountId, campaignId, campaignName, remaining }
     for (const c of sending) {
       const mine = rows.filter((r) => r.campaignId === c.id);
       const total = mine.reduce((sum, r) => sum + r.remaining, 0);
       if (!total) continue; // nothing left → no mailbox is busy with it
 
-      let limits = {};
-      try {
-        limits = JSON.parse(c.customLimits || "{}") || {};
-      } catch {
-        /* provider defaults */
-      }
-
       if (c.sendType === "followup") {
-        // Each mailbox sends only its own rows → the campaign ends when the
-        // slowest mailbox ends.
-        let campaignEnd = now;
-        for (const r of mine) {
-          if (r.accountId == null) continue;
-          const perHour = hourlyLimitFor(limits, r.accountId, "");
-          campaignEnd = Math.max(
-            campaignEnd,
-            now + (r.remaining / Math.max(perHour, 1)) * 3_600_000,
-          );
-        }
         for (const r of mine) {
           if (r.accountId == null) continue;
           out.push({
@@ -118,7 +93,6 @@ async function getBusyAccounts() {
             campaignId: c.id,
             campaignName: c.name,
             remaining: r.remaining,
-            estimatedCompletion: new Date(campaignEnd).toISOString(),
           });
         }
       } else {
@@ -135,19 +109,12 @@ async function getBusyAccounts() {
         } catch {
           /* malformed */
         }
-        // Shared queue: all mailboxes drain it together.
-        let perHour = 0;
-        for (const id of ids) perHour += hourlyLimitFor(limits, id, "");
-        const end = new Date(
-          now + (total / Math.max(perHour, 1)) * 3_600_000,
-        ).toISOString();
         for (const id of ids)
           out.push({
             accountId: id,
             campaignId: c.id,
             campaignName: c.name,
             remaining: total,
-            estimatedCompletion: end,
           });
       }
     }
@@ -163,50 +130,6 @@ async function getBusyAccountIds({ excludeCampaignId = null } = {}) {
       .filter((b) => b.campaignId !== excludeCampaignId)
       .map((b) => b.accountId),
   );
-}
-
-/* ─────────────────────────────────────────────────────────────────────────
-   FOLLOW-UP RULE: a follow-up may NOT be sent from a mailbox that is still
-   sending another campaign. Only the SAME mailbox is blocked — follow-ups
-   whose mailboxes are all free work normally. The block lifts by itself as
-   soon as that campaign has no pending/processing emails left.
-───────────────────────────────────────────────────────────────────────── */
-async function findFollowupBlockers(accountIds, { excludeCampaignId = null } = {}) {
-  const wanted = new Set(
-    [...accountIds].map(Number).filter(Number.isInteger),
-  );
-  if (!wanted.size) return [];
-  const busy = (await getBusyAccounts()).filter(
-    (b) => wanted.has(b.accountId) && b.campaignId !== excludeCampaignId,
-  );
-  if (!busy.length) return [];
-
-  const accounts = await prisma.emailAccount.findMany({
-    where: { id: { in: [...new Set(busy.map((b) => b.accountId))] } },
-    select: { id: true, email: true },
-  });
-  const emailOf = Object.fromEntries(accounts.map((a) => [a.id, a.email]));
-  return busy.map((b) => ({
-    accountId: b.accountId,
-    email: emailOf[b.accountId] || `account #${b.accountId}`,
-    campaignId: b.campaignId,
-    campaignName: b.campaignName,
-    remaining: b.remaining,
-    estimatedCompletion: b.estimatedCompletion,
-  }));
-}
-
-function followupBlockedResponse(blockers) {
-  const names = [...new Set(blockers.map((b) => `"${b.campaignName}"`))];
-  return {
-    success: false,
-    code: "MAILBOX_BUSY",
-    message:
-      `Please wait until ${names.join(", ")} is completed — its mailbox ` +
-      `sends this follow-up. Create Follow-up is enabled automatically ` +
-      `once it finishes.`,
-    blockers,
-  };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -879,13 +802,8 @@ export const createFollowupCampaign = async (req, res) => {
         .json({ success: false, message: "No recipients selected" });
     }
 
-    // Follow-ups are locked while the SAME mailbox is still sending
-    // another campaign (other mailboxes are unaffected).
-    const followupSenderIds = senderEntries.map(([id]) => Number(id));
-    const blockers = await findFollowupBlockers(followupSenderIds);
-    if (blockers.length) {
-      return res.status(409).json(followupBlockedResponse(blockers));
-    }
+    // (Removed) busy-mailbox check: mailboxes are shared safely between
+    // campaigns by the worker's per-mailbox pacing.
 
     let finalName = `${baseCampaign.name} (Followup)`;
     const existing = await prisma.campaign.findMany({
@@ -1021,20 +939,6 @@ export const sendFollowupCampaign = async (req, res) => {
     // 🌐 Global check
     const blocked = await checkGlobalSendingRules(campaign.userId);
     if (blocked) return res.status(blocked.status).json(blocked.body);
-
-    // Same-mailbox lock (see findFollowupBlockers).
-    const senderRows = await prisma.campaignRecipient.findMany({
-      where: { campaignId, accountId: { not: null } },
-      select: { accountId: true },
-      distinct: ["accountId"],
-    });
-    const blockers = await findFollowupBlockers(
-      senderRows.map((r) => r.accountId),
-      { excludeCampaignId: campaignId },
-    );
-    if (blockers.length) {
-      return res.status(409).json(followupBlockedResponse(blockers));
-    }
 
     await prisma.campaign.update({
       where: { id: campaignId },
@@ -1511,43 +1415,9 @@ export const getCampaignsForFollowup = async (req, res) => {
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
     const cacheKey = `forFollowup:${userId}:${level}:${offset}:${limit}`;
-    // Busy state changes every few seconds, so it is NOT part of the cached
-    // list — it is added fresh on every request (getBusyAccounts is itself
-    // cached for 5 s).
-    const withBusyInfo = async (items) => {
-      const busy = await getBusyAccounts();
-      const ids = [...new Set(busy.map((b) => b.accountId))];
-      const accs = ids.length
-        ? await prisma.emailAccount.findMany({
-            where: { id: { in: ids } },
-            select: { id: true, email: true },
-          })
-        : [];
-      const emailOf = Object.fromEntries(accs.map((a) => [a.id, a.email]));
-      return items.map((c) => {
-        const senders = new Set(c.senderAccountIds || []);
-        const busyAccounts = busy
-          .filter((b) => senders.has(b.accountId))
-          .map((b) => ({
-            accountId: b.accountId,
-            email: emailOf[b.accountId] || `account #${b.accountId}`,
-            campaignId: b.campaignId,
-            campaignName: b.campaignName,
-            remaining: b.remaining,
-            estimatedCompletion: b.estimatedCompletion,
-          }));
-        return {
-          ...c,
-          busyAccounts,
-          followupBlocked: busyAccounts.length > 0,
-        };
-      });
-    };
-
     const cached = cache.get(cacheKey);
     if (cached) {
-      const items = await withBusyInfo(cached.items);
-      return res.json({ success: true, ...cached, data: items, items });
+      return res.json({ success: true, data: cached.items, ...cached });
     }
 
     /* ── ONE query for every campaign this user owns ─────────────────────
@@ -1568,7 +1438,6 @@ export const getCampaignsForFollowup = async (req, res) => {
         fromAccountIds: true,
         parentCampaignId: true,
         estimatedCompletion: true,
-        customLimits: true,
       },
     });
     mark.campaigns = Date.now() - tQuery;
@@ -1621,50 +1490,25 @@ export const getCampaignsForFollowup = async (req, res) => {
 
     /* ── Sent counts, only for the rows actually being returned ────────── */
     const tCounts = Date.now();
-    // Grouped by mailbox too: a follow-up is sent from the mailbox that
-    // sent the original, so these are the follow-up's sender accounts.
     const sentRows = await prisma.campaignRecipient.groupBy({
-      by: ["campaignId", "accountId"],
+      by: ["campaignId"],
       where: { campaignId: { in: pageRows.map((c) => c.id) }, status: "sent" },
       _count: { _all: true },
     });
     mark.counts = Date.now() - tCounts;
 
-    const sentMap = {};
-    const senderMap = {};
-    for (const r of sentRows) {
-      sentMap[r.campaignId] = (sentMap[r.campaignId] || 0) + r._count._all;
-      if (r.accountId != null) {
-        (senderMap[r.campaignId] ||= []).push(Number(r.accountId));
-      }
-    }
+    const sentMap = Object.fromEntries(
+      sentRows.map((r) => [r.campaignId, r._count._all]),
+    );
 
-    const baseData = pageRows.map(({ customLimits, ...c }) => {
-      // Follow-ups inherit the parent's per-mailbox hourly limits and send
-      // from the same mailboxes → total emails per hour for the follow-up.
-      let limits = {};
-      try {
-        limits = JSON.parse(customLimits || "{}") || {};
-      } catch {
-        /* provider defaults */
-      }
-      const senders = senderMap[c.id] || [];
-      const followupHourlyCapacity = senders.reduce(
-        (sum, id) => sum + hourlyLimitFor(limits, id, ""),
-        0,
-      );
-      return {
-        ...c,
-        sentCount: sentMap[c.id] || 0,
-        recipientCount: sentMap[c.id] || 0,
-        followupNumber: (completedCount[c.id] || 0) + 1,
-        senderAccountIds: senders,
-        followupHourlyCapacity,
-      };
-    });
+    const data = pageRows.map((c) => ({
+      ...c,
+      sentCount: sentMap[c.id] || 0,
+      recipientCount: sentMap[c.id] || 0,
+      followupNumber: (completedCount[c.id] || 0) + 1,
+    }));
 
-    cache.set(cacheKey, { items: baseData, total, hasMore, offset, limit }, 20);
-    const data = await withBusyInfo(baseData);
+    cache.set(cacheKey, { items: data, total, hasMore, offset, limit }, 20);
 
     /* Two DB round trips total. If `total` is far larger than
        campaigns + counts, the time is spent WAITING FOR A CONNECTION,
