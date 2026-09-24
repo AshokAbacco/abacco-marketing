@@ -13,10 +13,12 @@ import {
   getCampaignsForFollowup,
   getFollowupPreview,
   getSingleCampaign,
+  getCampaignStatusDetails,
   stopCampaign,
   resendCampaign,
-  updateFollowupRecipients,   
-  sendFollowupCampaign,        
+  cancelPendingRecipients,
+  updateFollowupRecipients,
+  sendFollowupCampaign,
   getDailyLimitStatus,
   getAdminDailyOverview,
   getRecipientBody,
@@ -27,7 +29,7 @@ const router = express.Router();
 
 // Dashboard route should come BEFORE the generic "/" route
 // to avoid route conflicts
-router.get('/dashboard', protect, getDashboardCampaigns);
+router.get("/dashboard", protect, getDashboardCampaigns);
 
 // 🔥 FIX: Specific routes MUST come before parameterized routes
 // Move /for-followup BEFORE /:id/progress to avoid route conflicts
@@ -48,6 +50,8 @@ router.post("/followup", protect, createFollowupCampaign);
 // 🔥 IMPORTANT: Specific parameterized routes (:id/view, :id/progress) come before generic :id routes
 router.get("/:id/view", protect, getSingleCampaign);
 router.get("/:id/progress", protect, getCampaignProgress);
+// Plain-language status: why pending / waiting, per-mailbox state, ETA.
+router.get("/:id/status", protect, getCampaignStatusDetails);
 
 // One-shot payload for the Follow-up "Email Preview" panel (count + a
 // 3-row sample + the previous message body) — see campaigns.controller.js
@@ -63,8 +67,11 @@ router.get("/:id/recipients/:recipientId/body", protect, getRecipientBody);
 router.post("/:id/send", protect, sendCampaignNow);
 router.post("/:id/schedule", protect, scheduleCampaign);
 router.delete("/:id", protect, deleteCampaign);
+// Pause (user only — the system itself never pauses a campaign).
 router.post("/:id/stop", protect, stopCampaign);
 router.post("/:id/resend", protect, resendCampaign);
+// Cancel unsent emails (all, or one mailbox's) — sent emails are kept.
+router.post("/:id/cancel-pending", protect, cancelPendingRecipients);
 
 // Update followup recipients
 router.post("/followup/update-recipients", protect, updateFollowupRecipients);

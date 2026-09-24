@@ -20,7 +20,9 @@ const SEND_DAY_RESET_HOUR = Number(process.env.SEND_DAY_RESET_HOUR) || 17; // 5 
 
 /** Start of the current sending window. */
 export function getSendingDayStart(now = new Date()) {
-  const local = new Date(now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }));
+  const local = new Date(
+    now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }),
+  );
   const reset = new Date(local);
   reset.setHours(SEND_DAY_RESET_HOUR, 0, 0, 0);
   const start = local < reset ? new Date(reset.getTime() - 86_400_000) : reset;
@@ -31,7 +33,9 @@ export function getSendingDayStart(now = new Date()) {
 /** Milliseconds until the next window opens. */
 export function msUntilNextSendingDay(now = new Date()) {
   const next = new Date(getSendingDayStart(now).getTime() + 86_400_000);
-  const local = new Date(now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }));
+  const local = new Date(
+    now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }),
+  );
   return Math.max(1000, next.getTime() - local.getTime());
 }
 
@@ -41,8 +45,8 @@ export const DEFAULT_SENDING_LIMITS = Object.freeze({
   /// Used when a provider isn't listed below
   defaultDailyCap: 150,
   providerCaps: {
-    gmail: 100,     // free Gmail: keep well under the ~500 limit
-    gsuite: 400,    // Google Workspace
+    gmail: 100, // free Gmail: keep well under the ~500 limit
+    gsuite: 400, // Google Workspace
     outlook: 100,
     office365: 400,
     zoho: 150,
@@ -64,18 +68,24 @@ export async function getSendingLimits() {
   const base = structuredClone(DEFAULT_SENDING_LIMITS);
   if (!stored || typeof stored !== "object") return base;
   return {
-    enabled: stored.enabled !== undefined ? Boolean(stored.enabled) : base.enabled,
-    defaultDailyCap: Number(stored.defaultDailyCap) > 0 ? Math.round(Number(stored.defaultDailyCap)) : base.defaultDailyCap,
+    enabled:
+      stored.enabled !== undefined ? Boolean(stored.enabled) : base.enabled,
+    defaultDailyCap:
+      Number(stored.defaultDailyCap) > 0
+        ? Math.round(Number(stored.defaultDailyCap))
+        : base.defaultDailyCap,
     providerCaps: { ...base.providerCaps, ...(stored.providerCaps || {}) },
     warmup: { ...base.warmup, ...(stored.warmup || {}) },
   };
 }
 
 export function validateSendingLimits(input) {
-  if (!input || typeof input !== "object") return { error: "Settings must be an object" };
+  if (!input || typeof input !== "object")
+    return { error: "Settings must be an object" };
   const int = (v, min, max, label) => {
     const n = Number(v);
-    if (!Number.isFinite(n) || n < min || n > max) return { error: `${label} must be ${min}–${max}` };
+    if (!Number.isFinite(n) || n < min || n > max)
+      return { error: `${label} must be ${min}–${max}` };
     return { value: Math.round(n) };
   };
   const cap = int(input.defaultDailyCap, 1, 100_000, "Default daily cap");
@@ -89,18 +99,28 @@ export function validateSendingLimits(input) {
   }
   const start = int(input.warmup?.startCap, 1, 10_000, "Warm-up start");
   if (start.error) return start;
-  const inc = int(input.warmup?.incrementPerDay, 1, 10_000, "Warm-up daily increase");
+  const inc = int(
+    input.warmup?.incrementPerDay,
+    1,
+    10_000,
+    "Warm-up daily increase",
+  );
   if (inc.error) return inc;
   const target = int(input.warmup?.targetCap, 1, 100_000, "Warm-up target");
   if (target.error) return target;
-  if (target.value < start.value) return { error: "Warm-up target must be at least the start value" };
+  if (target.value < start.value)
+    return { error: "Warm-up target must be at least the start value" };
 
   return {
     value: {
       enabled: Boolean(input.enabled),
       defaultDailyCap: cap.value,
       providerCaps,
-      warmup: { startCap: start.value, incrementPerDay: inc.value, targetCap: target.value },
+      warmup: {
+        startCap: start.value,
+        incrementPerDay: inc.value,
+        targetCap: target.value,
+      },
     },
   };
 }
@@ -119,8 +139,15 @@ const capCache = new Map(); // accountId → { cap, source, at }
  * How many emails this mailbox may send today, and why.
  * @returns {{ cap: number, source: "manual"|"warmup"|"provider"|"default"|"off", warmupDay?: number }}
  */
+// Per-mailbox DAILY caps are switched off: mailboxes are limited per HOUR
+// only (see campaignMailer PROVIDER_HOURLY_LIMITS) and the company has one
+// daily limit (5 000). Set MAILBOX_DAILY_CAPS=true to bring them back.
+export const MAILBOX_DAILY_CAPS_ENABLED =
+  process.env.MAILBOX_DAILY_CAPS === "true";
+
 export function computeDailyCap(account, limits, now = new Date()) {
-  if (!limits.enabled) return { cap: Infinity, source: "off" };
+  if (!MAILBOX_DAILY_CAPS_ENABLED || !limits.enabled)
+    return { cap: Infinity, source: "off" };
   if (Number.isInteger(account.dailyCap) && account.dailyCap > 0) {
     return { cap: account.dailyCap, source: "manual" };
   }
@@ -129,17 +156,33 @@ export function computeDailyCap(account, limits, now = new Date()) {
   const ceiling = limits.providerCaps[provider] || limits.defaultDailyCap;
 
   if (account.warmupEnabled) {
-    const start = account.warmupStartAt ? new Date(account.warmupStartAt) : null;
+    const start = account.warmupStartAt
+      ? new Date(account.warmupStartAt)
+      : null;
     const startCap = account.warmupStartCap || limits.warmup.startCap;
-    const target = Math.min(account.warmupTarget || limits.warmup.targetCap, ceiling);
+    const target = Math.min(
+      account.warmupTarget || limits.warmup.targetCap,
+      ceiling,
+    );
     const dayIndex = start
-      ? Math.max(0, Math.floor((getSendingDayStart(now) - getSendingDayStart(start)) / 86_400_000))
+      ? Math.max(
+          0,
+          Math.floor(
+            (getSendingDayStart(now) - getSendingDayStart(start)) / 86_400_000,
+          ),
+        )
       : 0;
-    const cap = Math.min(target, startCap + dayIndex * limits.warmup.incrementPerDay);
+    const cap = Math.min(
+      target,
+      startCap + dayIndex * limits.warmup.incrementPerDay,
+    );
     return { cap: Math.max(1, cap), source: "warmup", warmupDay: dayIndex + 1 };
   }
 
-  return { cap: ceiling, source: limits.providerCaps[provider] ? "provider" : "default" };
+  return {
+    cap: ceiling,
+    source: limits.providerCaps[provider] ? "provider" : "default",
+  };
 }
 
 export async function getAccountCap(accountId, { fresh = false } = {}) {
@@ -148,11 +191,21 @@ export async function getAccountCap(accountId, { fresh = false } = {}) {
   const [account, limits] = await Promise.all([
     prisma.emailAccount.findUnique({
       where: { id: accountId },
-      select: { id: true, provider: true, dailyCap: true, warmupEnabled: true, warmupStartAt: true, warmupStartCap: true, warmupTarget: true },
+      select: {
+        id: true,
+        provider: true,
+        dailyCap: true,
+        warmupEnabled: true,
+        warmupStartAt: true,
+        warmupStartCap: true,
+        warmupTarget: true,
+      },
     }),
     getSendingLimits(),
   ]);
-  const value = account ? { ...computeDailyCap(account, limits), at: Date.now() } : { cap: 0, source: "default", at: Date.now() };
+  const value = account
+    ? { ...computeDailyCap(account, limits), at: Date.now() }
+    : { cap: 0, source: "default", at: Date.now() };
   capCache.set(accountId, value);
   return value;
 }
@@ -168,8 +221,8 @@ export function invalidateCapCache(accountId) {
    every second.                                                          */
 
 const COUNT_TTL_MS = 10_000;
-const countCache = new Map();  // accountId → { day, count, at }
-const buffer = new Map();      // `${accountId}|${dayMs}` → { accountId, day, count }
+const countCache = new Map(); // accountId → { day, count, at }
+const buffer = new Map(); // `${accountId}|${dayMs}` → { accountId, day, count }
 let flushTimer = null;
 let flushing = null;
 const FLUSH_MS = Number(process.env.ACCOUNT_SEND_FLUSH_MS) || 5000;
@@ -183,7 +236,8 @@ export async function getAccountSentToday(accountId, { fresh = false } = {}) {
   const day = getSendingDayStart();
   const dayMs = day.getTime();
   const hit = countCache.get(accountId);
-  if (!fresh && hit && hit.day === dayMs && Date.now() - hit.at < COUNT_TTL_MS) return hit.count;
+  if (!fresh && hit && hit.day === dayMs && Date.now() - hit.at < COUNT_TTL_MS)
+    return hit.count;
 
   const row = await prisma.accountDailySend.findUnique({
     where: { accountId_day: { accountId, day } },
@@ -208,7 +262,9 @@ export function recordAccountSend(accountId) {
   if (!flushTimer) {
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      flushAccountSends().catch((err) => console.error("⚠️ Mailbox send counter flush failed:", err.message));
+      flushAccountSends().catch((err) =>
+        console.error("⚠️ Mailbox send counter flush failed:", err.message),
+      );
     }, FLUSH_MS);
     flushTimer.unref?.();
   }
@@ -249,7 +305,9 @@ export async function flushAccountSends() {
 }
 
 /** Delete counters older than N days (worker housekeeping). */
-export async function purgeOldDailySends(days = Number(process.env.DAILY_SEND_RETENTION_DAYS) || 120) {
+export async function purgeOldDailySends(
+  days = Number(process.env.DAILY_SEND_RETENTION_DAYS) || 120,
+) {
   const r = await prisma.accountDailySend.deleteMany({
     where: { day: { lt: new Date(Date.now() - days * 86_400_000) } },
   });
