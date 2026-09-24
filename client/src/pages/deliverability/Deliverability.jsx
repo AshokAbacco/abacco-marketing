@@ -26,8 +26,10 @@ import {
   Gauge,
   Sliders,
   Flame,
+  FlaskConical,
 } from "lucide-react";
 import { api } from "../utils/api";
+import PlacementTab from "./PlacementTab";
 
 const REASON_LABELS = {
   unsubscribe: "Unsubscribed",
@@ -1355,6 +1357,7 @@ function SendingLimitsModal({ onClose }) {
 const TABS = [
   { id: "overview", label: "Overview", icon: BarChart3 },
   { id: "health", label: "Account health", icon: Activity },
+  { id: "placement", label: "Inbox placement", icon: FlaskConical },
   { id: "reviews", label: "Removal requests", icon: MessageSquareWarning },
   { id: "suppression", label: "Do-not-contact list", icon: Ban },
 ];
@@ -1421,9 +1424,9 @@ export default function Deliverability() {
         >
           <AlertTriangle size={18} className="shrink-0 mt-0.5" />
           <span>
-            PUBLIC_API_URL is not set on the server, so emails carry no
-            unsubscribe link (only the mailto header). Set it to your public API
-            address.
+            PUBLIC_API_URL is not set on the server, so Gmail/Yahoo's own
+            "Unsubscribe" button uses email only (mailto). Nothing is shown in
+            the email body either way.
           </span>
         </div>
       )}
@@ -1483,6 +1486,7 @@ export default function Deliverability() {
       <div key={`${tab}-${refreshKey}`}>
         {tab === "overview" && <OverviewTab />}
         {tab === "health" && <HealthTab onChanged={loadSummary} />}
+        {tab === "placement" && <PlacementTab />}
         {tab === "reviews" && <ReviewTab onChanged={loadSummary} />}
         {tab === "suppression" && <SuppressionTab onChanged={loadSummary} />}
       </div>

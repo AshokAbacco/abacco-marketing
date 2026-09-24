@@ -17,6 +17,10 @@ import {
   skipSuppressedRecipients,
   buildUnsubscribeParts,
 } from "./suppression.service.js";
+
+// Printed once when the worker starts — if you DON'T see this line in the
+// worker log, the worker is still running old code.
+console.log("✉️  Email body: NO unsubscribe link (build 2026-09-24)");
 import {
   pauseAccount,
   onAccountPauseChange,
@@ -2103,12 +2107,9 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
     fromEmail,
   });
 
-  const html = buildNormalEmailHtml(
-    body,
-    signature,
-    baseStyles,
-    unsub.footerHtml,
-  );
+  // No visible "Not interested? Unsubscribe" link in the email body.
+  // (The hidden List-Unsubscribe header in unsub.headers is still sent.)
+  const html = buildNormalEmailHtml(body, signature, baseStyles);
 
   const text = toPlainText(html);
 
@@ -2331,7 +2332,8 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     campaign.senderRole,
     baseStyles,
   );
-  const followupWithSignature = followupBody + signature + unsub.footerHtml;
+  // No visible unsubscribe link in follow-ups either.
+  const followupWithSignature = followupBody + signature;
 
   let originalBody = extractBodyContent(prevEmail.sentBodyHtml);
   if (!originalBody && prevEmail.sentBodyHtml) {
