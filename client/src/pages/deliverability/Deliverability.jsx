@@ -30,7 +30,7 @@ import {
 import { api } from "../utils/api";
 
 const REASON_LABELS = {
-  unsubscribe: "Unsubscribed",
+  unsubscribe: "Unsubscribed (Gmail/Yahoo button)",
   reply_request: "Asked to be removed",
   hard_bounce: "Hard bounce",
   soft_bounce: "Repeated soft bounces",
@@ -451,8 +451,9 @@ function ReviewTab({ onChanged }) {
     <div className="bg-white rounded-2xl border border-slate-200">
       <div className="p-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100">
         <p className="text-sm text-slate-600 max-w-2xl">
-          Replies that look like “remove me / unsubscribe”. Confirm to stop all
-          future emails to that person, or dismiss if it's a normal reply.
+          Replies that look like “REMOVE” / “please take me off your list”.
+          Confirm to stop all future emails to that person, or dismiss if it's a
+          normal reply.
         </p>
         <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm">
           {["pending", "suppressed", "dismissed"].map((s) => (
@@ -1413,20 +1414,6 @@ export default function Deliverability() {
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
-
-      {summary && !summary.publicUrlConfigured && (
-        <div
-          className="mb-4 flex gap-2 items-start rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"
-          role="status"
-        >
-          <AlertTriangle size={18} className="shrink-0 mt-0.5" />
-          <span>
-            PUBLIC_API_URL is not set on the server, so emails carry no
-            unsubscribe link (only the mailto header). Set it to your public API
-            address.
-          </span>
-        </div>
-      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard

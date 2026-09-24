@@ -87,6 +87,13 @@ model EmailAccount {
   sendingPausedReason String?
   sendingPausedUntil  DateTime?
 
+  // ── Automatic, self-expiring cooldown (set by the worker) ──
+  // Provider rate limit / daily quota / login failure. Always has an end
+  // time; the worker retries by itself when it passes. Shown in the CRM so
+  // users can see WHY a mailbox is waiting and WHEN it resumes.
+  sendingCooldownUntil  DateTime?
+  sendingCooldownReason String?
+
   // ── Daily cap & warm-up (Phase 4) ──
   /// Manual cap for this mailbox (emails per day). Overrides warm-up and
   /// the company default when set.
@@ -354,7 +361,7 @@ model Campaign {
 
   // 🔹 STATUS & TYPE
   status String @default("draft")
-  // draft | sending | completed | scheduled | paused
+  // draft | scheduled | sending | completed | failed  (legacy: stopped | paused)
 
   sendType String
   // immediate | scheduled

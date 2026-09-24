@@ -28,6 +28,7 @@ const { startCampaignScheduler } =
 const {
   sendBulkCampaign,
   isCampaignActive,
+  getActiveCampaignIds,
   flushDailyLog,
   MAX_TRANSIENT_RETRIES,
 } = await import("./src/services/campaignMailer.service.js");
@@ -97,7 +98,19 @@ function noteSuccess() {
   pausedUntil = 0;
 }
 
+// "Timed out fetching a new connection" means the pool was BUSY, not that
+// the database is down. Pausing every background job for it (as before)
+// also stopped the IMAP reply sync, so replies/notifications stopped
+// arriving. Now the job just tries again on its next tick.
+const isPoolBusy = (err) =>
+  err?.code === "P2024" ||
+  String(err?.message || "").includes("Timed out fetching a new connection");
+
 function noteFailure(label, err) {
+  if (isPoolBusy(err)) {
+    console.warn(`⏳ ${label}: database pool busy — will retry next tick`);
+    return;
+  }
   if (!isDbUnavailableError(err)) {
     console.error(`❌ ${label}:`, err?.message || err);
     captureError(err, { tags: { job: label } });
@@ -212,6 +225,55 @@ async function resumeSendingCampaigns() {
   }
 }
 
+/**
+ * Heartbeat: lets the CRM tell "worker is down, nothing can send" apart
+ * from a campaign that is simply waiting (daily cap, cooldown, …).
+ */
+const WORKER_HEARTBEAT_KEY = "worker.heartbeat";
+async function writeHeartbeat() {
+  const value = {
+    at: new Date().toISOString(),
+    pid: process.pid,
+    activeCampaigns: getActiveCampaignIds(),
+  };
+  await prisma.crmSetting.upsert({
+    where: { key: WORKER_HEARTBEAT_KEY },
+    update: { value },
+    create: { key: WORKER_HEARTBEAT_KEY, value },
+  });
+}
+
+/**
+ * No mailbox is ever paused, and no wait is longer than an hour. Old data
+ * from the previous engine (24 h quota pauses, never-ending "Login failed"
+ * pauses) is cleared every time the worker starts.
+ */
+async function clearOldPauses() {
+  // Cooldowns are 2 minutes now; anything longer is left over from old code.
+  const inAnHour = new Date(Date.now() + 5 * 60_000);
+  const [paused, cooldowns] = await Promise.all([
+    prisma.emailAccount.updateMany({
+      where: { sendingPausedAt: { not: null } },
+      data: {
+        sendingPausedAt: null,
+        sendingPausedReason: null,
+        sendingPausedUntil: null,
+      },
+    }),
+    prisma.emailAccount.updateMany({
+      where: { sendingCooldownUntil: { gt: inAnHour } },
+      data: { sendingCooldownUntil: null, sendingCooldownReason: null },
+    }),
+    // NOTE: campaigns paused by a USER ("stopped") are left alone — only
+    // the user's Resend button restarts them.
+  ]);
+  if (paused.count || cooldowns.count) {
+    console.log(
+      `🧹 Cleared ${paused.count} mailbox pause(s), ${cooldowns.count} long cooldown(s)`,
+    );
+  }
+}
+
 /** Optional storage cleanup — see FOLLOWUP_BODY_RETENTION_DAYS. */
 async function trimFollowupBodies() {
   if (FOLLOWUP_BODY_RETENTION_DAYS <= 0) return;
@@ -263,6 +325,7 @@ async function startWorker() {
   if (shuttingDown) return;
 
   console.log("⚙️ Initial recovery and resume...");
+  await job("clearOldPauses", clearOldPauses)();
   await job("recoverStuckEmails", recoverStuckEmails)();
   await job("resumeSendingCampaigns", resumeSendingCampaigns)();
   await job("resumeAccountDeletions", () => resumeAccountDeletions(prisma))();
@@ -273,6 +336,7 @@ async function startWorker() {
   );
 
   every(RESUME_TICK_MS, "resumeSendingCampaigns", resumeSendingCampaigns);
+  every(ms("WORKER_HEARTBEAT_MS", 30_000), "heartbeat", writeHeartbeat)();
   every(RECOVERY_TICK_MS, "recoverStuckEmails", recoverStuckEmails);
   every(DELETION_TICK_MS, "resumeAccountDeletions", () =>
     resumeAccountDeletions(prisma),
