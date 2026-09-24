@@ -127,7 +127,8 @@ const COLOR_FAMILIES = [
 ];
 
 const LIMIT_OPTIONS = [10, 20, 30, 40, 50, 60, 70, 80, 100, 150, 200];
-// Emails per HOUR per mailbox, by provider (refills every hour). Must match
+// Emails per HOUR per mailbox, by provider. Sends are spread evenly across
+// the hour (interval = 60 min ÷ limit), never sent in a burst. Must match
 // PROVIDER_HOURLY_LIMITS in server/src/services/campaignMailer.service.js.
 const PROVIDER_HOURLY_LIMITS = {
   gmail: 40,
@@ -136,6 +137,17 @@ const PROVIDER_HOURLY_LIMITS = {
   yahoo: 10,
 };
 const DEFAULT_HOURLY_LIMIT = 10; // any other provider
+// "1 email every 2 min" for 30/hr, "every 6 min" for 10/hr, "every 18 sec" for 200/hr.
+const formatSendInterval = (perHour) => {
+  const n = Number(perHour);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const minutes = 60 / n;
+  if (minutes >= 1) {
+    const rounded = Math.round(minutes * 10) / 10;
+    return `every ${rounded} min`;
+  }
+  return `every ${Math.round(minutes * 60)} sec`;
+};
 const providerHourlyLimit = (provider) => {
   const p = String(provider || "").toLowerCase();
   if (PROVIDER_HOURLY_LIMITS[p]) return PROVIDER_HOURLY_LIMITS[p];
@@ -848,7 +860,8 @@ export default function CreateCampaign() {
                           </p>
                           <p className="text-xs text-sky-600 font-medium">
                             {acc.provider?.toUpperCase()} • Limit:{" "}
-                            {getActualLimit(acc.id)}/hr
+                            {getActualLimit(acc.id)}/hr (1 email{" "}
+                            {formatSendInterval(getActualLimit(acc.id))})
                             {sharedAccounts.includes(Number(acc.id)) && (
                               <span className="ml-1 text-amber-600">
                                 • also sending another campaign (limit shared)
@@ -932,7 +945,7 @@ export default function CreateCampaign() {
                                 </option>
                                 {LIMIT_OPTIONS.map((opt) => (
                                   <option key={opt} value={opt}>
-                                    {opt}/hr
+                                    {opt}/hr · {formatSendInterval(opt)}
                                   </option>
                                 ))}
                                 <option value="custom">Custom…</option>
@@ -1021,7 +1034,7 @@ export default function CreateCampaign() {
                               </option>
                               {LIMIT_OPTIONS.map((opt) => (
                                 <option key={opt} value={opt}>
-                                  {opt}/hr
+                                  {opt}/hr · {formatSendInterval(opt)}
                                 </option>
                               ))}
                             </select>

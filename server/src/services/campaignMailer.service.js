@@ -91,61 +91,102 @@ function setAccountState(accountId, status, durationMs, reason) {
     );
 }
 
-/* ── Per-mailbox hourly window (shared by every campaign) ─────────────────
-   Each mailbox may send `limit` emails in any rolling 60 minutes (Gmail 40,
-   GSuite 150, Rediff 30, Yahoo 10 …). Sending starts IMMEDIATELY on every
-   mailbox in parallel — no spreading over the hour. When a mailbox has used
-   its limit it waits only until its oldest send in the window is 1 hour old,
-   then continues. Campaigns sharing a mailbox share its hourly limit.
+/* ── Per-mailbox hourly pacing (shared by every campaign) ─────────────────
+   Each mailbox sends at most `limit` emails per hour, SPREAD EVENLY across
+   the hour — never in a burst:
 
-   MAILBOX_MIN_GAP_SEC (default 3 s) is a small gap between two emails from
-   the SAME mailbox so a provider doesn't see a machine-gun burst.         */
+       interval = 60 min ÷ limit
+         30/hr → 1 email every 2 min      20/hr → every 3 min
+         10/hr → 1 email every 6 min       5/hr → every 12 min
+
+   BUG FIXED: this used to be a pure "rolling window" limiter — it let a
+   mailbox send its whole hourly allowance immediately (only MIN_GAP_MS =
+   3 s apart, so 30/hr went out in ~90 seconds) and then sat idle for the
+   rest of the hour. That is the "emails are sent all at once" symptom.
+   Now two rules apply to every send from a mailbox:
+     1. at least `interval` since that mailbox's previous send, and
+     2. never more than `limit` sends in any rolling 60 minutes
+        (a safety net, e.g. after a worker restart).
+   Campaigns sharing a mailbox share its timeline, so together they still
+   send one email per interval from that mailbox.
+
+   MAILBOX_MIN_GAP_SEC (default 3 s) remains an absolute floor for very
+   high limits.                                                           */
 const HOUR_MS = 60 * 60_000;
 const MIN_GAP_MS =
   Math.max(0, Number(process.env.MAILBOX_MIN_GAP_SEC ?? 3)) * 1000;
-const mailboxWindow = new Map(); // accountId → { times: number[], seeded: bool }
+const mailboxWindow = new Map(); // accountId → { times: number[], seeded: bool, seeding: Promise|null }
+
+/** Even spacing between two emails from one mailbox at `limit`/hour. */
+export function getSendIntervalMs(limit) {
+  const n = Math.max(Number(limit) || 1, 1);
+  return Math.max(MIN_GAP_MS, Math.ceil(HOUR_MS / n));
+}
 
 async function getWindow(accountId) {
   let w = mailboxWindow.get(accountId);
   if (!w) {
-    w = { times: [], seeded: false };
+    w = { times: [], seeded: false, seeding: null };
     mailboxWindow.set(accountId, w);
   }
   if (!w.seeded) {
-    // After a worker restart, count what this mailbox already sent in the
-    // last hour so the hourly limit is still respected.
-    w.seeded = true;
-    try {
-      const rows = await prisma.campaignRecipient.findMany({
-        where: {
-          accountId,
-          status: "sent",
-          sentAt: { gte: new Date(Date.now() - HOUR_MS) },
-        },
-        select: { sentAt: true },
-        orderBy: { sentAt: "asc" },
-        take: 1000,
-      });
-      const seeded = rows.map((r) => r.sentAt.getTime());
-      w.times = [...seeded, ...w.times].sort((x, y) => x - y);
-    } catch {
-      w.seeded = false; // try again next time
+    // After a worker restart, load what this mailbox already sent in the
+    // last hour so both the spacing and the hourly limit carry on correctly.
+    // One shared promise: two campaigns starting on the same mailbox at the
+    // same moment must not both see an empty (unseeded) history.
+    if (!w.seeding) {
+      w.seeding = (async () => {
+        try {
+          const rows = await prisma.campaignRecipient.findMany({
+            where: {
+              accountId,
+              status: "sent",
+              sentAt: { gte: new Date(Date.now() - HOUR_MS) },
+            },
+            select: { sentAt: true },
+            orderBy: { sentAt: "asc" },
+            take: 1000,
+          });
+          const seeded = rows.map((r) => r.sentAt.getTime());
+          w.times = [...seeded, ...w.times].sort((x, y) => x - y);
+          w.seeded = true;
+        } catch {
+          /* try again next time */
+        } finally {
+          w.seeding = null;
+        }
+      })();
     }
+    await w.seeding;
   }
   return w;
 }
 
-/** Wait until this mailbox may send one more email, then reserve it. */
-async function waitForMailboxSlot(accountId, limit, isStillWanted) {
+/**
+ * Wait until this mailbox may send one more email, then reserve it.
+ * @param {number} accountId
+ * @param {number} limit          emails per hour for this mailbox
+ * @param {() => Promise<boolean>} [isStillWanted]
+ * @param {number} [notBefore]    epoch ms — don't send earlier (start stagger)
+ * @returns {Promise<number|false>} slot id, or false if no longer wanted
+ */
+async function waitForMailboxSlot(accountId, limit, isStillWanted, notBefore = 0) {
   const w = await getWindow(accountId);
+  const intervalMs = getSendIntervalMs(limit);
   for (;;) {
     const now = Date.now();
     while (w.times.length && w.times[0] <= now - HOUR_MS) w.times.shift();
     const last = w.times[w.times.length - 1] || 0;
+
     let waitMs = 0;
+    // Rule 1 — even spacing: one email per interval.
+    if (last) waitMs = Math.max(waitMs, last + intervalMs - now);
+    // Rule 2 — hard hourly ceiling (rolling 60 minutes).
     if (w.times.length >= limit)
-      waitMs = w.times[0] + HOUR_MS - now; // hour used up
-    else if (now - last < MIN_GAP_MS) waitMs = last + MIN_GAP_MS - now;
+      waitMs = Math.max(waitMs, w.times[0] + HOUR_MS - now);
+    // Start stagger so several mailboxes don't fire at the same second.
+    if (notBefore) waitMs = Math.max(waitMs, notBefore - now);
+
     if (waitMs <= 0) {
       w.times.push(now); // reserve (synchronous → no double booking)
       return now; // slot id
@@ -1171,7 +1212,7 @@ function getControlledDelay({ limit }) {
   // answered with rate-limit errors, the engine locked the mailbox for 24 h,
   // and the per-mailbox daily cap was burnt in the first hour — which is
   // exactly the "campaign paused and never starts again" symptom.
-  return (60 * 60 * 1000) / Math.max(Number(limit) || 1, 1);
+  return getSendIntervalMs(limit);
 }
 
 function claimSizeFor(delayMs) {
@@ -1777,9 +1818,15 @@ async function runBatch(batch, ctx) {
      * Skipped/suppressed recipients should not consume the normal
      * sending delay.
      */
-    if (!["skipped", "suppressed"].includes(result.outcome)) {
-      // No pacing sleep: the mailbox's hourly window controls the speed.
+    if (["skipped", "suppressed"].includes(result.outcome)) {
+      // Nothing was sent: hand the reserved slot back so a skipped row
+      // doesn't cost the mailbox a whole interval.
+      if (ctx.currentSlot) {
+        releaseMailboxSlot(Number(ctx.account.id), ctx.currentSlot);
+        ctx.currentSlot = null;
+      }
     }
+    // No pacing sleep here: waitForMailboxSlot() spaces the sends.
   }
 
   return "continue";
@@ -1796,6 +1843,7 @@ async function processAccountBatched({
   originalCampaignId,
   customLimits,
   userId,
+  startOffsetMs = 0,
 }) {
   const senders = createSenderCache();
 
@@ -1823,7 +1871,8 @@ async function processAccountBatched({
       originalCampaignId,
       senders,
       limit,
-      delayPerEmail: (60 * 60 * 1000) / Math.max(limit, 1),
+      delayPerEmail: getSendIntervalMs(limit),
+      currentSlot: null,
 
       // Runtime flags used by claimNextBatch().
       pauseLogged: false,
@@ -1835,8 +1884,16 @@ async function processAccountBatched({
 
     console.log(
       `▶️ Campaign ${campaignId}: starting account processor ` +
-        `${account.email} (accountId=${numericAccountId}, limit=${limit})`,
+        `${account.email} (accountId=${numericAccountId}, limit=${limit}/hr, ` +
+        `1 email every ${(getSendIntervalMs(limit) / 60_000).toFixed(1)} min` +
+        (startOffsetMs > 0
+          ? `, first send in ${Math.round(startOffsetMs / 1000)}s`
+          : "") +
+        `)`,
     );
+
+    // Only the first send is staggered; after that the interval rules.
+    let notBefore = startOffsetMs > 0 ? Date.now() + startOffsetMs : 0;
 
     while (true) {
       let next;
@@ -1849,7 +1906,9 @@ async function processAccountBatched({
         numericAccountId,
         ctx.limit,
         stillSending,
+        notBefore,
       );
+      notBefore = 0;
       if (!slot) {
         console.log(
           `⏹ Campaign ${campaignId}: no longer sending — ${account.email} exits`,
@@ -1928,6 +1987,7 @@ async function processAccountBatched({
 
         let result;
 
+        ctx.currentSlot = slot;
         try {
           result = await runBatch(next.batch, ctx);
         } catch (err) {
@@ -2734,8 +2794,18 @@ async function _sendBulkCampaignInner(campaignId) {
   // Free the big arrays before the long-running loops.
   pendingRecipients = null;
 
+  // Stagger the mailboxes' FIRST sends so N mailboxes don't all fire in the
+  // same second. With 3 mailboxes at 30/hr (total 90/hr) the campaign sends
+  // one email every ~40 s, rotating mailboxes, and each mailbox still sends
+  // exactly one email every 2 minutes.
+  const totalHourly = accountIds.reduce((sum, id) => {
+    const n = Number(customLimits?.[id]);
+    return sum + (Number.isFinite(n) && n > 0 ? n : DEFAULT_HOURLY_LIMIT);
+  }, 0);
+  const staggerStepMs = HOUR_MS / Math.max(totalHourly, 1);
+
   await Promise.all(
-    accountIds.map((accountId) =>
+    accountIds.map((accountId, index) =>
       processAccountBatched({
         campaignId,
         accountId,
@@ -2744,6 +2814,7 @@ async function _sendBulkCampaignInner(campaignId) {
         originalCampaignId,
         customLimits,
         userId,
+        startOffsetMs: Math.round(index * staggerStepMs),
       }).catch((err) => {
         console.error(`❌ Account ${accountId} processor error:`, err.message);
       }),
