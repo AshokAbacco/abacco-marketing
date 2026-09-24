@@ -177,6 +177,56 @@ async function getWindow(accountId) {
   return w;
 }
 
+/* ── Database guard (works across processes) ─────────────────────────────
+   The in-memory window only sees sends made by THIS process. If a second
+   worker ever runs (a local `npm run start:worker` against the production
+   DB, a Render deploy overlap, a duplicate service), each process allowed
+   the full hourly limit on its own — e.g. 36 sends/hour on a 30/hr mailbox.
+   Right before every send the mailbox's REAL history is read from the
+   database (sent in the last hour + emails in flight right now, from any
+   process and any campaign), so the limit holds regardless.
+   Uses @@index([accountId, sentAt]) and @@index([status, updatedAt]).    */
+const DB_GUARD_ENABLED = process.env.MAILBOX_DB_GUARD !== "false";
+
+/** ms this mailbox must still wait according to the database (0 = go). */
+async function dbMailboxWaitMs(accountId, limit, intervalMs) {
+  const [sent, inflight] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT (EXTRACT(EPOCH FROM (NOW() - "sentAt")) * 1000)::bigint AS "ago"
+      FROM "CampaignRecipient"
+      WHERE "accountId" = ${accountId}
+        AND "status" = 'sent'
+        AND "sentAt" >= NOW() - INTERVAL '1 hour'
+      ORDER BY "sentAt" DESC
+      LIMIT ${Math.max(1, Math.floor(limit))}
+    `,
+    // Claimed and being sent right now (possibly by another process).
+    prisma.$queryRaw`
+      SELECT (EXTRACT(EPOCH FROM (NOW() - "updatedAt")) * 1000)::bigint AS "ago"
+      FROM "CampaignRecipient"
+      WHERE "accountId" = ${accountId}
+        AND "status" = 'processing'
+        AND "updatedAt" >= NOW() - INTERVAL '2 minutes'
+    `,
+  ]);
+
+  // Most recent first.
+  const ages = [...sent, ...inflight]
+    .map((r) => Math.max(0, Number(r.ago)))
+    .sort((a, b) => a - b);
+  if (!ages.length) return 0;
+
+  let wait = 0;
+  // Spacing. A little tolerance: the recorded sentAt is a few seconds after
+  // the round tick (claim + SMTP time), which must not push the mailbox a
+  // whole round behind.
+  const tolerance = Math.min(20_000, Math.floor(intervalMs * 0.25));
+  wait = Math.max(wait, intervalMs - tolerance - ages[0]);
+  // Hard hourly ceiling.
+  if (ages.length >= limit) wait = Math.max(wait, HOUR_MS - ages[limit - 1]);
+  return Math.max(0, Math.ceil(wait));
+}
+
 /**
  * Wait until this mailbox may send one more email, then reserve it.
  * @param {number} accountId
@@ -199,6 +249,8 @@ async function waitForMailboxSlot(
   const w = await getWindow(accountId);
   const intervalMs = getSendIntervalMs(limit);
   let lastWantedCheck = Date.now();
+  let dbNotBefore = 0; // set by the database guard
+  let dbOkAt = 0; // when the database guard last said "go"
   for (;;) {
     const now = Date.now();
     while (w.times.length && w.times[0] <= now - HOUR_MS) w.times.shift();
@@ -213,6 +265,8 @@ async function waitForMailboxSlot(
       earliest = Math.max(earliest, w.times[0] + HOUR_MS);
     // Staggered mode: offset of this mailbox's first send.
     if (notBefore) earliest = Math.max(earliest, notBefore);
+    // Database guard said "not yet".
+    if (dbNotBefore) earliest = Math.max(earliest, dbNotBefore);
     // Together mode: snap UP to the next round tick.
     if (gridOrigin) {
       earliest =
@@ -222,7 +276,35 @@ async function waitForMailboxSlot(
             Math.ceil((earliest - gridOrigin) / intervalMs) * intervalMs;
     }
 
-    const waitMs = earliest - now;
+    let waitMs = earliest - now;
+
+    // In-memory rules say go → confirm against the real send history.
+    // (After the await, the loop re-checks the in-memory rules before
+    // reserving, so two campaigns sharing this mailbox can't both book.)
+    if (waitMs <= 0 && DB_GUARD_ENABLED && Date.now() - dbOkAt > 2_000) {
+      try {
+        const dbWait = await dbMailboxWaitMs(accountId, limit, intervalMs);
+        if (dbWait > 0) {
+          dbNotBefore = Date.now() + dbWait;
+          if (!w.dbWarned) {
+            console.warn(
+              `⏳ [account ${accountId}] database shows recent sends not made by ` +
+                `this process — waiting ${Math.round(dbWait / 1000)}s to respect ` +
+                `${limit}/hr. (Is a second worker running?)`,
+            );
+            w.dbWarned = true;
+          }
+          continue;
+        }
+        dbOkAt = Date.now();
+        continue; // re-check in-memory state, then reserve
+      } catch {
+        /* DB blip — fall back to the in-memory decision */
+        dbOkAt = Date.now();
+        continue;
+      }
+    }
+
     if (waitMs <= 0) {
       // Reserve synchronously (no double booking). In together mode the
       // reservation is stamped with the current round tick (not the exact
@@ -1818,12 +1900,31 @@ async function runBatch(batch, ctx) {
        * Leave it as "processing" so the worker's recovery sweep can
        * safely return it to "pending".
        */
+      // processRecipient() only throws BEFORE the SMTP call (heartbeat or
+      // do-not-contact lookup failed — almost always a database problem),
+      // so NOTHING was sent. Previously the row was left in "processing":
+      // the campaign showed "Being sent right now" with 0 sent for minutes,
+      // and every recovery sweep added a retry until the row was wrongly
+      // marked failed. Now it goes straight back to the queue (no retry
+      // counted) and the mailbox's slot is given back.
       console.error(
-        `⚠️ [${ctx.account.email}] send step failed (${err.message}) ` +
-          `— leaving row for recovery and pausing 10s`,
+        `⚠️ [${ctx.account.email}] could not start sending to ${recipient.email} ` +
+          `(${String(err.message || err).split("\n").pop()}) — nothing was sent, ` +
+          `returned to queue`,
       );
-
-      await sleep(10_000);
+      await prisma.campaignRecipient
+        .updateMany({
+          where: { id: recipient.id, status: "processing" },
+          data: { status: "pending", updatedAt: new Date() },
+        })
+        .catch(() => {
+          /* DB still down — the recovery sweep will return it */
+        });
+      if (ctx.currentSlot) {
+        releaseMailboxSlot(Number(ctx.account.id), ctx.currentSlot);
+        ctx.currentSlot = null;
+      }
+      await sleep(isDbUnavailableError(err) ? 15_000 : 10_000);
       continue;
     }
 

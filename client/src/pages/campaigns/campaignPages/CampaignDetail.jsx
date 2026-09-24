@@ -58,7 +58,7 @@ const Button = ({
   ...props
 }) => {
   const base =
-    "inline-flex items-center justify-center gap-2 font-bold rounded-xl transition-all focus:outline-none transform hover:scale-105";
+    "inline-flex items-center justify-center gap-2 font-bold rounded-xl transition-all focus:outline-none transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:shadow-none";
   const variants = {
     default:
       "bg-gradient-to-r from-sky-600 to-blue-600 text-white hover:shadow-lg shadow-sky-500/30",
@@ -113,6 +113,10 @@ export default function CampaignDetail() {
   const [campaignsTotal, setCampaignsTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const { id } = useParams();
+  // Mailboxes still sending another campaign: [{ accountId, campaignId,
+  // campaignName, remaining }]. A follow-up is locked while any of ITS
+  // mailboxes is in this list; it unlocks by itself when that campaign ends.
+  const [busyDetails, setBusyDetails] = useState([]);
 
   // ── Daily limit ─────────────────────────────────────────────
   const dailyLimit = useDailyLimit();
@@ -166,6 +170,39 @@ export default function CampaignDetail() {
     setCampaignsTotal(0);
     fetchCampaigns(followupLevel, { append: false });
   }, [followupLevel]);
+
+  // Poll the busy-mailbox list so the lock lifts on its own once the
+  // running campaign completes (no page reload needed).
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/campaigns/accounts/locked`,
+          {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("token")}`,
+            },
+          },
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && data.success) {
+          setBusyDetails(
+            Array.isArray(data.data?.busyDetails) ? data.data.busyDetails : [],
+          );
+        }
+      } catch {
+        /* keep the last known state */
+      }
+    };
+    load();
+    const t = setInterval(load, 20_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/accounts`, {
@@ -221,6 +258,88 @@ export default function CampaignDetail() {
       .filter((acc) => ids.includes(acc.id))
       .map((acc) => acc.email);
   };
+
+  // Mailboxes a follow-up of this campaign would send from: the ones that
+  // sent the original emails (server: senderAccountIds), else the
+  // campaign's selected From accounts.
+  const getSenderAccountIds = (campaign) => {
+    if (!campaign) return [];
+    if (
+      Array.isArray(campaign.senderAccountIds) &&
+      campaign.senderAccountIds.length
+    ) {
+      return campaign.senderAccountIds.map(Number);
+    }
+    try {
+      return JSON.parse(campaign.fromAccountIds || "[]").map(Number);
+    } catch {
+      return [];
+    }
+  };
+
+  // Which of this campaign's mailboxes are busy right now (live list).
+  const getBlockers = (campaign) => {
+    const senders = new Set(getSenderAccountIds(campaign));
+    if (!senders.size) return [];
+    const seen = new Set();
+    return busyDetails
+      .filter((b) => senders.has(Number(b.accountId)))
+      .filter((b) => {
+        const key = `${b.accountId}|${b.campaignId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((b) => ({
+        ...b,
+        email:
+          accounts.find((a) => Number(a.id) === Number(b.accountId))?.email ||
+          `account #${b.accountId}`,
+      }));
+  };
+
+  const selectedBlockers = getBlockers(loadedCampaign);
+  // Follow-up waits while a campaign using the same mailbox is running.
+  // The From accounts themselves are never locked.
+  const followupLocked = selectedBlockers.length > 0;
+
+  // "25 Sept, 4:52 am (in 3h 10m)"
+  const formatEta = (ms) => {
+    if (!Number.isFinite(ms)) return "—";
+    const when = new Date(ms).toLocaleString("en-IN", {
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const mins = Math.max(0, Math.round((ms - Date.now()) / 60_000));
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const left = mins === 0 ? "any moment" : h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+    return `${when} (${left})`;
+  };
+
+  // Estimated completion shown in the Summary:
+  //  • running campaign on the same mailbox → when THAT campaign finishes
+  //    (that's when Create Follow-up becomes available)
+  //  • otherwise → when this follow-up would finish at its hourly limits
+  const getEstimatedCompletion = () => {
+    if (!loadedCampaign) return null;
+    if (followupLocked) {
+      const ends = selectedBlockers
+        .map((b) => Date.parse(b.estimatedCompletion))
+        .filter(Number.isFinite);
+      return ends.length
+        ? { ms: Math.max(...ends), running: true }
+        : { ms: NaN, running: true };
+    }
+    const count = loadedCampaign.sentCount ?? 0;
+    const perHour = Number(loadedCampaign.followupHourlyCapacity) || 0;
+    if (!count || !perHour) return null;
+    return { ms: Date.now() + (count / perHour) * 3_600_000, perHour };
+  };
+  const eta = getEstimatedCompletion();
 
   const buildFollowupWithSignature = () => {
     return followUpBody || "";
@@ -340,6 +459,18 @@ export default function CampaignDetail() {
         open: true,
         type: "error",
         message: "Please select a campaign to send follow-up.",
+      });
+      return;
+    }
+
+    // Same-mailbox lock (the server enforces this too).
+    if (followupLocked) {
+      setModal({
+        open: true,
+        type: "error",
+        message:
+          "Please wait until this campaign is completed. Create Follow-up " +
+          "is enabled automatically once it finishes.",
       });
       return;
     }
@@ -778,6 +909,12 @@ export default function CampaignDetail() {
                 })()}
 
                 {/* Actions */}
+                {followupLocked && (
+                  <div className="flex items-center justify-end gap-2 pt-2 text-sm font-semibold text-amber-700">
+                    <Clock size={16} className="shrink-0" />
+                    Please wait until this campaign is completed.
+                  </div>
+                )}
                 <div className="flex justify-end gap-3 pt-4">
                   <Button
                     variant="outline"
@@ -790,6 +927,7 @@ export default function CampaignDetail() {
                     disabled={
                       sendingFollowup ||
                       !loadedCampaign ||
+                      followupLocked ||
                       loadingRecipients ||
                       !!recipientsError ||
                       (() => {
@@ -961,6 +1099,19 @@ export default function CampaignDetail() {
                     {loadedCampaign?.name || "Not selected"}
                   </p>
                 </div>
+
+                {/* Estimated completion */}
+                  {followupLocked && (
+                  <div className="bg-gradient-to-br from-sky-50 to-blue-50 p-4 rounded-xl border border-sky-200">
+                    <p className="text-xs text-sky-700 font-bold uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                      <Clock size={12} />
+                      Estimated Completion
+                    </p>
+                    <p className="font-bold text-slate-900 text-sm">
+                      {eta ? formatEta(eta.ms) : "—"}
+                    </p>
+                  </div>
+                )}
 
                 {/* From Mail Accounts Count */}
                 <div className="bg-gradient-to-br from-sky-50 to-blue-50 p-4 rounded-xl border border-sky-200">
