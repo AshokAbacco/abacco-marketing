@@ -117,6 +117,13 @@ export default function CampaignDetail() {
   // ── Daily limit ─────────────────────────────────────────────
   const dailyLimit = useDailyLimit();
 
+  // ── Sender-mailbox lock ─────────────────────────────────────
+  // A follow-up can't be sent while any of the campaign's From mailboxes
+  // is still sending another campaign. busyDetails comes from
+  // GET /api/campaigns/accounts/locked: [{ accountId, campaignId, campaignName, remaining }]
+  const [busyDetails, setBusyDetails] = useState([]);
+  const [checkingSenders, setCheckingSenders] = useState(false);
+
   // ------------------------------
   // Fetch campaigns
   // ------------------------------
@@ -221,6 +228,92 @@ export default function CampaignDetail() {
       .filter((acc) => ids.includes(acc.id))
       .map((acc) => acc.email);
   };
+
+  const SENDER_LOCK_POLL_MS = 20_000;
+
+  const fetchSenderLocks = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/campaigns/accounts/locked`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+    });
+    if (!res.ok) throw new Error(`Locked-accounts request failed (HTTP ${res.status})`);
+    const json = await res.json();
+    const list = Array.isArray(json?.data?.busyDetails)
+      ? json.data.busyDetails
+      : [];
+    setBusyDetails(list);
+    return list;
+  };
+
+  // Running campaigns that use any of this campaign's From mailboxes.
+  const findSenderConflicts = (campaign, details) => {
+    if (!campaign || !Array.isArray(details) || !details.length) return [];
+    let fromIds = [];
+    try {
+      fromIds = JSON.parse(campaign.fromAccountIds || "[]");
+    } catch {
+      fromIds = [];
+    }
+    const idSet = new Set(
+      (Array.isArray(fromIds) ? fromIds : []).map(Number).filter(Number.isInteger),
+    );
+    if (!idSet.size) return [];
+
+    const byCampaign = new Map();
+    for (const d of details) {
+      const accId = Number(d.accountId);
+      if (!idSet.has(accId)) continue;
+      const entry = byCampaign.get(d.campaignId) || {
+        campaignId: d.campaignId,
+        campaignName: d.campaignName,
+        accountIds: [],
+      };
+      if (!entry.accountIds.includes(accId)) entry.accountIds.push(accId);
+      byCampaign.set(d.campaignId, entry);
+    }
+    return [...byCampaign.values()];
+  };
+
+  const emailForAccount = (id) =>
+    (Array.isArray(accounts) &&
+      accounts.find((a) => Number(a.id) === Number(id))?.email) ||
+    `Mailbox #${id}`;
+
+  const senderConflictMessage = (conflicts) =>
+    `This follow-up can't be sent yet — its From mailbox(es) are still sending: ` +
+    conflicts
+      .map(
+        (c) =>
+          `"${c.campaignName}" (${c.accountIds.map(emailForAccount).join(", ")})`,
+      )
+      .join("; ") +
+    `. Please wait until that campaign is completed, then try again.`;
+
+  // Check when a campaign is selected, then keep polling so the lock
+  // lifts on its own once the running campaign finishes.
+  useEffect(() => {
+    if (!loadedCampaign?.id) {
+      setBusyDetails([]);
+      setCheckingSenders(false);
+      return;
+    }
+    let cancelled = false;
+    const run = async (first) => {
+      if (first) setCheckingSenders(true);
+      try {
+        await fetchSenderLocks();
+      } catch (err) {
+        console.error("Failed to check sender mailboxes", err);
+      } finally {
+        if (first && !cancelled) setCheckingSenders(false);
+      }
+    };
+    run(true);
+    const timer = setInterval(() => run(false), SENDER_LOCK_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [loadedCampaign?.id]);
 
   const buildFollowupWithSignature = () => {
     return followUpBody || "";
@@ -400,6 +493,23 @@ export default function CampaignDetail() {
       });
       return;
     }
+
+    // ── Sender-mailbox guard (fresh check) ───────────────────
+    try {
+      const latest = await fetchSenderLocks();
+      const conflicts = findSenderConflicts(loadedCampaign, latest);
+      if (conflicts.length) {
+        setModal({
+          open: true,
+          type: "error",
+          message: senderConflictMessage(conflicts),
+        });
+        return;
+      }
+    } catch (err) {
+      // The server enforces the same rule, so a failed check here is safe.
+      console.error("Sender mailbox check failed", err);
+    }
     // ─────────────────────────────────────────────────────────
 
     setSendingFollowup(true);
@@ -564,6 +674,7 @@ export default function CampaignDetail() {
   };
 
   const froms = getFromEmails();
+  const senderConflicts = findSenderConflicts(loadedCampaign, busyDetails);
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-sky-50 via-blue-50 to-cyan-50">
@@ -683,6 +794,37 @@ export default function CampaignDetail() {
                     )}
                   </div>
                 )}
+
+                {/* ── Sender-mailbox lock ─────────────────────────────── */}
+                {loadedCampaign && senderConflicts.length > 0 && (
+                  <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mt-4">
+                    <Lock
+                      size={18}
+                      className="text-amber-600 mt-0.5 shrink-0"
+                    />
+                    <div>
+                      <p className="text-sm font-bold text-amber-800">
+                        Follow-up locked — From accounts are busy
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                        These mailboxes are still sending another campaign.
+                        The follow-up unlocks automatically once that
+                        campaign is completed.
+                      </p>
+                      <ul className="mt-2 space-y-1">
+                        {senderConflicts.map((c) => (
+                          <li
+                            key={c.campaignId}
+                            className="text-xs text-amber-800"
+                          >
+                            <strong>{c.campaignName}</strong> —{" "}
+                            {c.accountIds.map(emailForAccount).join(", ")}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -792,6 +934,8 @@ export default function CampaignDetail() {
                       !loadedCampaign ||
                       loadingRecipients ||
                       !!recipientsError ||
+                      checkingSenders ||
+                      senderConflicts.length > 0 ||
                       (() => {
                         const cnt = loadedCampaign?.sentCount ?? 0;
                         return dailyLimit && cnt > dailyLimit.remaining;

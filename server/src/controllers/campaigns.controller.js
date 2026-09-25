@@ -140,6 +140,60 @@ async function getBusyAccountIds({ excludeCampaignId = null } = {}) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   HELPER — follow-up From-mailbox guard.
+   A follow-up may not start while any of its From mailboxes still has
+   emails to send in a running ("sending") campaign. It unlocks as soon
+   as that campaign has nothing left to send.
+   Returns null when all clear, or { status, body } when blocked.
+───────────────────────────────────────────────────────────────────────── */
+async function checkFollowupSenderConflicts(
+  accountIds,
+  { excludeCampaignId = null } = {},
+) {
+  const ids = [
+    ...new Set(
+      (accountIds || [])
+        .map(Number)
+        .filter((n) => Number.isInteger(n) && n > 0),
+    ),
+  ];
+  if (!ids.length) return null;
+
+  // Decide on fresh data, not a snapshot that may be up to 5 s old.
+  cache.del("busyAccounts");
+  const busy = (await getBusyAccounts()).filter(
+    (b) => b.campaignId !== excludeCampaignId && ids.includes(b.accountId),
+  );
+  if (!busy.length) return null;
+
+  const byCampaign = new Map();
+  for (const b of busy) {
+    const entry = byCampaign.get(b.campaignId) || {
+      campaignId: b.campaignId,
+      campaignName: b.campaignName,
+      accountIds: [],
+    };
+    if (!entry.accountIds.includes(b.accountId))
+      entry.accountIds.push(b.accountId);
+    byCampaign.set(b.campaignId, entry);
+  }
+  const runningCampaigns = [...byCampaign.values()];
+  const busyAccountIds = [...new Set(busy.map((b) => b.accountId))];
+  const names = runningCampaigns.map((c) => `"${c.campaignName}"`).join(", ");
+
+  return {
+    status: 409,
+    body: {
+      success: false,
+      code: "FOLLOWUP_SENDERS_BUSY",
+      busyAccountIds,
+      runningCampaigns,
+      message: `This follow-up can't be sent yet: ${busyAccountIds.length} of its From mailbox(es) are still sending ${names}. Please wait until that campaign is completed, then try again.`,
+    },
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    HELPER — shared daily-limit + window pre-check
    Returns null if all clear, or { status, body } error object if blocked.
 ───────────────────────────────────────────────────────────────────────── */
@@ -942,6 +996,27 @@ export const createFollowupCampaign = async (req, res) => {
     // (Removed) busy-mailbox check: mailboxes are shared safely between
     // campaigns by the worker's per-mailbox pacing.
 
+    // 🔒 Follow-up rule: don't start while any of the base campaign's From
+    //    mailboxes (or the mailboxes this follow-up sends from) is still
+    //    sending another campaign. Checked before the draft is created.
+    {
+      const base = await prisma.campaign.findUnique({
+        where: { id: baseCampaign.id },
+        select: { fromAccountIds: true },
+      });
+      let baseFromIds = [];
+      try {
+        baseFromIds = JSON.parse(base?.fromAccountIds || "[]");
+      } catch {
+        baseFromIds = [];
+      }
+      const conflict = await checkFollowupSenderConflicts([
+        ...(Array.isArray(baseFromIds) ? baseFromIds : []),
+        ...senderEntries.map(([senderId]) => senderId),
+      ]);
+      if (conflict) return res.status(conflict.status).json(conflict.body);
+    }
+
     let finalName = `${baseCampaign.name} (Followup)`;
     const existing = await prisma.campaign.findMany({
       where: { userId: req.user.id, name: { startsWith: finalName } },
@@ -1076,6 +1151,24 @@ export const sendFollowupCampaign = async (req, res) => {
     // 🌐 Global check
     const blocked = await checkGlobalSendingRules(campaign.userId);
     if (blocked) return res.status(blocked.status).json(blocked.body);
+
+    // 🔒 Follow-up rule: its From mailboxes must not still be sending
+    //    another campaign (re-checked here: the create call may have
+    //    passed just before another campaign started).
+    {
+      const senderRows = await prisma.$queryRaw`
+        SELECT DISTINCT r."accountId"
+        FROM "CampaignRecipient" r
+        WHERE r."campaignId" = ${campaignId}
+          AND r."status" IN ('pending', 'processing')
+          AND r."accountId" IS NOT NULL
+      `;
+      const conflict = await checkFollowupSenderConflicts(
+        senderRows.map((r) => r.accountId),
+        { excludeCampaignId: campaignId },
+      );
+      if (conflict) return res.status(conflict.status).json(conflict.body);
+    }
 
     await prisma.campaign.update({
       where: { id: campaignId },
