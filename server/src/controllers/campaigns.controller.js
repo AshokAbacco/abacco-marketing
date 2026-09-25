@@ -17,6 +17,12 @@ import {
   resolveOriginalCampaignId,
 } from "../services/campaignMailer.service.js";
 import { buildCampaignStatus } from "../services/campaignStatus.service.js";
+import {
+  getAccountCap,
+  getSentTodayMany,
+  msUntilNextSendingDay,
+  PROVIDER_DAILY_LIMITS,
+} from "../services/sendingLimits.service.js";
 import { normalizeEmail } from "../services/suppression.service.js";
 import cache, { getOrSet, delByPrefix } from "../utils/cache.js";
 import { isAdminOrHr } from "../middlewares/authMiddleware.js";
@@ -32,6 +38,7 @@ const invalidateDashboardCache = (userId) => {
   // Busy accounts are global (any user's sending campaign locks accounts).
   cache.del("busyAccounts");
   cache.del(`dailyLimit:${userId}`);
+  delByPrefix(`mailboxLimits:${userId}:`);
   cache.del(`allCampaigns:${userId}`);
   cache.del(`campaignNames:${userId}`);
   cache.del(`appDashboard:${userId}`);
@@ -289,6 +296,136 @@ export const getDailyLimitStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("getDailyLimitStatus error:", err);
+    return res.status(500).json({ success: false });
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET /api/campaigns/mailbox-limits
+   Per-mailbox daily limit for the caller's mailboxes:
+     limit (by provider) · sent today · remaining today · pending
+   "pending" = unsent emails in active (sending / scheduled) campaigns that
+   this mailbox will send:
+     • follow-ups: exact — each row is bound to its mailbox;
+     • normal campaigns: one shared queue per campaign, split evenly over
+       the campaign's mailboxes (an estimate — flagged as such).
+   Optional ?ids=1,2,3 limits the response to those mailboxes.
+═══════════════════════════════════════════════════════════════════════════ */
+const ACTIVE_CAMPAIGN_STATUSES = ["sending", "scheduled"];
+
+async function computeMailboxLimits(userId, onlyIds) {
+  const accounts = await prisma.emailAccount.findMany({
+    where: {
+      userId,
+      deleted: false,
+      ...(onlyIds ? { id: { in: onlyIds } } : {}),
+    },
+    select: { id: true, email: true, provider: true },
+    orderBy: { email: "asc" },
+  });
+  const ids = accounts.map((a) => a.id);
+  const resetsAt = new Date(Date.now() + msUntilNextSendingDay());
+  if (!ids.length) return { accounts: [], resetsAt };
+
+  const [caps, sentMap, followupRows, normalRows] = await Promise.all([
+    Promise.all(ids.map((id) => getAccountCap(id))),
+    getSentTodayMany(ids),
+    prisma.$queryRaw`
+      SELECT r."accountId", count(*)::int AS n
+      FROM "CampaignRecipient" r
+      JOIN "Campaign" c ON c."id" = r."campaignId"
+      WHERE c."sendType" = 'followup'
+        AND c."status" = ANY(${ACTIVE_CAMPAIGN_STATUSES}::text[])
+        AND r."status" IN ('pending', 'processing')
+        AND r."accountId" = ANY(${ids}::int[])
+      GROUP BY r."accountId"`,
+    prisma.$queryRaw`
+      SELECT c."id", c."fromAccountIds", count(*)::int AS n
+      FROM "CampaignRecipient" r
+      JOIN "Campaign" c ON c."id" = r."campaignId"
+      WHERE c."sendType" <> 'followup'
+        AND c."status" = ANY(${ACTIVE_CAMPAIGN_STATUSES}::text[])
+        AND r."status" IN ('pending', 'processing')
+      GROUP BY c."id", c."fromAccountIds"`,
+  ]);
+
+  const exact = new Map(followupRows.map((r) => [Number(r.accountId), r.n]));
+  const estimated = new Map();
+  const mine = new Set(ids);
+  for (const row of normalRows) {
+    let from = [];
+    try {
+      from = (JSON.parse(row.fromAccountIds || "[]") || [])
+        .map(Number)
+        .filter(Number.isInteger);
+    } catch {
+      /* malformed — skip */
+    }
+    from = [...new Set(from)];
+    if (!from.length || !from.some((id) => mine.has(id))) continue;
+    const base = Math.floor(row.n / from.length);
+    let extra = row.n % from.length;
+    for (const id of from) {
+      const share = base + (extra > 0 ? 1 : 0);
+      if (extra > 0) extra -= 1;
+      if (mine.has(id)) estimated.set(id, (estimated.get(id) || 0) + share);
+    }
+  }
+
+  const list = accounts.map((a, i) => {
+    const cap = caps[i];
+    const limit = Number.isFinite(cap.cap) ? cap.cap : null;
+    const sent = sentMap.get(a.id) || 0;
+    const remaining = limit == null ? null : Math.max(0, limit - sent);
+    const pendingFollowup = exact.get(a.id) || 0;
+    const pendingNormal = estimated.get(a.id) || 0;
+    const pending = pendingFollowup + pendingNormal;
+    const sendableToday = remaining == null ? pending : Math.min(pending, remaining);
+    return {
+      id: a.id,
+      email: a.email,
+      provider: a.provider,
+      providerKey: cap.providerKey,
+      providerLabel: cap.providerLabel,
+      limitSource: cap.source,
+      dailyLimit: limit,
+      sentToday: sent,
+      remaining,
+      pending,
+      pendingFollowup,
+      pendingNormal,
+      pendingIsEstimate: pendingNormal > 0,
+      sendableToday,
+      afterReset: Math.max(0, pending - sendableToday),
+      limitReached: limit != null && sent >= limit,
+      percentUsed:
+        limit == null ? null : Math.min(100, Math.round((sent / limit) * 100)),
+    };
+  });
+
+  return { accounts: list, resetsAt };
+}
+
+export const getMailboxLimits = async (req, res) => {
+  try {
+    const onlyIds = req.query.ids
+      ? String(req.query.ids)
+          .split(",")
+          .map(Number)
+          .filter((n) => Number.isInteger(n) && n > 0)
+      : null;
+    const key = `mailboxLimits:${req.user.id}:${onlyIds ? onlyIds.join(",") : "all"}`;
+    // Polled by the UI; the worker writes the counts, so keep this short.
+    const data = await getOrSet(key, 10, () =>
+      computeMailboxLimits(req.user.id, onlyIds),
+    );
+    res.set("Cache-Control", "private, max-age=5");
+    return res.json({
+      success: true,
+      data: { ...data, providerLimits: PROVIDER_DAILY_LIMITS },
+    });
+  } catch (err) {
+    console.error("getMailboxLimits error:", err);
     return res.status(500).json({ success: false });
   }
 };

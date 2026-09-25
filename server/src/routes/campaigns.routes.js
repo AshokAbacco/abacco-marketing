@@ -1,3 +1,5 @@
+// src/routes/campaigns.routes.js
+
 import express from "express";
 import { protect } from "../middlewares/authMiddleware.js";
 import {
@@ -20,6 +22,7 @@ import {
   updateFollowupRecipients,
   sendFollowupCampaign,
   getDailyLimitStatus,
+  getMailboxLimits,
   getAdminDailyOverview,
   getRecipientBody,
   getCampaignRecipientEmails,
@@ -37,6 +40,9 @@ router.get("/for-followup", protect, getCampaignsForFollowup);
 
 // Get locked accounts
 router.get("/accounts/locked", protect, getLockedAccounts);
+
+// Per-mailbox daily limit: limit / sent today / remaining / pending
+router.get("/mailbox-limits", protect, getMailboxLimits);
 
 // Create campaign
 router.post("/", protect, createCampaign);

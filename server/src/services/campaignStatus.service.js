@@ -233,6 +233,8 @@ export async function buildCampaignStatus(campaignId) {
   const worker = {
     online: hbAt != null && now - hbAt < WORKER_STALE_MS,
     lastSeenAt: hbAt ? new Date(hbAt) : null,
+    // Set by worker.js when it sees another worker's heartbeat.
+    otherWorker: heartbeat?.value?.otherWorker || null,
     runningThisCampaign: Array.isArray(heartbeat?.value?.activeCampaigns)
       ? heartbeat.value.activeCampaigns.includes(campaignId)
       : null,
@@ -290,7 +292,12 @@ export async function buildCampaignStatus(campaignId) {
   const capInfo = await Promise.all(
     accounts.map(async (a) => {
       const [cap, sent] = await Promise.all([
-        getAccountCap(a.id).catch(() => ({ cap: Infinity, source: "off" })),
+        getAccountCap(a.id).catch(() => ({
+          cap: Infinity,
+          source: "off",
+          providerKey: null,
+          providerLabel: a.provider || "Custom",
+        })),
         getAccountSentToday(a.id).catch(() => 0),
       ]);
       return [a.id, { ...cap, sentToday: sent }];
@@ -368,7 +375,7 @@ export async function buildCampaignStatus(campaignId) {
     } else if (capRemaining === 0) {
       state = "daily_cap";
       severity = "warning";
-      message = `Daily cap reached (${cap.sentToday}/${cap.cap}) — resumes at the 5 PM reset`;
+      message = `Daily limit reached (${cap.providerLabel}: ${cap.sentToday}/${cap.cap}) — unsent emails stay queued and resume automatically after the daily reset`;
       resumesAt = nextResetAt;
     } else if (companyBlocked) {
       state = "company_limit";
@@ -416,6 +423,8 @@ export async function buildCampaignStatus(campaignId) {
       id: a.id,
       email: a.email,
       provider: a.provider,
+      providerKey: cap.providerKey || null,
+      providerLabel: cap.providerLabel || a.provider || "Custom",
       state,
       severity,
       message,
@@ -428,10 +437,16 @@ export async function buildCampaignStatus(campaignId) {
       capSource: cap.source,
       sentToday: cap.sentToday,
       capRemaining,
+      // Same numbers under the names the UI shows: limit / sent / remaining.
+      dailyLimit: Number.isFinite(cap.cap) ? cap.cap : null,
+      remainingToday: capRemaining,
       sentByCampaign: row.sent || 0,
       sentLastHour: row.sentLastHour || 0,
       failed: row.failed || 0,
+      // Follow-ups: exact (rows are bound to a mailbox). Normal campaigns
+      // share one queue, so this is filled in below as an estimate.
       pending: isFollowup ? ownPending : null,
+      pendingIsEstimate: !isFollowup,
       lastSentAt: row.lastSentAt || null,
       _eta: {
         hourly: etaExcluded ? 0 : effectiveHourly,
@@ -442,6 +457,31 @@ export async function buildCampaignStatus(campaignId) {
       },
     };
   });
+
+  // Normal campaigns: every mailbox drains ONE shared queue, so there is
+  // no exact per-mailbox pending. Estimate each mailbox's share: split the
+  // queue evenly over the mailboxes still in use. (A mailbox at its daily
+  // limit hands its share to the others while they have room.)
+  if (!isFollowup) {
+    const active = mailboxes.filter((m) => m.state !== "removed");
+    const base = active.length ? Math.floor(remaining / active.length) : 0;
+    let extra = active.length ? remaining % active.length : 0;
+    for (const m of mailboxes) {
+      if (m.state === "removed") {
+        m.pending = 0;
+        continue;
+      }
+      m.pending = base + (extra > 0 ? 1 : 0);
+      if (extra > 0) extra -= 1;
+    }
+  }
+  for (const m of mailboxes) {
+    const p = m.pending || 0;
+    m.sendableToday =
+      m.capRemaining == null ? p : Math.min(p, m.capRemaining);
+    // Emails that will wait for the daily reset (at today's limit).
+    m.afterReset = Math.max(0, p - m.sendableToday);
+  }
 
   // ETA
   let eta = { at: null, in: null, ratePerHour: 0, note: null };

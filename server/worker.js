@@ -7,10 +7,12 @@
 //   npm run start:worker        (Render: Background Worker)
 //
 // Run ONE instance. A second instance would not double-send (rows are
-// claimed with FOR UPDATE SKIP LOCKED) but it doubles database load and
-// IMAP connections for no benefit.
+// claimed with FOR UPDATE SKIP LOCKED) and hourly pacing is shared through
+// EmailAccount.nextSendAt, but it doubles database load and IMAP
+// connections for no benefit. The heartbeat logs a warning if it sees one.
 
 import "dotenv/config";
+import os from "os";
 
 // Must be set before prismaClient.js is imported (it sizes the pool by role).
 process.env.PROCESS_ROLE = process.env.PROCESS_ROLE || "worker";
@@ -31,6 +33,10 @@ const {
   getActiveCampaignIds,
   flushDailyLog,
   MAX_TRANSIENT_RETRIES,
+  ensurePacingColumn,
+  renewSendLease,
+  releaseSendLease,
+  isSendLeader,
 } = await import("./src/services/campaignMailer.service.js");
 const { runFollowupCleanup } =
   await import("./src/controllers/campaigns.controller.js");
@@ -199,6 +205,8 @@ async function recoverStuckEmails() {
 
 /** Check sending campaigns and restart processors if work remains. */
 async function resumeSendingCampaigns() {
+  // Only the worker holding the sender lease sends (see renewSendLease).
+  if (!isSendLeader()) return;
   const campaigns = await prisma.campaign.findMany({
     where: { status: "sending" },
     select: { id: true },
@@ -230,10 +238,37 @@ async function resumeSendingCampaigns() {
  * from a campaign that is simply waiting (daily cap, cooldown, …).
  */
 const WORKER_HEARTBEAT_KEY = "worker.heartbeat";
+const WORKER_INSTANCE = `${os.hostname()}:${process.pid}:${Math.random()
+  .toString(36)
+  .slice(2, 8)}`;
+let lastDuplicateWarnAt = 0;
 async function writeHeartbeat() {
+  // Two workers on one database overwrite each other's heartbeat: if the
+  // last one isn't ours and is fresh, another worker is running. Sending is
+  // still paced correctly (EmailAccount.nextSendAt), but say so loudly.
+  const prev = await prisma.crmSetting
+    .findUnique({ where: { key: WORKER_HEARTBEAT_KEY } })
+    .catch(() => null);
+  const pv = prev?.value || {};
+  const fresh = pv.at && Date.now() - new Date(pv.at).getTime() < 90_000;
+  const otherWorker =
+    fresh && pv.instance && pv.instance !== WORKER_INSTANCE
+      ? pv.instance
+      : null;
+  if (otherWorker && Date.now() - lastDuplicateWarnAt > 10 * 60_000) {
+    lastDuplicateWarnAt = Date.now();
+    console.warn(
+      `🚨 ANOTHER WORKER IS RUNNING on this database (${otherWorker}); this one is ` +
+        `${WORKER_INSTANCE}. Run only ONE worker — stop the other (e.g. a local ` +
+        `npm run start:worker pointed at production).`,
+    );
+  }
   const value = {
     at: new Date().toISOString(),
     pid: process.pid,
+    instance: WORKER_INSTANCE,
+    host: os.hostname(),
+    otherWorker,
     activeCampaigns: getActiveCampaignIds(),
   };
   await prisma.crmSetting.upsert({
@@ -324,6 +359,12 @@ async function startWorker() {
   await waitForDatabase();
   if (shuttingDown) return;
 
+  // Per-mailbox pacing column (self-healing if the migration wasn't run),
+  // then take the sender lease before anything can send.
+  await ensurePacingColumn();
+  await renewSendLease();
+  every(ms("SEND_LEASE_RENEW_MS", 15_000), "sendLease", renewSendLease);
+
   console.log("⚙️ Initial recovery and resume...");
   await job("clearOldPauses", clearOldPauses)();
   await job("recoverStuckEmails", recoverStuckEmails)();
@@ -385,6 +426,7 @@ async function shutdown(signal, exitCode = 0) {
   console.log(`\n${signal} received — shutting down worker...`);
 
   timers.forEach(clearInterval);
+  await releaseSendLease();
 
   // Hard stop if something hangs.
   setTimeout(() => process.exit(exitCode), 15_000).unref();

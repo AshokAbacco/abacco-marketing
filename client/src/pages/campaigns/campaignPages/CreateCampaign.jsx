@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useDailyLimit } from "./dailyLimitStore";
+import { useMailboxLimits, formatLimitLine } from "./mailboxLimitsStore";
 import { startVisiblePolling } from "../../utils/polling";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -214,6 +215,8 @@ export default function CreateCampaign() {
 
   // ── Daily limit ────────────────────────────────────────────
   const dailyLimit = useDailyLimit();
+  // Per-mailbox daily limit (Gmail 300, Workspace 1 500, Yahoo 50, Rediff 300)
+  const mailboxLimits = useMailboxLimits();
 
   const formatText = (command, value = null) => {
     document.execCommand(command, false, value);
@@ -868,6 +871,30 @@ export default function CreateCampaign() {
                               </span>
                             )}
                           </p>
+                          {(() => {
+                            const ml = mailboxLimits.byId[acc.id];
+                            if (!ml) return null;
+                            return (
+                              <p
+                                className={`text-xs font-medium ${
+                                  ml.limitReached
+                                    ? "text-red-600"
+                                    : ml.remaining != null &&
+                                        ml.remaining < ml.pending
+                                      ? "text-amber-600"
+                                      : "text-slate-500"
+                                }`}
+                              >
+                                Today: {formatLimitLine(ml)}
+                                {ml.remaining != null &&
+                                  ` • ${ml.remaining.toLocaleString()} remaining`}
+                                {ml.pending > 0 &&
+                                  ` • ${ml.pending.toLocaleString()} pending`}
+                                {ml.limitReached &&
+                                  " • new emails queue until the daily reset"}
+                              </p>
+                            );
+                          })()}
                         </div>
                         {(() => {
                           const currentVal = customLimits[acc.id];

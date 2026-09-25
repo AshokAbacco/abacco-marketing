@@ -53,7 +53,7 @@ const STATE_LABEL = {
   hourly_limit: "Hourly limit used",
   done: "Done",
   not_running: "Idle",
-  daily_cap: "Daily cap reached",
+  daily_cap: "Daily limit reached",
   company_limit: "Company limit",
   provider_limit: "Provider refused — retrying",
   cooldown: "Cooldown",
@@ -274,6 +274,14 @@ export default function CampaignStatusPanel({
               </button>
             )}
         </div>
+        {worker.otherWorker && (
+          <p className="text-xs mt-2 flex items-start gap-1 font-semibold text-red-700">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            Two sending workers are running on this database (one on{" "}
+            {String(worker.otherWorker).split(":")[0]}). Hourly limits are
+            still respected, but stop the extra one.
+          </p>
+        )}
         {!worker.online && (
           <p className="text-xs mt-2 flex items-center gap-1">
             <Server size={12} /> Worker last seen:{" "}
@@ -427,13 +435,15 @@ export default function CampaignStatusPanel({
       {/* Mailboxes */}
       {mailboxes.length > 0 && (
         <div className="bg-white/80 rounded-2xl border border-sky-100 overflow-x-auto">
-          <table className="w-full min-w-[860px] text-sm">
+          <table className="w-full min-w-[1040px] text-sm">
             <thead>
               <tr className="bg-sky-50 border-b border-sky-100 text-left text-[11px] font-bold text-sky-700 uppercase tracking-wide">
                 <th className="px-3 py-2.5">Mailbox</th>
                 <th className="px-3 py-2.5">State / reason</th>
                 <th className="px-3 py-2.5">Limit/hr</th>
-                <th className="px-3 py-2.5">Sent today (all campaigns)</th>
+                <th className="px-3 py-2.5">Daily limit (all campaigns)</th>
+                <th className="px-3 py-2.5">Remaining today</th>
+                <th className="px-3 py-2.5">Pending</th>
                 <th className="px-3 py-2.5">Sent (this campaign)</th>
                 <th className="px-3 py-2.5">Failed</th>
                 <th className="px-3 py-2.5">Next send / resumes</th>
@@ -449,7 +459,7 @@ export default function CampaignStatusPanel({
                         <Mail size={12} className="text-sky-500" /> {m.email}
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        {m.provider || "custom"}
+                        {m.providerLabel || m.provider || "custom"}
                       </div>
                     </td>
                     <td className="px-3 py-2.5 max-w-xs">
@@ -472,19 +482,53 @@ export default function CampaignStatusPanel({
                       )}
                     </td>
                     <td className="px-3 py-2.5">
-                      {n(m.sentToday)}
-                      {m.dailyCap != null && (
-                        <span className="text-slate-500"> / {m.dailyCap}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {n(m.sentByCampaign)}
-                      {m.pending != null && (
-                        <div className="text-[11px] text-slate-500">
-                          {n(m.pending)} pending
+                      <span className="font-semibold text-slate-800">
+                        {m.providerLabel || "Mailbox"}: {n(m.sentToday)}
+                      </span>
+                      {m.dailyLimit != null ? (
+                        <span className="text-slate-500">
+                          {" "}
+                          / {n(m.dailyLimit)} sent
+                        </span>
+                      ) : (
+                        <div className="text-[11px] text-slate-400">
+                          no daily limit
                         </div>
                       )}
+                    </td>
+                    <td
+                      className={`px-3 py-2.5 font-semibold ${
+                        m.remainingToday === 0
+                          ? "text-red-600"
+                          : "text-slate-800"
+                      }`}
+                    >
+                      {m.remainingToday == null ? "—" : n(m.remainingToday)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-semibold text-slate-800">
+                        {m.pendingIsEstimate ? "≈" : ""}
+                        {n(m.pending)}
+                      </span>
+                      {m.afterReset > 0 && (
+                        <div className="text-[11px] font-medium text-amber-700">
+                          {n(m.sendableToday)} today, {n(m.afterReset)} after
+                          reset
+                        </div>
+                      )}
+                      {m.pendingIsEstimate && m.pending > 0 && (
+                        <div className="text-[11px] text-slate-500">
+                          share of the campaign queue
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 gap-2 flex items-center">
+                      {n(m.sentByCampaign)}
+                      {/* Per-mailbox cancel only where rows belong to a
+                          mailbox (follow-ups); normal campaigns share one
+                          queue, so their pending is only an estimate. */} 
                       {m.pending > 0 &&
+                        !m.pendingIsEstimate &&
                         !["completed", "failed"].includes(campaign.status) && (
                           <button
                             type="button"

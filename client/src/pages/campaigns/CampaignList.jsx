@@ -39,6 +39,7 @@ import CampaignDetail from "./campaignPages/CampaignDetail";
 import CampaignView from "./campaignPages/Schedulemodal";
 import DailyLimitBanner from "./campaignPages/DailyLimitBanner";
 import CampaignStatusPanel from "./campaignPages/CampaignStatusPanel";
+import MailboxLimitsPanel from "./campaignPages/MailboxLimitsPanel";
 
 import { api } from "../utils/api";
 import { startVisiblePolling } from "../utils/polling";
@@ -501,6 +502,9 @@ const DashboardTab = () => {
           accentColor="cyan"
         />
       </div>
+
+      {/* Per-mailbox daily limits: limit / sent / remaining / pending */}
+      {/* <MailboxLimitsPanel /> */}
 
       {/* Enhanced Filters & Search */}
       <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 sm:p-6 border border-sky-200/50 shadow-sm mb-6 sm:mb-8">

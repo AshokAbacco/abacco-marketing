@@ -6,6 +6,7 @@
 
 import nodemailer from "nodemailer";
 import prisma, { isDbUnavailableError } from "../prismaClient.js";
+import { Prisma } from "@prisma/client";
 import { resolveSecret } from "../utils/crypto.js";
 import { delByPrefix } from "../utils/cache.js";
 import dns from "dns/promises";
@@ -35,7 +36,8 @@ import {
   msUntilNextSendingDay,
   getAccountSentToday,
   getAccountCap,
-  recordAccountSend,
+  tryReserveAccountSend,
+  releaseAccountSend,
   flushAccountSends,
 } from "./sendingLimits.service.js";
 
@@ -122,11 +124,15 @@ const MIN_GAP_MS =
                  0:00 acc1 · 0:30 acc2 · 1:00 acc3 · 1:30 acc1 · …
    Each mailbox still sends exactly 1 email per interval either way.
    Switch with CAMPAIGN_SEND_MODE=staggered.                              */
+// DEFAULT CHANGED to "staggered": in "together" mode every mailbox of a
+// campaign fired in the same second each round (3 mailboxes → 3 emails
+// at once). Staggered keeps each mailbox at exactly 1 email per interval
+// and spreads the campaign's mailboxes evenly between them.
 export const SEND_MODE =
-  String(process.env.CAMPAIGN_SEND_MODE || "together").toLowerCase() ===
-  "staggered"
-    ? "staggered"
-    : "together";
+  String(process.env.CAMPAIGN_SEND_MODE || "staggered").toLowerCase() ===
+  "together"
+    ? "together"
+    : "staggered";
 
 const STILL_WANTED_EVERY_MS =
   Number(process.env.STILL_WANTED_CHECK_MS) || 60_000;
@@ -177,6 +183,183 @@ async function getWindow(accountId) {
   return w;
 }
 
+/* ── Cross-process pacing (the authoritative gate) ─────────────────────────
+   The in-memory timeline above only knows about sends made by THIS process.
+   BUG FIXED: with two worker processes running (e.g. the Render worker and
+   a local `npm run start:worker` pointed at the same database) each one
+   allowed a mailbox its full hourly limit, so 30/hr became 60/hr —
+   "1 email every minute" instead of every 2. SKIP LOCKED stopped duplicate
+   emails but not the doubled speed.
+
+   Now every send also reserves the mailbox's next slot in the database:
+
+     UPDATE "EmailAccount" SET "nextSendAt" = now + interval
+     WHERE id = ? AND ("nextSendAt" IS NULL OR "nextSendAt" <= now)
+
+   The row lock makes this atomic across processes and campaigns, and the
+   DATABASE clock is used (not each machine's clock), so two real sends
+   from one mailbox are always at least `interval` apart.               */
+const NOW_UTC = Prisma.sql`(NOW() AT TIME ZONE 'UTC')`;
+
+/**
+ * Create EmailAccount.nextSendAt if the migration hasn't been run yet.
+ * BUG FIXED: previously a missing column only logged an error and fell
+ * back to per-process pacing — so with two workers the speed doubled
+ * again (2 emails per mailbox per interval). The worker calls this at
+ * startup; ADD COLUMN IF NOT EXISTS is safe to run every time.
+ */
+export async function ensurePacingColumn() {
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "EmailAccount" ADD COLUMN IF NOT EXISTS "nextSendAt" TIMESTAMP(3)`,
+    );
+    sharedPacingAvailable = true;
+    return true;
+  } catch (err) {
+    console.error(
+      "🚨 Could not create EmailAccount.nextSendAt (run the migration):",
+      err.message,
+    );
+    return false;
+  }
+}
+
+/* ── Single sender (lease) ────────────────────────────────────────────────
+   Only ONE worker process sends campaign email at a time. It holds a lease
+   row (CrmSetting "worker.sendLease") that it renews every 15 s; the lease
+   expires 60 s after the last renewal. Any other worker stays on standby
+   (it still does IMAP sync etc.) and takes over only if the sender stops.
+   Together with EmailAccount.nextSendAt this makes a second worker
+   harmless: it can never add a second email to an interval.           */
+const SEND_LEASE_KEY = "worker.sendLease";
+const SEND_LEASE_MS = Number(process.env.SEND_LEASE_MS) || 60_000;
+export const SENDER_INSTANCE = `${process.env.RENDER_INSTANCE_ID || ""}${
+  process.env.HOSTNAME || "host"
+}:${process.pid}:${Math.random().toString(36).slice(2, 8)}`;
+let sendLeader = false;
+let leaseConfirmedAt = 0;
+let leaseHolder = null;
+let lastStandbyLogAt = 0;
+
+/** Leader only while the lease was confirmed recently — it lapses here
+ *  well BEFORE it can expire in the database and be taken by another. */
+export function isSendLeader() {
+  return sendLeader && Date.now() - leaseConfirmedAt < SEND_LEASE_MS * 0.66;
+}
+
+/** Take or renew the lease. Returns true if THIS process may send. */
+export async function renewSendLease() {
+  try {
+    const value = JSON.stringify({ instance: SENDER_INSTANCE });
+    const rows = await prisma.$queryRaw`
+      INSERT INTO "CrmSetting" ("key", "value", "updatedAt")
+      VALUES (${SEND_LEASE_KEY},
+              ${value}::jsonb || jsonb_build_object('until', NOW() + make_interval(secs => ${SEND_LEASE_MS / 1000}::float8)),
+              NOW())
+      ON CONFLICT ("key") DO UPDATE
+        SET "value" = EXCLUDED."value", "updatedAt" = NOW()
+        WHERE "CrmSetting"."value"->>'instance' = ${SENDER_INSTANCE}
+           OR ("CrmSetting"."value"->>'until')::timestamptz < NOW()
+      RETURNING "value"->>'instance' AS instance`;
+    const won = rows.length > 0;
+    if (won) leaseConfirmedAt = Date.now();
+    if (won && !sendLeader)
+      console.log(`👑 This worker (${SENDER_INSTANCE}) is now the campaign sender.`);
+    if (!won) {
+      const cur = await prisma.crmSetting
+        .findUnique({ where: { key: SEND_LEASE_KEY } })
+        .catch(() => null);
+      leaseHolder = cur?.value?.instance || null;
+      if (sendLeader)
+        console.warn(`⚠️ Lost the sender lease to ${leaseHolder} — stopping sends.`);
+      if (Date.now() - lastStandbyLogAt > 10 * 60_000) {
+        lastStandbyLogAt = Date.now();
+        console.warn(
+          `🚨 STANDBY: another worker (${leaseHolder}) is sending campaigns. ` +
+            `This one won't send. Run only ONE worker.`,
+        );
+      }
+    }
+    sendLeader = won;
+  } catch (err) {
+    // Database blip: keep the current role. (If it lasts past the lease,
+    // sending can't work anyway — every claim needs the database.)
+    console.error("⚠️ Sender lease check failed:", err.message);
+  }
+  return sendLeader;
+}
+
+/** Give the lease up on shutdown so a replacement starts at once. */
+export async function releaseSendLease() {
+  sendLeader = false;
+  await prisma.$executeRaw`
+    DELETE FROM "CrmSetting"
+    WHERE "key" = ${SEND_LEASE_KEY}
+      AND "value"->>'instance' = ${SENDER_INSTANCE}`.catch(() => {});
+}
+let sharedPacingAvailable = true;
+const sharedSlots = new Map(); // `${accountId}|${slot}` → { prev, next }
+
+const pendingReleases = new Map(); // accountId → Promise (release in flight)
+
+async function reserveSharedSlot(accountId, intervalMs) {
+  if (!sharedPacingAvailable) return { ok: true, token: null };
+  // A slot just given back must land first, or this reservation would be
+  // refused and the mailbox would lose a whole interval.
+  await pendingReleases.get(accountId);
+  try {
+    const rows = await prisma.$queryRaw`
+      UPDATE "EmailAccount" AS a
+      SET "nextSendAt" = ${NOW_UTC} + make_interval(secs => ${intervalMs / 1000}::float8)
+      FROM (
+        SELECT "id", "nextSendAt" AS old
+        FROM "EmailAccount" WHERE "id" = ${accountId}
+        FOR UPDATE
+      ) AS o
+      WHERE a."id" = o."id"
+        AND (o.old IS NULL OR o.old <= ${NOW_UTC})
+      RETURNING o.old::text AS prev, a."nextSendAt"::text AS next`;
+    if (rows.length) return { ok: true, token: rows[0] };
+
+    const w = await prisma.$queryRaw`
+      SELECT GREATEST(0, EXTRACT(EPOCH FROM ("nextSendAt" - ${NOW_UTC})) * 1000)::float8 AS ms
+      FROM "EmailAccount" WHERE "id" = ${accountId}`;
+    return { ok: false, waitMs: Math.ceil(Number(w[0]?.ms) || 1000) };
+  } catch (err) {
+    if (/nextSendAt|42703|does not exist/i.test(String(err?.message))) {
+      // Column missing: create it and try again shortly. If that fails,
+      // the sender lease still guarantees a single sending process.
+      if (!(await ensurePacingColumn())) {
+        sharedPacingAvailable = false;
+        return { ok: true, token: null };
+      }
+      return { ok: false, waitMs: 1000 };
+    }
+    // Database blip: don't send blind — try again shortly.
+    return { ok: false, waitMs: 5000 };
+  }
+}
+
+/** Nothing was sent with this reservation: give the slot back. */
+function releaseSharedSlot(accountId, token) {
+  if (!token) return;
+  const p = prisma.$executeRaw`
+    UPDATE "EmailAccount"
+    SET "nextSendAt" = ${token.prev}::timestamp(3)
+    WHERE "id" = ${accountId}
+      AND "nextSendAt" = ${token.next}::timestamp(3)`
+    .catch((err) =>
+      console.error(
+        `⚠️ Could not release pacing slot for mailbox ${accountId}:`,
+        err.message,
+      ),
+    )
+    .finally(() => {
+      if (pendingReleases.get(accountId) === p) pendingReleases.delete(accountId);
+    });
+  pendingReleases.set(accountId, p);
+}
+
 /**
  * Wait until this mailbox may send one more email, then reserve it.
  * @param {number} accountId
@@ -189,12 +372,19 @@ async function getWindow(accountId) {
  *                                same round and they never drift apart.
  * @returns {Promise<number|false>} slot id, or false if no longer wanted
  */
+// Campaign-level spacing: two mailboxes of the same campaign never send in
+// the same moment. gap ≈ 60 min ÷ (sum of the campaign's hourly limits),
+// so the total speed is unchanged — the sends are just spread out.
+// In-memory is enough: only the lease holder sends.
+const campaignGates = new Map(); // campaignId → { last, gapMs }
+
 async function waitForMailboxSlot(
   accountId,
   limit,
   isStillWanted,
   notBefore = 0,
   gridOrigin = 0,
+  campaignGate = null,
 ) {
   const w = await getWindow(accountId);
   const intervalMs = getSendIntervalMs(limit);
@@ -222,6 +412,11 @@ async function waitForMailboxSlot(
             Math.ceil((earliest - gridOrigin) / intervalMs) * intervalMs;
     }
 
+    // Campaign spacing (see campaignGates).
+    if (campaignGate && campaignGate.last) {
+      earliest = Math.max(earliest, campaignGate.last + campaignGate.gapMs);
+    }
+
     const waitMs = earliest - now;
     if (waitMs <= 0) {
       // Reserve synchronously (no double booking). In together mode the
@@ -232,8 +427,34 @@ async function waitForMailboxSlot(
         ? gridOrigin +
           Math.floor((now - gridOrigin) / intervalMs) * intervalMs
         : now;
-      w.times.push(slot);
-      return slot; // slot id
+      w.times.push(slot); // sync: other campaigns in this process see it
+      const prevGate = campaignGate ? campaignGate.last : 0;
+      if (campaignGate) campaignGate.last = now; // sync: sibling mailboxes wait
+
+      // Authoritative, cross-process check (see reserveSharedSlot).
+      const shared = await reserveSharedSlot(accountId, intervalMs);
+      if (shared.ok) {
+        sharedSlots.set(`${accountId}|${slot}`, {
+          token: shared.token,
+          gate: campaignGate,
+          gatePrev: prevGate,
+          gateAt: now,
+        });
+        return slot; // slot id
+      }
+      // Another worker/campaign sent from this mailbox too recently.
+      if (campaignGate && campaignGate.last === now) campaignGate.last = prevGate;
+      const i = w.times.lastIndexOf(slot);
+      if (i >= 0) w.times.splice(i, 1);
+      await sleep(Math.min(shared.waitMs + 50, 30_000));
+      if (
+        isStillWanted &&
+        Date.now() - lastWantedCheck >= STILL_WANTED_EVERY_MS
+      ) {
+        lastWantedCheck = Date.now();
+        if (!(await isStillWanted())) return false;
+      }
+      continue;
     }
     await sleep(Math.min(waitMs, 30_000));
     // A Stop/Pause is noticed within a minute while waiting; checking on
@@ -250,12 +471,45 @@ function releaseMailboxSlot(accountId, slot) {
   const w = mailboxWindow.get(accountId);
   const i = w ? w.times.lastIndexOf(slot) : -1;
   if (i >= 0) w.times.splice(i, 1);
+  const key = `${accountId}|${slot}`;
+  const held = sharedSlots.get(key);
+  sharedSlots.delete(key);
+  if (!held) return;
+  releaseSharedSlot(accountId, held.token);
+  // Nothing was sent: the campaign's spacing isn't used up either.
+  if (held.gate && held.gate.last === held.gateAt) held.gate.last = held.gatePrev;
+}
+
+/** The slot was used for a real send: forget its release token. */
+function commitMailboxSlot(accountId, slot) {
+  sharedSlots.delete(`${accountId}|${slot}`);
 }
 
 // Long waits are chopped into chunks so a deleted campaign / raised cap /
 // fixed password is noticed quickly.
 const MAX_WAIT_CHUNK_MS = Number(process.env.MAX_WAIT_CHUNK_MS) || 5 * 60_000;
 const capWait = (ms) => Math.max(5_000, Math.min(ms, MAX_WAIT_CHUNK_MS));
+
+/**
+ * Take one of this mailbox's daily sends (atomic, shared by every campaign
+ * and worker). At the limit it throws an account-level error, so the
+ * recipient goes back to "pending" — never "failed" — and is sent after
+ * the daily reset.
+ */
+async function reserveDailySend(account) {
+  const { cap, providerLabel } = await getAccountCap(Number(account.id));
+  const r = await tryReserveAccountSend(Number(account.id), cap);
+  if (!r.ok) {
+    throw Object.assign(
+      new Error(
+        `Daily limit reached for ${account.email} (${providerLabel}: ` +
+          `${cap}/day) — resumes after the daily reset`,
+      ),
+      { accountPaused: true, dailyLimitReached: true, accountId: account.id },
+    );
+  }
+  return r;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SECTION 1 — GLOBAL DAILY LIMIT HELPERS
@@ -1192,6 +1446,11 @@ async function sendWithRetry(
             );
           }
         }
+        // BUG FIXED: retrying here could send a SECOND real email in the
+        // same pacing slot (the timed-out sendMail may still deliver).
+        // Give up this attempt; the recipient goes back to the queue and
+        // is retried in a later slot, so the interval is still respected.
+        throw err;
       }
 
       /*
@@ -1339,6 +1598,11 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   const { account, campaign } = ctx;
   const isFollowup = campaign.sendType === "followup";
 
+  // [0] Only the worker holding the sender lease sends (one sender total).
+  if (!isSendLeader()) {
+    return { action: "stop" };
+  }
+
   // [1] Campaign still sending?
   let status;
   try {
@@ -1434,7 +1698,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   // [6] This mailbox's own daily cap
   let capRoom = Infinity;
   try {
-    const [{ cap, source, warmupDay }, sentToday] = await Promise.all([
+    const [{ cap, providerLabel }, sentToday] = await Promise.all([
       getAccountCap(accountId),
       getAccountSentToday(accountId),
     ]);
@@ -1443,8 +1707,10 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     if (capRoom <= 0) {
       if (!ctx.capLogged) {
         console.log(
-          `📵 ${account.email} reached its daily cap (${sentToday}/${cap}). ` +
-            `Waiting for the 5 PM reset (other mailboxes keep sending).`,
+          `📵 ${account.email} reached its daily limit ` +
+            `(${providerLabel}: ${sentToday}/${cap}). Remaining emails stay ` +
+            `queued and resume after the daily reset` +
+            (isFollowup ? "." : " (other mailboxes keep sending)."),
         );
         ctx.capLogged = true;
       }
@@ -1676,7 +1942,11 @@ async function processRecipient(recipient, ctx) {
     if (err?.accountPaused || isQuotaError(err) || isAccountAuthError(err)) {
       const targetAccountId = err?.accountId || ctx.account.id;
 
-      if (err?.accountPaused) {
+      if (err?.dailyLimitReached) {
+        // Mailbox used its daily limit. Nothing to cool down: the row goes
+        // back to pending and claimNextBatch() waits for the daily reset
+        // (the pre-check now sees the mailbox as full).
+      } else if (err?.accountPaused) {
         // Admin pause on another mailbox — claimNextBatch handles the wait.
       } else if (isAccountAuthError(err)) {
         // Retried automatically — once the password is fixed, sending
@@ -1934,6 +2204,7 @@ async function processAccountBatched({
   gridOrigin = 0,
 }) {
   const senders = createSenderCache();
+  const campaignGate = campaignGates.get(campaignId) || null;
 
   try {
     const primary = await senders.get(accountId);
@@ -1989,14 +2260,16 @@ async function processAccountBatched({
 
       // Shared hourly pacing across every campaign using this mailbox.
       const stillSending = async () =>
+        isSendLeader() &&
         (await getCampaignStatus(campaignId).catch(() => "sending")) ===
-        "sending";
+          "sending";
       const slot = await waitForMailboxSlot(
         numericAccountId,
         ctx.limit,
         stillSending,
         notBefore,
         gridOrigin,
+        campaignGate,
       );
       notBefore = 0;
       if (!slot) {
@@ -2020,6 +2293,7 @@ async function processAccountBatched({
           `❌ Campaign ${campaignId} [${account.email}] ` +
             `claim processor error: ${err.message}`,
         );
+        releaseMailboxSlot(numericAccountId, slot); // nothing sent with it
 
         // Do not kill the entire worker because one account's claim failed.
         await sleep(5000);
@@ -2071,6 +2345,7 @@ async function processAccountBatched({
               `received an empty send batch — retrying`,
           );
 
+          releaseMailboxSlot(numericAccountId, slot); // nothing sent with it
           await sleep(2000);
           continue;
         }
@@ -2081,6 +2356,9 @@ async function processAccountBatched({
         try {
           result = await runBatch(next.batch, ctx);
         } catch (err) {
+          // Unknown whether it went out: keep the slot used (safe side).
+          if (ctx.currentSlot) commitMailboxSlot(numericAccountId, slot);
+          ctx.currentSlot = null;
           console.error(
             `❌ Campaign ${campaignId} [${account.email}] ` +
               `batch failed: ${err.message}`,
@@ -2092,6 +2370,16 @@ async function processAccountBatched({
           // processing rows through the stuck-row recovery mechanism.
           await sleep(5000);
           continue;
+        }
+
+        // Slot still held → an email was attempted with it (sent, failed
+        // at SMTP, or refused by the provider): it stays used. Skipped rows
+        // already gave it back inside runBatch(); a Stop sent nothing.
+        if (ctx.currentSlot) {
+          if (result === "stop")
+            releaseMailboxSlot(numericAccountId, ctx.currentSlot);
+          else commitMailboxSlot(numericAccountId, ctx.currentSlot);
+          ctx.currentSlot = null;
         }
 
         // runBatch() can explicitly tell this account processor to stop.
@@ -2269,6 +2557,9 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
     fromEmail,
   );
 
+  // Daily limit: reserve before sending, give it back if nothing went out.
+  const reservation = await reserveDailySend(account);
+  try {
   await sendWithRetry(
     () =>
       transporter.sendMail({
@@ -2291,15 +2582,16 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
       transporter,
     },
   );
+  } catch (err) {
+    await releaseAccountSend(reservation);
+    throw err;
+  }
 
   /*
-   * The SMTP server accepted the email.
-   *
-   * Record the send before doing the remaining non-critical logging.
-   * If markSent() fails, it throws alreadySent=true so the recipient
-   * will not be sent again.
+   * The SMTP server accepted the email (already counted by the
+   * reservation above). If markSent() fails, it throws alreadySent=true
+   * so the recipient will not be sent again.
    */
-  recordAccountSend(account.id);
 
   await markSent(recipient.id, {
     accountId: account.id,
@@ -2546,6 +2838,8 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     headers["References"] = parentId;
   }
 
+  // Daily limit of the mailbox that ACTUALLY sends (the original sender).
+  const reservation = await reserveDailySend(actualAccount);
   try {
     await sendWithRetry(
       () =>
@@ -2567,6 +2861,7 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
       },
     );
   } catch (err) {
+    await releaseAccountSend(reservation);
     if (isQuotaError(err) || isAccountAuthError(err)) {
       err.accountId = actualAccount.id;
       throw err;
@@ -2581,7 +2876,6 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
     throw err;
   }
 
-  recordAccountSend(actualAccount.id);
   await markSent(recipient.id, {
     sentBodyHtml: html,
     sentSubject: prevEmail.sentSubject ?? fallbackSubject,
@@ -2630,6 +2924,7 @@ export async function sendBulkCampaign(campaignId) {
     await _sendBulkCampaignInner(campaignId);
   } finally {
     activeCampaigns.delete(campaignId);
+    campaignGates.delete(campaignId);
     statusCache.delete(campaignId);
   }
 }
@@ -2888,10 +3183,31 @@ async function _sendBulkCampaignInner(campaignId) {
   // same second. With 3 mailboxes at 30/hr (total 90/hr) the campaign sends
   // one email every ~40 s, rotating mailboxes, and each mailbox still sends
   // exactly one email every 2 minutes.
-  const totalHourly = accountIds.reduce((sum, id) => {
-    const n = Number(customLimits?.[id]);
-    return sum + (Number.isFinite(n) && n > 0 ? n : DEFAULT_HOURLY_LIMIT);
-  }, 0);
+  // Each mailbox's real hourly limit (custom pick, else its provider's).
+  accountIds.sort((a, b) => a - b);
+  const providerRows = await prisma.emailAccount.findMany({
+    where: { id: { in: accountIds } },
+    select: { id: true, provider: true },
+  });
+  const providerOf = new Map(providerRows.map((a) => [a.id, a.provider]));
+  const totalHourly = accountIds.reduce(
+    (sum, id) => sum + getLimit(providerOf.get(id) || "", id, customLimits),
+    0,
+  );
+  // 90 % of the even spacing, so small timing jitter never slows the
+  // campaign down — yet two emails of this campaign never go out together.
+  if (accountIds.length > 1) {
+    const prev = campaignGates.get(campaignId);
+    campaignGates.set(campaignId, {
+      last: prev?.last || 0,
+      gapMs: Math.max(
+        MIN_GAP_MS,
+        Math.floor((0.9 * HOUR_MS) / Math.max(totalHourly, 1)),
+      ),
+    });
+  } else {
+    campaignGates.delete(campaignId);
+  }
   const staggerStepMs =
     SEND_MODE === "staggered" ? HOUR_MS / Math.max(totalHourly, 1) : 0;
   // Together mode: one shared round clock for every mailbox of this run.
@@ -2938,7 +3254,8 @@ async function _sendBulkCampaignInner(campaignId) {
       try {
         statusCache.delete(campaignId);
         const status = await getCampaignStatus(campaignId);
-        if (status === "sending") {
+        // Not the sender any more → exit; the lease holder takes over.
+        if (status === "sending" && isSendLeader()) {
           const pending = await prisma.campaignRecipient.count({
             where: isFollowup
               ? { campaignId, accountId, status: "pending" }
