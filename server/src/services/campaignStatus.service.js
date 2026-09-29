@@ -18,7 +18,7 @@ import {
 } from "./campaignMailer.service.js";
 import {
   getAccountCap,
-  getAccountSentToday,
+  getSentTodayMany,
   msUntilNextSendingDay,
 } from "./sendingLimits.service.js";
 
@@ -289,18 +289,20 @@ export async function buildCampaignStatus(campaignId) {
     : [];
   const hourUse = new Map(hourRows.map((r) => [Number(r.accountId), r]));
 
+  // "Daily limit (all campaigns)": one query for every mailbox, using the
+  // larger of the worker's counter and the emails actually sent today.
+  const sentTodayMap = await getSentTodayMany(accounts.map((a) => a.id)).catch(
+    () => new Map(),
+  );
   const capInfo = await Promise.all(
     accounts.map(async (a) => {
-      const [cap, sent] = await Promise.all([
-        getAccountCap(a.id).catch(() => ({
-          cap: Infinity,
-          source: "off",
-          providerKey: null,
-          providerLabel: a.provider || "Custom",
-        })),
-        getAccountSentToday(a.id).catch(() => 0),
-      ]);
-      return [a.id, { ...cap, sentToday: sent }];
+      const cap = await getAccountCap(a.id).catch(() => ({
+        cap: Infinity,
+        source: "off",
+        providerKey: null,
+        providerLabel: a.provider || "Custom",
+      }));
+      return [a.id, { ...cap, sentToday: sentTodayMap.get(a.id) || 0 }];
     }),
   );
   const capById = new Map(capInfo);

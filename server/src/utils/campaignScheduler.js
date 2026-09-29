@@ -1,8 +1,9 @@
 // server/src/utils/campaignScheduler.js
 //
 // Moves due "scheduled" campaigns to "sending". Runs in the worker only.
-// The worker's resume tick (every ~10 s) starts the actual send loop, so
-// there is exactly ONE code path that starts sending.
+// The worker's resume tick (every ~5 s) calls activateDueCampaigns() and
+// then starts the send loop, so a scheduled campaign begins within seconds
+// of its start time. The once-a-minute cron below is only a safety net.
 
 import cron from "node-cron";
 import prisma from "../prismaClient.js";
@@ -10,28 +11,33 @@ import prisma from "../prismaClient.js";
 let running = false;
 let task = null;
 
+/**
+ * Flip every due "scheduled" campaign to "sending" (one atomic, indexed
+ * UPDATE). Safe to call often and from several places.
+ * @returns {Promise<{id:number,name:string}[]>} the campaigns just started
+ */
+export async function activateDueCampaigns() {
+  const started = await prisma.$queryRaw`
+    UPDATE "Campaign"
+    SET "status" = 'sending'
+    WHERE "status" = 'scheduled'
+      AND "scheduledAt" IS NOT NULL
+      AND "scheduledAt" <= NOW()
+    RETURNING "id", "name"
+  `;
+  for (const c of started) {
+    console.log(
+      `⏰ Scheduled campaign ${c.id} ("${c.name}") is due — queued for sending`,
+    );
+  }
+  return started;
+}
+
 async function tick(isPaused) {
   if (running || isPaused()) return;
   running = true;
-
   try {
-    // One atomic statement: flips every due campaign and returns which ones.
-    // Replaces two full-table reads (one loading every column incl. the HTML
-    // body) plus one UPDATE per campaign.
-    const started = await prisma.$queryRaw`
-      UPDATE "Campaign"
-      SET "status" = 'sending'
-      WHERE "status" = 'scheduled'
-        AND "scheduledAt" IS NOT NULL
-        AND "scheduledAt" <= NOW()
-      RETURNING "id", "name"
-    `;
-
-    for (const c of started) {
-      console.log(
-        `⏰ Scheduled campaign ${c.id} ("${c.name}") is due — queued for sending`,
-      );
-    }
+    await activateDueCampaigns();
   } catch (err) {
     console.error("❌ Scheduler error:", err.message);
   } finally {
@@ -46,10 +52,10 @@ async function tick(isPaused) {
 export function startCampaignScheduler({ isPaused = () => false } = {}) {
   if (task) return task;
 
-  // Every minute: the query is a single indexed UPDATE, and scheduled
-  // campaigns now start within ~1 minute instead of up to 2.
+  // Safety net only — the worker's resume tick normally starts due
+  // campaigns within a few seconds.
   task = cron.schedule("* * * * *", () => tick(isPaused));
-  console.log("⏰ Campaign scheduler started (every minute)");
+  console.log("⏰ Campaign scheduler started (every minute, plus every resume tick)");
   return task;
 }
 

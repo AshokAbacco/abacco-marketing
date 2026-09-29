@@ -17,26 +17,73 @@ import { getSetting, saveSetting } from "./automation.service.js";
 
 const SEND_DAY_TZ = process.env.SEND_DAY_TIMEZONE || "Asia/Kolkata";
 const SEND_DAY_RESET_HOUR = Number(process.env.SEND_DAY_RESET_HOUR) || 17; // 5 PM
+const DAY_MS = 86_400_000;
 
-/** Start of the current sending window. */
-export function getSendingDayStart(now = new Date()) {
-  const local = new Date(
-    now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }),
+/* BUG FIXED — "Daily Limit (All Campaigns)" stayed at 0 while emails were
+   being sent.
+
+   The old version built a "fake" Date from toLocaleString() and then called
+   setHours() in the SERVER's own time zone. The result depended on the
+   machine's time zone: on a UTC server (Render worker) the 5 PM IST day was
+   stored as 17:00 UTC, on an IST machine as 11:30 UTC. The worker WROTE the
+   per-mailbox counter under one key and the API READ it under the other
+   (AccountDailySend is looked up with day = exact value), so the UI always
+   found no row → "Gmail: 0 / 300 sent".
+
+   Now the start of the sending day is the REAL instant of 5 PM in
+   SEND_DAY_TIMEZONE, computed with Intl — identical on every machine no
+   matter what TZ it runs in.                                              */
+const tzParts = new Intl.DateTimeFormat("en-US", {
+  timeZone: SEND_DAY_TZ,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+/** Offset (ms) of SEND_DAY_TZ from UTC at the given instant. */
+function tzOffsetMs(date) {
+  const p = {};
+  for (const x of tzParts.formatToParts(date)) p[x.type] = x.value;
+  const asUtc = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour) % 24,
+    Number(p.minute),
+    Number(p.second),
   );
-  const reset = new Date(local);
-  reset.setHours(SEND_DAY_RESET_HOUR, 0, 0, 0);
-  const start = local < reset ? new Date(reset.getTime() - 86_400_000) : reset;
-  start.setMilliseconds(0);
-  return start;
+  return asUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+/** Start of the current sending window (a real, time-zone-independent instant). */
+export function getSendingDayStart(now = new Date()) {
+  const t = now.getTime();
+  const off = tzOffsetMs(now);
+  const wall = new Date(t + off); // its UTC fields = wall clock in SEND_DAY_TZ
+  let resetWall = Date.UTC(
+    wall.getUTCFullYear(),
+    wall.getUTCMonth(),
+    wall.getUTCDate(),
+    SEND_DAY_RESET_HOUR,
+  );
+  if (t + off < resetWall) resetWall -= DAY_MS;
+  let start = resetWall - off;
+  // Zones with daylight saving: use the offset valid AT the reset moment.
+  const offAtStart = tzOffsetMs(new Date(start));
+  if (offAtStart !== off) start = resetWall - offAtStart;
+  return new Date(start);
 }
 
 /** Milliseconds until the next window opens. */
 export function msUntilNextSendingDay(now = new Date()) {
-  const next = new Date(getSendingDayStart(now).getTime() + 86_400_000);
-  const local = new Date(
-    now.toLocaleString("en-US", { timeZone: SEND_DAY_TZ }),
-  );
-  return Math.max(1000, next.getTime() - local.getTime());
+  const start = getSendingDayStart(now).getTime();
+  // A moment safely inside the next window → its start is the next reset.
+  const next = getSendingDayStart(new Date(start + DAY_MS + 3 * 3_600_000));
+  return Math.max(1000, next.getTime() - now.getTime());
 }
 
 /* ── Settings ──────────────────────────────────────────────────────────── */
@@ -248,8 +295,8 @@ export function computeDailyCap(account, limits, now = new Date()) {
     const dayIndex = start
       ? Math.max(
           0,
-          Math.floor(
-            (getSendingDayStart(now) - getSendingDayStart(start)) / 86_400_000,
+          Math.round(
+            (getSendingDayStart(now) - getSendingDayStart(start)) / DAY_MS,
           ),
         )
       : 0;
@@ -319,13 +366,31 @@ const COUNT_TTL_MS = 10_000;
 const countCache = new Map(); // accountId → { day, count, at }
 const ensuredRows = new Set(); // `${accountId}|${dayMs}` rows known to exist
 
+/** Emails this mailbox REALLY sent (CampaignRecipient rows) since `day`. */
+async function countSentSince(accountId, day) {
+  return prisma.campaignRecipient.count({
+    where: { accountId, status: "sent", sentAt: { gte: day } },
+  });
+}
+
 async function ensureDayRow(accountId, day) {
   const key = `${accountId}|${day.getTime()}`;
   if (ensuredRows.has(key)) return;
-  await prisma.accountDailySend.createMany({
-    data: [{ accountId, day, count: 0 }],
-    skipDuplicates: true,
+  const exists = await prisma.accountDailySend.findUnique({
+    where: { accountId_day: { accountId, day } },
+    select: { id: true },
   });
+  if (!exists) {
+    // A new row starts from what the mailbox has ACTUALLY sent today, not 0.
+    // This also carries today's sends over from rows written under the old
+    // (time-zone-dependent) day key, so no mailbox exceeds its daily limit
+    // on the day this fix is deployed.
+    const already = await countSentSince(accountId, day).catch(() => 0);
+    await prisma.accountDailySend.createMany({
+      data: [{ accountId, day, count: already }],
+      skipDuplicates: true,
+    });
+  }
   if (ensuredRows.size > 5000) ensuredRows.clear();
   ensuredRows.add(key);
 }
@@ -347,16 +412,35 @@ export async function getAccountSentToday(accountId, { fresh = false } = {}) {
   return count;
 }
 
-/** Sent-today for many mailboxes in ONE query (dashboards). */
+/**
+ * Sent-today for many mailboxes (dashboards / campaign status).
+ * Uses the larger of the reservation counter and the emails actually marked
+ * "sent" today, so the UI can never show 0 while a mailbox is sending — even
+ * if a counter row is missing or was written under an old day key.
+ */
 export async function getSentTodayMany(accountIds) {
   const ids = [...new Set(accountIds.map(Number).filter(Number.isInteger))];
   const out = new Map(ids.map((id) => [id, 0]));
   if (!ids.length) return out;
-  const rows = await prisma.accountDailySend.findMany({
-    where: { accountId: { in: ids }, day: getSendingDayStart() },
-    select: { accountId: true, count: true },
-  });
+  const day = getSendingDayStart();
+  const [rows, actual] = await Promise.all([
+    prisma.accountDailySend.findMany({
+      where: { accountId: { in: ids }, day },
+      select: { accountId: true, count: true },
+    }),
+    prisma.campaignRecipient
+      .groupBy({
+        by: ["accountId"],
+        where: { accountId: { in: ids }, status: "sent", sentAt: { gte: day } },
+        _count: { _all: true },
+      })
+      .catch(() => []),
+  ]);
   for (const r of rows) out.set(r.accountId, r.count);
+  for (const r of actual) {
+    const id = Number(r.accountId);
+    out.set(id, Math.max(out.get(id) || 0, r._count._all));
+  }
   return out;
 }
 

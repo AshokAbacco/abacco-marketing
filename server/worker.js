@@ -25,7 +25,7 @@ await initObservability("worker");
 const { runSync } = await import("./src/services/imap.service.js");
 const { resumeAccountDeletions } =
   await import("./src/services/accountDeletionWorker.js");
-const { startCampaignScheduler } =
+const { startCampaignScheduler, activateDueCampaigns } =
   await import("./src/utils/campaignScheduler.js");
 const {
   sendBulkCampaign,
@@ -60,8 +60,10 @@ const ms = (name, fallback) => {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
-// How quickly a campaign started from the UI begins sending.
-const RESUME_TICK_MS = ms("WORKER_RESUME_TICK_MS", 10_000);
+// How quickly a campaign started from the UI begins sending. The tick is a
+// couple of small indexed queries, so 5 s is cheap and means a campaign
+// starts within ~5 s of being created (or of its scheduled time).
+const RESUME_TICK_MS = ms("WORKER_RESUME_TICK_MS", 5_000);
 const RECOVERY_TICK_MS = ms("WORKER_RECOVERY_TICK_MS", 120_000);
 const IMAP_TICK_MS = ms("IMAP_SYNC_INTERVAL_MS", 120_000);
 const DELETION_TICK_MS = ms("WORKER_DELETION_TICK_MS", 120_000);
@@ -207,6 +209,11 @@ async function recoverStuckEmails() {
 async function resumeSendingCampaigns() {
   // Only the worker holding the sender lease sends (see renewSendLease).
   if (!isSendLeader()) return;
+  // Start due scheduled campaigns right here instead of waiting for the
+  // once-a-minute scheduler (up to 60 s + one tick of extra delay before).
+  await activateDueCampaigns().catch((err) =>
+    console.error("❌ Could not start due scheduled campaigns:", err.message),
+  );
   const campaigns = await prisma.campaign.findMany({
     where: { status: "sending" },
     select: { id: true },

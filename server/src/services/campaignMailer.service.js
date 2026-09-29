@@ -302,12 +302,14 @@ const sharedSlots = new Map(); // `${accountId}|${slot}` → { prev, next }
 
 const pendingReleases = new Map(); // accountId → Promise (release in flight)
 
-async function reserveSharedSlot(accountId, intervalMs) {
+async function reserveSharedSlot(accountId, intervalMs, { force = false } = {}) {
   if (!sharedPacingAvailable) return { ok: true, token: null };
   // A slot just given back must land first, or this reservation would be
   // refused and the mailbox would lose a whole interval.
   await pendingReleases.get(accountId);
   try {
+    // force: the first email of a NEW campaign (see waitForMailboxSlot) —
+    // take the slot now; the rolling-hour ceiling was already checked.
     const rows = await prisma.$queryRaw`
       UPDATE "EmailAccount" AS a
       SET "nextSendAt" = ${NOW_UTC} + make_interval(secs => ${intervalMs / 1000}::float8)
@@ -317,7 +319,7 @@ async function reserveSharedSlot(accountId, intervalMs) {
         FOR UPDATE
       ) AS o
       WHERE a."id" = o."id"
-        AND (o.old IS NULL OR o.old <= ${NOW_UTC})
+        AND (${force}::boolean OR o.old IS NULL OR o.old <= ${NOW_UTC})
       RETURNING o.old::text AS prev, a."nextSendAt"::text AS next`;
     if (rows.length) return { ok: true, token: rows[0] };
 
@@ -385,6 +387,7 @@ async function waitForMailboxSlot(
   notBefore = 0,
   gridOrigin = 0,
   campaignGate = null,
+  firstSend = false,
 ) {
   const w = await getWindow(accountId);
   const intervalMs = getSendIntervalMs(limit);
@@ -397,7 +400,12 @@ async function waitForMailboxSlot(
     // Earliest moment the next email may go (independent of `now`).
     let earliest = 0;
     // Rule 1 — even spacing: one email per interval.
-    if (last) earliest = Math.max(earliest, last + intervalMs);
+    // BUG FIXED (campaign started 5–10 min after it was created): the FIRST
+    // email of a new campaign waited a whole interval measured from the
+    // mailbox's last email in an EARLIER campaign (up to 6 min at 10/hr,
+    // 12 min at 5/hr). The first email now goes at once; rule 2 below still
+    // guarantees the mailbox never exceeds its hourly limit.
+    if (last && !firstSend) earliest = Math.max(earliest, last + intervalMs);
     // Rule 2 — hard hourly ceiling (rolling 60 minutes).
     if (w.times.length >= limit)
       earliest = Math.max(earliest, w.times[0] + HOUR_MS);
@@ -432,7 +440,9 @@ async function waitForMailboxSlot(
       if (campaignGate) campaignGate.last = now; // sync: sibling mailboxes wait
 
       // Authoritative, cross-process check (see reserveSharedSlot).
-      const shared = await reserveSharedSlot(accountId, intervalMs);
+      const shared = await reserveSharedSlot(accountId, intervalMs, {
+        force: firstSend,
+      });
       if (shared.ok) {
         sharedSlots.set(`${accountId}|${slot}`, {
           token: shared.token,
@@ -530,16 +540,8 @@ export const DAILY_LIMIT = Number(process.env.DAILY_SEND_LIMIT) || 5000;
  * @returns {string}
  */
 export function getTodayKey(userId) {
-  const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-  );
-  const resetToday = new Date(now);
-  resetToday.setHours(17, 0, 0, 0);
-
-  const bucketStart =
-    now < resetToday ? new Date(resetToday.getTime() - 86_400_000) : resetToday;
-
-  const dateLabel = bucketStart.toISOString().split("T")[0];
+  // Same (time-zone-independent) window as every other daily count.
+  const dateLabel = getSendingDayStart().toISOString().split("T")[0];
   return `mail_limit:${userId}:${dateLabel}`;
 }
 
@@ -700,13 +702,7 @@ export async function flushDailyLog() {
  * @returns {number}
  */
 export function msUntilNextWindow() {
-  const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-  );
-  const next = new Date(now);
-  next.setHours(17, 0, 0, 0);
-  if (now >= next) next.setDate(next.getDate() + 1);
-  return next.getTime() - now.getTime();
+  return msUntilNextSendingDay();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -873,6 +869,7 @@ function extractBodyContent(fullHtml) {
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+const sleepMs = sleep;
 
 // Emails per HOUR per mailbox, by provider. This is the only per-mailbox
 // limit: it refills every hour and never stops a campaign. The only daily
@@ -1098,6 +1095,32 @@ function createSenderCache() {
         transporter,
         fromEmail: account.smtpUser || account.email,
       };
+    },
+    /**
+     * Throw away this mailbox's transporter; the next get() builds a fresh one.
+     *
+     * BUG FIXED (main cause of campaigns running far past their expected
+     * completion): after an SMTP timeout the old code called
+     * transporter.close() but KEPT USING the same transporter. A closed
+     * nodemailer pool silently ignores every later sendMail() — the promise
+     * never settles — so EVERY following email from that mailbox "timed out"
+     * after 20 s, used up its hourly slot, and went back to the queue
+     * (eventually "Max retries (5) exceeded"). One slow connection disabled
+     * the mailbox for the rest of the campaign, and the hung sends held the
+     * shared concurrency slots, which slowed every other campaign and left
+     * rows stuck in "processing".
+     */
+    invalidate(accountId) {
+      const id = Number(accountId);
+      const t = transporters.get(id);
+      transporters.delete(id);
+      if (t) {
+        try {
+          t.close();
+        } catch {
+          /* already closed */
+        }
+      }
     },
     closeAll() {
       for (const t of transporters.values()) {
@@ -1383,9 +1406,20 @@ function toPlainText(html) {
   }
 }
 
+// One SMTP attempt (connect + TLS + auth + DATA). A brand-new Gmail
+// connection can take several seconds; 30 s avoids false timeouts while the
+// whole send (3 attempts) still stays well inside the 3-minute stuck sweep.
+const SMTP_ATTEMPT_TIMEOUT_MS =
+  Number(process.env.SMTP_ATTEMPT_TIMEOUT_MS) || 30_000;
+
 async function sendWithRetry(
   sendFn,
-  { retries = 3, attemptTimeoutMs = 20000, transporter = null } = {},
+  {
+    retries = 3,
+    attemptTimeoutMs = 20000,
+    transporter = null,
+    onTimeout = null,
+  } = {},
 ) {
   let lastError;
 
@@ -1432,11 +1466,17 @@ async function sendWithRetry(
         );
 
         /*
-         * If a transporter was supplied, close its pooled SMTP
-         * connections so a new connection can be established for
-         * the next attempt.
+         * Replace the transporter so the NEXT email gets a fresh
+         * connection. (Only closing it was the bug: a closed pool never
+         * sends again — see createSenderCache().invalidate.)
          */
-        if (transporter) {
+        if (onTimeout) {
+          try {
+            onTimeout();
+          } catch (e) {
+            console.warn(`⚠️ Could not reset SMTP transporter: ${e.message}`);
+          }
+        } else if (transporter) {
           try {
             transporter.close();
           } catch (closeErr) {
@@ -2072,14 +2112,23 @@ async function processRecipient(recipient, ctx) {
  * the pacing sleep does not.
  * @returns {Promise<"continue"|"stop">}
  */
-async function runBatch(batch, ctx) {
+async function runBatch(batch, ctx, { inSlot = false } = {}) {
+  // inSlot: the caller already holds a global concurrency slot (the claim
+  // and the send run in ONE slot). p-limit is not re-entrant, so don't take
+  // another one, and don't sleep while holding it — hand the wait back.
+  const step = inSlot ? (fn) => fn() : (fn) => globalAccountLimit(fn);
+  const sleep = inSlot
+    ? async (ms) => {
+        ctx.deferredSleepMs = Math.max(ctx.deferredSleepMs || 0, ms);
+      }
+    : sleepMs;
   for (let i = 0; i < batch.length; i++) {
     const recipient = batch[i];
 
     let result;
 
     try {
-      result = await globalAccountLimit(() => processRecipient(recipient, ctx));
+      result = await step(() => processRecipient(recipient, ctx));
     } catch (err) {
       /*
        * DB outage / unexpected error during heartbeat or assignment.
@@ -2202,6 +2251,7 @@ async function processAccountBatched({
   userId,
   startOffsetMs = 0,
   gridOrigin = 0,
+  campaignStarting = false,
 }) {
   const senders = createSenderCache();
   const campaignGate = campaignGates.get(campaignId) || null;
@@ -2254,6 +2304,8 @@ async function processAccountBatched({
 
     // Only the first send is staggered; after that the interval rules.
     let notBefore = startOffsetMs > 0 ? Date.now() + startOffsetMs : 0;
+    // A brand-new campaign sends its first email right away (see Rule 1).
+    let firstSend = Boolean(campaignStarting);
 
     while (true) {
       let next;
@@ -2270,6 +2322,7 @@ async function processAccountBatched({
         notBefore,
         gridOrigin,
         campaignGate,
+        firstSend,
       );
       notBefore = 0;
       if (!slot) {
@@ -2279,15 +2332,34 @@ async function processAccountBatched({
         return;
       }
 
+      // Claim AND send inside ONE global slot. Previously the row was claimed
+      // ("processing") in one slot and then had to queue for a SECOND slot
+      // before it was sent; under load it sat there past the 3-minute stuck
+      // sweep, was reset to pending, retried, and finally failed with
+      // "Max retries (5) exceeded after persistent timeout".
+      ctx.deferredSleepMs = 0;
       try {
-        next = await globalAccountLimit(() =>
-          claimNextBatch({
+        next = await globalAccountLimit(async () => {
+          const claim = await claimNextBatch({
             campaignId,
             accountId: numericAccountId,
             userId,
             ctx,
-          }),
-        );
+          });
+          if (
+            claim.action === "send" &&
+            Array.isArray(claim.batch) &&
+            claim.batch.length
+          ) {
+            ctx.currentSlot = slot;
+            try {
+              claim.result = await runBatch(claim.batch, ctx, { inSlot: true });
+            } catch (err) {
+              claim.batchError = err;
+            }
+          }
+          return claim;
+        });
       } catch (err) {
         console.error(
           `❌ Campaign ${campaignId} [${account.email}] ` +
@@ -2350,12 +2422,13 @@ async function processAccountBatched({
           continue;
         }
 
-        let result;
+        const result = next.result;
+        // An email was attempted with this slot (a skipped row already gave
+        // it back): from now on normal spacing applies.
+        if (ctx.currentSlot) firstSend = false;
 
-        ctx.currentSlot = slot;
-        try {
-          result = await runBatch(next.batch, ctx);
-        } catch (err) {
+        if (next.batchError) {
+          const err = next.batchError;
           // Unknown whether it went out: keep the slot used (safe side).
           if (ctx.currentSlot) commitMailboxSlot(numericAccountId, slot);
           ctx.currentSlot = null;
@@ -2389,6 +2462,14 @@ async function processAccountBatched({
               `${account.email}`,
           );
           return;
+        }
+
+        // A retry back-off / error pause requested inside the slot is
+        // waited out here, without holding the shared slot.
+        if (ctx.deferredSleepMs > 0) {
+          const ms = ctx.deferredSleepMs;
+          ctx.deferredSleepMs = 0;
+          await sleep(ms);
         }
       }
     }
@@ -2503,7 +2584,10 @@ async function markSent(recipientId, data) {
 }
 
 async function sendOneNormal({ recipient, ctx, assignment }) {
-  const { account, transporter, fromEmail, campaign, smtpIp } = ctx;
+  const { account, fromEmail, campaign, smtpIp } = ctx;
+  // Always the CURRENT transporter (a timed-out one is replaced).
+  const transporter =
+    (await ctx.senders.get(account.id))?.transporter || ctx.transporter;
   const { subject: rawSubject, pitchBody: rawBody } = assignment;
 
   // Personalisation: {{firstName}}, {{company|your team}} … (Phase 3)
@@ -2578,8 +2662,9 @@ async function sendOneNormal({ recipient, ctx, assignment }) {
       }),
     {
       retries: 3,
-      attemptTimeoutMs: 20000,
+      attemptTimeoutMs: SMTP_ATTEMPT_TIMEOUT_MS,
       transporter,
+      onTimeout: () => ctx.senders.invalidate(account.id),
     },
   );
   } catch (err) {
@@ -2856,8 +2941,9 @@ async function sendOneFollowup({ recipient, ctx, assignment }) {
         }),
       {
         retries: 3,
-        attemptTimeoutMs: 20000,
+        attemptTimeoutMs: SMTP_ATTEMPT_TIMEOUT_MS,
         transporter: actualTransporter,
+        onTimeout: () => ctx.senders.invalidate(actualAccount.id),
       },
     );
   } catch (err) {
@@ -3210,6 +3296,14 @@ async function _sendBulkCampaignInner(campaignId) {
   }
   const staggerStepMs =
     SEND_MODE === "staggered" ? HOUR_MS / Math.max(totalHourly, 1) : 0;
+  // Nothing attempted yet → this is the campaign's START (not a resume after
+  // a restart): its first emails go out immediately.
+  const campaignStarting = !(await prisma.campaignRecipient
+    .findFirst({
+      where: { campaignId, status: { in: ["sent", "failed"] } },
+      select: { id: true },
+    })
+    .catch(() => ({ id: 0 })));
   // Together mode: one shared round clock for every mailbox of this run.
   // (Worker restarts / supervisor restarts reuse or re-create it, so the
   // mailboxes are always re-aligned to the same rounds.)
@@ -3242,6 +3336,7 @@ async function _sendBulkCampaignInner(campaignId) {
           startOffsetMs:
             attempt === 0 ? Math.round(index * staggerStepMs) : 0,
           gridOrigin,
+          campaignStarting: attempt === 0 && campaignStarting,
         });
       } catch (err) {
         console.error(
