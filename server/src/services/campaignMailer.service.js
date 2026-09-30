@@ -247,10 +247,53 @@ export function isSendLeader() {
   return sendLeader && Date.now() - leaseConfirmedAt < SEND_LEASE_MS * 0.66;
 }
 
+/* BUG FIXED — campaigns sent at ~1/3 of their hourly limit whenever a second
+   worker was running (e.g. `npm run start:worker` on an office PC pointed at
+   the production database — the "Two sending workers are running … on
+   DESKTOP-…" warning).
+
+   Whichever worker grabbed the lease first became THE sender, even a PC
+   worker: every database query then crossed the internet, the PC's IMAP sync
+   shared the same small connection pool, and its sends crawled. Every
+   mailbox of every campaign was slowed equally — 80/hr mailboxes sent ~13/hr.
+   When the PC slept or its network blinked, the lease flipped back and forth
+   and every campaign's send loop stopped and restarted.
+
+   Now the SERVER worker is the preferred sender:
+     • a preferred worker (on Render — RENDER is set there automatically — or
+       SEND_LEADER_PREFERRED=true) takes the lease over from a non-preferred
+       holder at once;
+     • a non-preferred worker (a PC) only takes the lease after it has been
+       expired for NON_PREFERRED_GRACE_SEC (default 5 min), i.e. only if no
+       server worker is running at all.
+   Works even if the PC still runs OLD code: the server simply takes over.   */
+const flagEnv = (name) => {
+  const v = process.env[name];
+  if (v === undefined || v === "") return null;
+  return !["false", "0", "off", "no"].includes(String(v).toLowerCase());
+};
+export const SENDER_PREFERRED =
+  flagEnv("SEND_LEADER_PREFERRED") ?? Boolean(process.env.RENDER);
+const NON_PREFERRED_GRACE_SEC =
+  Number(process.env.NON_PREFERRED_GRACE_SEC) || 300;
+
+/** Who is sending, for the heartbeat / status page. */
+export function getSenderInfo() {
+  return {
+    leader: isSendLeader(),
+    preferred: SENDER_PREFERRED,
+    holder: isSendLeader() ? SENDER_INSTANCE : leaseHolder,
+  };
+}
+
 /** Take or renew the lease. Returns true if THIS process may send. */
 export async function renewSendLease() {
   try {
-    const value = JSON.stringify({ instance: SENDER_INSTANCE });
+    const value = JSON.stringify({
+      instance: SENDER_INSTANCE,
+      preferred: SENDER_PREFERRED,
+    });
+    const graceSecs = SENDER_PREFERRED ? 0 : NON_PREFERRED_GRACE_SEC;
     const rows = await prisma.$queryRaw`
       INSERT INTO "CrmSetting" ("key", "value", "updatedAt")
       VALUES (${SEND_LEASE_KEY},
@@ -259,7 +302,10 @@ export async function renewSendLease() {
       ON CONFLICT ("key") DO UPDATE
         SET "value" = EXCLUDED."value", "updatedAt" = NOW()
         WHERE "CrmSetting"."value"->>'instance' = ${SENDER_INSTANCE}
-           OR ("CrmSetting"."value"->>'until')::timestamptz < NOW()
+           OR ("CrmSetting"."value"->>'until')::timestamptz
+                < NOW() - make_interval(secs => ${graceSecs}::float8)
+           OR (${SENDER_PREFERRED}::boolean
+               AND COALESCE(("CrmSetting"."value"->>'preferred')::boolean, false) = false)
       RETURNING "value"->>'instance' AS instance`;
     const won = rows.length > 0;
     if (won) leaseConfirmedAt = Date.now();
@@ -270,13 +316,18 @@ export async function renewSendLease() {
         .findUnique({ where: { key: SEND_LEASE_KEY } })
         .catch(() => null);
       leaseHolder = cur?.value?.instance || null;
-      if (sendLeader)
+      if (sendLeader) {
+        sendStats.leaseLost += 1;
         console.warn(`⚠️ Lost the sender lease to ${leaseHolder} — stopping sends.`);
+      }
       if (Date.now() - lastStandbyLogAt > 10 * 60_000) {
         lastStandbyLogAt = Date.now();
         console.warn(
           `🚨 STANDBY: another worker (${leaseHolder}) is sending campaigns. ` +
-            `This one won't send. Run only ONE worker.`,
+            `This one won't send. Run only ONE worker.` +
+            (SENDER_PREFERRED
+              ? ""
+              : " (This worker is not on the server, so it only sends if no server worker is running.)"),
         );
       }
     }
@@ -379,6 +430,36 @@ function releaseSharedSlot(accountId, token) {
 // so the total speed is unchanged — the sends are just spread out.
 // In-memory is enough: only the lease holder sends.
 const campaignGates = new Map(); // campaignId → { last, gapMs }
+
+/* ── Sending diagnostics ───────────────────────────────────────────────────
+   Counters the worker logs every few minutes ("📊 Sending …"), so a slow
+   campaign shows WHERE the time goes: waiting for a free global slot, a slow
+   send (SMTP + database), or mailboxes waiting for a reason (cooldown, cap,
+   database trouble, not the sender …).                                      */
+const newSendStats = () => ({
+  since: Date.now(),
+  attempts: 0,
+  slotWaitMs: 0,
+  slotWaitMax: 0,
+  holdMs: 0,
+  holdMax: 0,
+  ops: 0,
+  waits: {},
+  stops: {},
+  restarts: 0,
+  leaseLost: 0,
+});
+let sendStats = newSendStats();
+const bump = (obj, key) => {
+  obj[key] = (obj[key] || 0) + 1;
+};
+
+/** Counters since the last call (and reset them). */
+export function takeSendStats() {
+  const s = sendStats;
+  sendStats = newSendStats();
+  return { ...s, until: Date.now(), activeCampaigns: activeCampaigns.size };
+}
 
 async function waitForMailboxSlot(
   accountId,
@@ -1640,7 +1721,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
 
   // [0] Only the worker holding the sender lease sends (one sender total).
   if (!isSendLeader()) {
-    return { action: "stop" };
+    return { reason: "not the sender", action: "stop" };
   }
 
   // [1] Campaign still sending?
@@ -1648,11 +1729,11 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   try {
     status = await getCampaignStatus(campaignId);
   } catch (err) {
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: campaign status", action: "wait", ms: 5000 };
   }
 
   if (status !== "sending") {
-    return { action: "stop" };
+    return { reason: "campaign not sending", action: "stop" };
   }
 
   // [2] Check actually pending recipients FIRST
@@ -1672,7 +1753,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       remaining = res[0]?.count || 0;
     }
   } catch (err) {
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: pending count", action: "wait", ms: 5000 };
   }
 
   // [3] If zero remaining, stop this processor cleanly.
@@ -1687,7 +1768,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   try {
     pause = await getAccountPause(accountId); // also restores saved cooldowns
   } catch (err) {
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: mailbox state", action: "wait", ms: 5000 };
   }
 
   const state = getAccountState(accountId);
@@ -1699,7 +1780,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       );
       ctx.stateLogged = true;
     }
-    return { action: "wait", ms: capWait((state.until || 0) - Date.now()) };
+    return { reason: "mailbox cooldown", action: "wait", ms: capWait((state.until || 0) - Date.now()) };
   }
   ctx.stateLogged = false;
 
@@ -1711,7 +1792,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       );
       ctx.pauseLogged = true;
     }
-    return { action: "wait", ms: capWait(PAUSED_RECHECK_MS) };
+    return { reason: "admin pause", action: "wait", ms: capWait(PAUSED_RECHECK_MS) };
   }
   ctx.pauseLogged = false;
 
@@ -1720,7 +1801,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
   try {
     dailyCount = await getDailyCount(userId);
   } catch (err) {
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: company count", action: "wait", ms: 5000 };
   }
 
   if (dailyCount >= DAILY_LIMIT) {
@@ -1731,7 +1812,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
       );
       ctx.dailyLogged = true;
     }
-    return { action: "wait", ms: capWait(msUntilNextWindow()) };
+    return { reason: "company daily limit", action: "wait", ms: capWait(msUntilNextWindow()) };
   }
   ctx.dailyLogged = false;
 
@@ -1755,13 +1836,14 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
         ctx.capLogged = true;
       }
       return {
+        reason: "mailbox daily limit",
         action: "wait",
         ms: capWait(Math.min(msUntilNextSendingDay(), CAP_RECHECK_MS)),
       };
     }
     ctx.capLogged = false;
   } catch (err) {
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: mailbox cap", action: "wait", ms: 5000 };
   }
 
   // [7] Atomic claim (Dynamic reassignment for normal campaigns)
@@ -1798,7 +1880,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
         `;
 
     if (claimed.length === 0) {
-      return { action: "wait", ms: 2000 };
+      return { reason: "no free row", action: "wait", ms: 2000 };
     }
 
     claimed.sort((a, b) => a.id - b.id);
@@ -1814,7 +1896,7 @@ async function claimNextBatch({ campaignId, accountId, userId, ctx }) {
     return { action: "send", batch: claimed };
   } catch (err) {
     console.error(`⚠️ [${account.email}] claim failed: ${err.message}`);
-    return { action: "wait", ms: 5000 };
+    return { reason: "db: claim failed", action: "wait", ms: 5000 };
   }
 }
 
@@ -2338,27 +2420,46 @@ async function processAccountBatched({
       // sweep, was reset to pending, retried, and finally failed with
       // "Max retries (5) exceeded after persistent timeout".
       ctx.deferredSleepMs = 0;
+      const queuedAt = Date.now();
       try {
         next = await globalAccountLimit(async () => {
-          const claim = await claimNextBatch({
-            campaignId,
-            accountId: numericAccountId,
-            userId,
-            ctx,
-          });
-          if (
-            claim.action === "send" &&
-            Array.isArray(claim.batch) &&
-            claim.batch.length
-          ) {
-            ctx.currentSlot = slot;
-            try {
-              claim.result = await runBatch(claim.batch, ctx, { inSlot: true });
-            } catch (err) {
-              claim.batchError = err;
+          const startedAt = Date.now();
+          const waited = startedAt - queuedAt;
+          sendStats.slotWaitMs += waited;
+          sendStats.slotWaitMax = Math.max(sendStats.slotWaitMax, waited);
+          sendStats.ops += 1;
+          try {
+            const claim = await claimNextBatch({
+              campaignId,
+              accountId: numericAccountId,
+              userId,
+              ctx,
+            });
+            if (
+              claim.action === "send" &&
+              Array.isArray(claim.batch) &&
+              claim.batch.length
+            ) {
+              ctx.currentSlot = slot;
+              sendStats.attempts += claim.batch.length;
+              try {
+                claim.result = await runBatch(claim.batch, ctx, {
+                  inSlot: true,
+                });
+              } catch (err) {
+                claim.batchError = err;
+              }
+            } else if (claim.action === "wait") {
+              bump(sendStats.waits, claim.reason || "other");
+            } else if (claim.action === "stop") {
+              bump(sendStats.stops, claim.reason || "other");
             }
+            return claim;
+          } finally {
+            const held = Date.now() - startedAt;
+            sendStats.holdMs += held;
+            sendStats.holdMax = Math.max(sendStats.holdMax, held);
           }
-          return claim;
         });
       } catch (err) {
         console.error(
@@ -3366,6 +3467,7 @@ async function _sendBulkCampaignInner(campaignId) {
       // A processor that ran a long time before exiting resets the backoff.
       if (Date.now() - startedAt > 10 * 60_000) attempt = 0;
       attempt += 1;
+      sendStats.restarts += 1;
       const backoff = Math.min(10_000 * 2 ** (attempt - 1), 5 * 60_000);
       console.warn(
         `🔁 Campaign ${campaignId}: mailbox ${accountId} stopped with work left — ` +

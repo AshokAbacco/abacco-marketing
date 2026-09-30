@@ -512,17 +512,41 @@ export async function buildCampaignStatus(campaignId) {
       companyLimit: DAILY_LIMIT,
     });
     const excluded = mailboxes.filter((m) => m._eta.hourly === 0).length;
+    const configuredRate = Math.round(
+      mailboxes
+        .filter((m) => ["sending", "not_running"].includes(m.state))
+        .reduce((s, m) => s + m.effectiveHourly, 0),
+    );
+
+    // BUG FIXED: the estimate only used the CONFIGURED hourly limits, so a
+    // campaign actually sending slower always showed "in 15m" and the time
+    // kept sliding. Once it has been sending for 15+ minutes, the real
+    // speed (last hour, or since the first email) is used when it is lower.
+    let realAt = null;
+    let observedRate = null;
+    const firstSent = k.firstSentAt ? new Date(k.firstSentAt).getTime() : null;
+    if (campaign.status === "sending" && firstSent && now - firstSent >= 15 * 60_000) {
+      const windowMs = Math.min(now - firstSent, HOUR);
+      const sentInWindow =
+        windowMs >= HOUR ? k.sentLastHour || 0 : k.sent || 0;
+      observedRate = (sentInWindow * HOUR) / windowMs;
+      if (observedRate > 0 && observedRate < configuredRate * 0.85) {
+        realAt = now + (remaining / observedRate) * HOUR;
+      }
+    }
+    const finalAt = realAt && at ? Math.max(realAt, at) : at;
     eta = {
-      at: at ? new Date(at) : null,
-      in: at ? formatIn(at - now) : null,
-      ratePerHour: Math.round(
-        mailboxes
-          .filter((m) => ["sending", "not_running"].includes(m.state))
-          .reduce((s, m) => s + m.effectiveHourly, 0),
-      ),
-      note: at
-        ? `Based on each mailbox's hourly limit${excluded ? `; ${excluded} blocked mailbox(es) not counted` : ""}.`
-        : "Cannot estimate — no mailbox is able to send. Fix the blocked mailboxes below.",
+      at: finalAt ? new Date(finalAt) : null,
+      in: finalAt ? formatIn(finalAt - now) : null,
+      ratePerHour: configuredRate,
+      observedRatePerHour:
+        observedRate == null ? null : Math.round(observedRate),
+      basedOn: realAt ? "actual_speed" : "hourly_limits",
+      note: !finalAt
+        ? "Cannot estimate — no mailbox is able to send. Fix the blocked mailboxes below."
+        : realAt
+          ? `Based on the ACTUAL speed (${Math.round(observedRate)}/hr) — slower than the hourly limits allow (${configuredRate}/hr).`
+          : `Based on each mailbox's hourly limit${excluded ? `; ${excluded} blocked mailbox(es) not counted` : ""}.`,
     };
   }
   for (const m of mailboxes) delete m._eta;

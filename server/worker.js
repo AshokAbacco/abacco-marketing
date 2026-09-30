@@ -37,6 +37,9 @@ const {
   renewSendLease,
   releaseSendLease,
   isSendLeader,
+  getSenderInfo,
+  takeSendStats,
+  SENDER_PREFERRED,
 } = await import("./src/services/campaignMailer.service.js");
 const { runFollowupCleanup } =
   await import("./src/controllers/campaigns.controller.js");
@@ -277,6 +280,7 @@ async function writeHeartbeat() {
     host: os.hostname(),
     otherWorker,
     activeCampaigns: getActiveCampaignIds(),
+    sender: getSenderInfo(),
   };
   await prisma.crmSetting.upsert({
     where: { key: WORKER_HEARTBEAT_KEY },
@@ -370,7 +374,57 @@ async function startWorker() {
   // then take the sender lease before anything can send.
   await ensurePacingColumn();
   await renewSendLease();
-  every(ms("SEND_LEASE_RENEW_MS", 15_000), "sendLease", renewSendLease);
+  // BUG FIXED: the lease renewal used to run through job(), which skips
+  // every job for 30 s – 5 min after ANY database error (circuit breaker).
+  // The sender then lost its lease, every campaign's send loop stopped and
+  // restarted, and a second worker could grab the lease meanwhile. The
+  // renewal is one tiny query — it now always runs on its own timer.
+  {
+    let renewing = false;
+    const t = setInterval(async () => {
+      if (shuttingDown || renewing) return;
+      renewing = true;
+      try {
+        await renewSendLease();
+      } finally {
+        renewing = false;
+      }
+    }, ms("SEND_LEASE_RENEW_MS", 15_000));
+    timers.push(t);
+  }
+  console.log(
+    SENDER_PREFERRED
+      ? "📨 This is a SERVER worker: it is the preferred campaign sender."
+      : "💻 This worker is NOT on the server (RENDER not set): it sends only if no server worker is running. " +
+          "Set SEND_LEADER_PREFERRED=true if this machine IS your production worker.",
+  );
+
+  // Where the sending time goes (see takeSendStats in campaignMailer).
+  const STATS_EVERY_MS = ms("SEND_STATS_LOG_MS", 5 * 60_000);
+  timers.push(
+    setInterval(() => {
+      const s = takeSendStats();
+      const sender = getSenderInfo();
+      if (!sender.leader) {
+        console.log(`📊 Sending: this worker is on STANDBY (sender: ${sender.holder || "unknown"})`);
+        return;
+      }
+      const mins = Math.max(1, Math.round((s.until - s.since) / 60_000));
+      const avg = (total, n) => (n ? (total / n / 1000).toFixed(1) : "0.0");
+      const list = (o) =>
+        Object.entries(o)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k} ${v}`)
+          .join(", ") || "none";
+      console.log(
+        `📊 Sending (last ${mins} min): ${s.attempts} email(s) attempted in ${s.activeCampaigns} campaign(s) · ` +
+          `wait for a free slot avg ${avg(s.slotWaitMs, s.ops)}s (max ${(s.slotWaitMax / 1000).toFixed(1)}s) · ` +
+          `time per send avg ${avg(s.holdMs, s.ops)}s (max ${(s.holdMax / 1000).toFixed(1)}s) · ` +
+          `mailbox waits: ${list(s.waits)} · stops: ${list(s.stops)} · ` +
+          `restarts ${s.restarts} · lease lost ${s.leaseLost}`,
+      );
+    }, STATS_EVERY_MS),
+  );
 
   console.log("⚙️ Initial recovery and resume...");
   await job("clearOldPauses", clearOldPauses)();
