@@ -46,6 +46,8 @@ const invalidateDashboardCache = (userId) => {
   // Keys are forFollowup:{user}:{level}:{offset}:{limit}. The old code
   // deleted `forFollowup:{user}:{level}`, which never matched anything.
   delByPrefix(`forFollowup:${userId}:`);
+  // Follow-up page Summary (sent count + preview rows), per campaign.
+  delByPrefix(`followupPreview:${userId}:`);
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1788,6 +1790,16 @@ export const getCampaignsForFollowup = async (req, res) => {
    — just lazily, at the moment "Create Follow-up" is actually clicked,
    not on every campaign selection.
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ⚡ PERF (Summary → Recipients was slow):
+   The old version made FOUR sequential DB round trips. Two of them built a
+   `fromAccounts` list that was never returned — and one of those was a
+   Prisma `distinct` query, which Prisma does NOT push down to SQL: it
+   fetched EVERY recipient row of the campaign and de-duplicated in Node.
+   Both are gone. What's left runs as ONE parallel round trip, the result
+   is cached per user+campaign (concurrent callers share one load), and the
+   heavy sentBodyHtml column is read for a single row instead of three.   */
+const FOLLOWUP_PREVIEW_TTL = 60; // seconds; invalidated on recipient edits
+
 export const getFollowupPreview = async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -1796,83 +1808,70 @@ export const getFollowupPreview = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid campaign id" });
     }
+    const userId = req.user.id;
+    const cacheKey = `followupPreview:${userId}:${id}`;
+    if (req.query.fresh === "1") cache.del(cacheKey);
 
-    const campaign = await prisma.campaign.findFirst({
-      where: { id, userId: req.user.id },
-      select: {
-        id: true,
-        name: true,
-        subject: true,
-        fromAccountIds: true,
-        createdAt: true,
-        bodyHtml: true,
-      },
+    const data = await getOrSet(cacheKey, FOLLOWUP_PREVIEW_TTL, async () => {
+      // All four in parallel = one round trip. Ownership is still enforced:
+      // if the campaign isn't this user's, the recipient rows are discarded.
+      const [campaign, sentCount, previewRecipients, firstBody] = await Promise.all([
+        prisma.campaign.findFirst({
+          where: { id, userId },
+          select: {
+            id: true,
+            name: true,
+            subject: true,
+            fromAccountIds: true,
+            createdAt: true,
+            bodyHtml: true,
+          },
+        }),
+        prisma.campaignRecipient.count({
+          where: { campaignId: id, status: "sent" },
+        }),
+        /* ⚠️ Raw SQL on purpose — `ORDER BY id + 0`, not Prisma's
+           orderBy: { id: "asc" } + take.
+           With a plain `ORDER BY id LIMIT n`, Postgres picks the PRIMARY KEY
+           index and walks the whole CampaignRecipient table from the oldest
+           row until it reaches this campaign's rows — the newer the
+           campaign, the longer the walk (≈470 ms on a 3M-row test table
+           with everything cached; seconds on a cold production DB).
+           `id + 0` stops the planner from using the pkey for the sort, so
+           it reads only this campaign's rows via the (campaignId, status)
+           index and sorts those few hundred in memory: ≈0.4 ms.        */
+        prisma.$queryRaw`
+          SELECT "id", "email", "accountId", "sentSubject", "sentFromEmail", "sentAt"
+          FROM "CampaignRecipient"
+          WHERE "campaignId" = ${id} AND "status" = 'sent'
+          ORDER BY "id" + 0
+          LIMIT 3`,
+        // Previous message body: ONE row only (this column holds the whole
+        // rendered email). Same planner fix as above.
+        prisma.$queryRaw`
+          SELECT "sentBodyHtml"
+          FROM "CampaignRecipient"
+          WHERE "campaignId" = ${id} AND "status" = 'sent'
+          ORDER BY "id" + 0
+          LIMIT 1`,
+      ]);
+
+      if (!campaign) return null; // null is not cached
+
+      return {
+        campaign,
+        sentCount,
+        previewRecipients,
+        previousBody: firstBody[0]?.sentBodyHtml || campaign.bodyHtml || "",
+      };
     });
-    if (!campaign) {
+
+    if (!data) {
       return res
         .status(404)
         .json({ success: false, message: "Campaign not found" });
     }
-    // From-addresses: normal campaigns keep the ids on the campaign, follow-ups
-    // write fromAccountIds: "[]" and carry the sender per recipient instead.
-    let declaredIds = [];
-    try {
-      declaredIds = JSON.parse(campaign.fromAccountIds || "[]").map(Number);
-    } catch {}
-
-    const assigned = await prisma.campaignRecipient.findMany({
-      where: { campaignId: id, accountId: { not: null } },
-      select: { accountId: true },
-      distinct: ["accountId"],
-    });
-
-    const fromAccountIdList = [
-      ...new Set([...declaredIds, ...assigned.map((a) => a.accountId)]),
-    ].filter(Number.isInteger);
-
-    const accounts = fromAccountIdList.length
-      ? await prisma.emailAccount.findMany({
-          where: { id: { in: fromAccountIdList } },
-          select: { id: true, email: true, smtpUser: true },
-        })
-      : [];
-
-    // Mirror processAccountBatched: fromEmail = smtpUser || email
-    const fromAccounts = accounts.map((a) => ({
-      id: a.id,
-      email: a.smtpUser || a.email,
-    }));
-
-    const [sentCount, previewRecipients] = await Promise.all([
-      prisma.campaignRecipient.count({
-        where: { campaignId: id, status: "sent" },
-      }),
-      prisma.campaignRecipient.findMany({
-        where: { campaignId: id, status: "sent" },
-        orderBy: { id: "asc" },
-        take: 3,
-        select: {
-          id: true,
-          email: true,
-          accountId: true,
-          sentSubject: true,
-          sentFromEmail: true,
-          sentBodyHtml: true,
-          sentAt: true,
-        },
-      }),
-    ]);
-
-    return res.json({
-      success: true,
-      data: {
-        campaign,
-        sentCount,
-        previewRecipients,
-        previousBody:
-          previewRecipients[0]?.sentBodyHtml || campaign.bodyHtml || "",
-      },
-    });
+    return res.json({ success: true, data });
   } catch (err) {
     console.error("getFollowupPreview error:", err);
     return res.status(500).json({ success: false });

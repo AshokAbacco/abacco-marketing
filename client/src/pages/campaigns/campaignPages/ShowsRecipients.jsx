@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Trash2, Save, X, Loader2, UserX, CheckCircle2, Mail } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
+// ⚡ Rows are mounted in pages of this size and extended as the user
+// scrolls. Mounting 1,000+ rows (each with a checkbox + button) at once
+// is what made the modal hang after the data had already arrived.
+const ROW_PAGE = 150;
+
 export default function ShowsRecipients({ campaignId, onClose, onUpdated }) {
   const [recipients, setRecipients] = useState([]);
-  const [filteredRecipients, setFilteredRecipients] = useState([]);
+  const [visibleCount, setVisibleCount] = useState(ROW_PAGE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -15,64 +20,65 @@ export default function ShowsRecipients({ campaignId, onClose, onUpdated }) {
 
   // ✅ Fetch recipients — only sent/completed (as per backend campaign completed sent mails)
   useEffect(() => {
-    const fetchRecipients = async () => {
+    if (!campaignId) return;
+    const controller = new AbortController();
+
+    (async () => {
       try {
         const token = localStorage.getItem("token");
-        console.log("Fetching recipients for campaign:", campaignId);
-
-        // ⚡ Use the unpaginated recipients endpoint (not /:id/view, which
-        // pages at pageSize=200/max 500) so ALL sent recipients come back,
-        // not just the first page.
+        // Unpaginated recipients endpoint (4 small columns per row, no
+        // email bodies) so ALL sent recipients come back, not one page.
         const res = await fetch(
           `${API_BASE_URL}/api/campaigns/${campaignId}/recipients?status=sent`,
           {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
           }
         );
         const data = await res.json();
 
-        console.log("Fetched campaign recipients:", data);
-
         if (data.success) {
-          // Already filtered to status=sent server-side; keep the guard in
-          // case that ever changes.
-          const sentRecipients = (data.data || []).filter(
-            (r) => r.status === "sent" || r.status === "completed"
+          // Already filtered to status=sent server-side; keep the guard.
+          setRecipients(
+            (data.data || []).filter(
+              (r) => r.status === "sent" || r.status === "completed"
+            )
           );
-
-          console.log(`Recipients: sent/completed=${sentRecipients.length}`);
-
-          setRecipients(sentRecipients);
-          setFilteredRecipients(sentRecipients);
         } else {
-          console.error("Failed to load recipients:", data);
+          console.error("Failed to load recipients:", data.message);
         }
-
-        setLoading(false);
       } catch (err) {
-        console.error("Failed to load recipients", err);
-        setLoading(false);
+        if (err.name !== "AbortError") console.error("Failed to load recipients", err);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
       }
-    };
+    })();
 
-    if (campaignId) {
-      fetchRecipients();
-    }
+    return () => controller.abort();
   }, [campaignId]);
 
-  // Search filter
-  useEffect(() => {
-    if (!searchTerm.trim()) {
-      setFilteredRecipients(recipients);
-      return;
-    }
-    const term = searchTerm.toLowerCase();
-    setFilteredRecipients(
-      recipients.filter((r) => r.email.toLowerCase().includes(term))
-    );
+  // Search filter — derived, not a second state copy (saves a re-render
+  // of the whole list on every keystroke / delete).
+  const filteredRecipients = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return recipients;
+    return recipients.filter((r) => r.email.toLowerCase().includes(term));
   }, [searchTerm, recipients]);
+
+  // New search → start from the top page again.
+  useEffect(() => setVisibleCount(ROW_PAGE), [searchTerm]);
+
+  const visibleRecipients = filteredRecipients.slice(0, visibleCount);
+
+  const handleListScroll = (e) => {
+    const el = e.currentTarget;
+    if (
+      visibleCount < filteredRecipients.length &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 200
+    ) {
+      setVisibleCount((n) => n + ROW_PAGE);
+    }
+  };
 
   // Toggle single checkbox
   const toggleSelect = (id) => {
@@ -110,7 +116,6 @@ const handleDeleteSelected = () => {
   const count = selectedIds.size;
   setDeletedIds((prev) => new Set([...prev, ...selectedIds]));
   setRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
-  setFilteredRecipients((prev) => prev.filter((r) => !selectedIds.has(r.id)));
   setSelectedIds(new Set());
   setDeleteMessage(`Deleted ${count} recipient${count > 1 ? "s" : ""}`);
   setTimeout(() => setDeleteMessage(""), 3000);
@@ -121,7 +126,6 @@ const handleDelete = (recipientId) => {
   const recipient = recipients.find((r) => r.id === recipientId);
   setDeletedIds((prev) => new Set(prev).add(recipientId));
   setRecipients((prev) => prev.filter((r) => r.id !== recipientId));
-  setFilteredRecipients((prev) => prev.filter((r) => r.id !== recipientId));
   setSelectedIds((prev) => {
     const next = new Set(prev);
     next.delete(recipientId);
@@ -264,7 +268,10 @@ const handleSave = async () => {
             <p className="text-sm font-medium">No recipients match your search</p>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-6 pb-2 min-h-[200px] max-h-[380px]">
+          <div
+            onScroll={handleListScroll}
+            className="flex-1 overflow-y-auto px-6 pb-2 min-h-[200px] max-h-[380px]"
+          >
             {/* Select All Row */}
             <div className="flex items-center py-3 border-b-2 border-sky-100 bg-white sticky top-0 z-10">
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
@@ -284,7 +291,7 @@ const handleSave = async () => {
             </div>
 
             {/* Recipient Rows */}
-            {filteredRecipients.map((r) => {
+            {visibleRecipients.map((r) => {
               const isSelected = selectedIds.has(r.id);
               return (
                 <div
@@ -341,6 +348,15 @@ const handleSave = async () => {
                 </div>
               );
             })}
+
+            {visibleCount < filteredRecipients.length && (
+              <button
+                onClick={() => setVisibleCount((n) => n + ROW_PAGE)}
+                className="w-full py-3 text-xs font-bold text-sky-600 hover:text-sky-800"
+              >
+                Show more ({filteredRecipients.length - visibleCount} remaining)
+              </button>
+            )}
           </div>
         )}
 

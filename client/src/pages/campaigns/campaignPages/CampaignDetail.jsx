@@ -1,5 +1,5 @@
 // FIXED: CampaignDetail.jsx - Follow-up creation and preview fixes
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Send,
   Plus,
@@ -113,6 +113,15 @@ export default function CampaignDetail() {
   const [campaignsTotal, setCampaignsTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const { id } = useParams();
+
+  // ⚡ Summary/preview cache, keyed by campaign id. Filled by the background
+  // prefetch below and by every selection, so picking a campaign (or going
+  // back to one) renders the Recipients count + preview instantly instead
+  // of waiting on the network each time.
+  const previewCacheRef = useRef(new Map()); // id -> { data, at }
+  const previewInflightRef = useRef(new Map()); // id -> Promise
+  const selectSeqRef = useRef(0); // ignores responses from older selections
+  const PREVIEW_CLIENT_TTL_MS = 60_000;
 
   // ── Daily limit ─────────────────────────────────────────────
   const dailyLimit = useDailyLimit();
@@ -319,14 +328,88 @@ export default function CampaignDetail() {
     return followUpBody || "";
   };
 
+  // One shared loader for /followup-preview: cached, and concurrent callers
+  // (prefetch + a click on the same campaign) share a single request.
+  const loadFollowupPreview = (campaignId, { fresh = false } = {}) => {
+    const key = String(campaignId);
+    if (!fresh) {
+      const hit = previewCacheRef.current.get(key);
+      if (hit && Date.now() - hit.at < PREVIEW_CLIENT_TTL_MS)
+        return Promise.resolve(hit.data);
+      const pending = previewInflightRef.current.get(key);
+      if (pending) return pending;
+    }
+
+    const p = (async () => {
+      const res = await fetch(
+        `${API_BASE_URL}/api/campaigns/${campaignId}/followup-preview` +
+          (fresh ? "?fresh=1" : ""),
+        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } },
+      );
+      if (!res.ok) {
+        throw new Error(
+          res.status === 404
+            ? "GET /api/campaigns/:id/followup-preview returned 404 — check campaigns.routes.js"
+            : `Preview request failed (HTTP ${res.status})`,
+        );
+      }
+      const json = await res.json();
+      if (!json.success)
+        throw new Error(json.message || "Failed to load preview");
+      previewCacheRef.current.set(key, { data: json.data, at: Date.now() });
+      return json.data;
+    })().finally(() => previewInflightRef.current.delete(key));
+
+    previewInflightRef.current.set(key, p);
+    return p;
+  };
+
+  const applyPreview = (campaign, data) => {
+    const { campaign: detailCampaign, sentCount, previewRecipients, previousBody } =
+      data;
+    setLoadedCampaign({ ...campaign, ...detailCampaign, sentCount });
+    setAllSentRecipients(previewRecipients || []); // preview sample only (≤3) — NOT the full list
+    setOriginalBody(previousBody || campaign.bodyHtml || "");
+  };
+
+  // ⚡ Background prefetch: as soon as the campaign list arrives, warm the
+  // preview for each visible campaign (2 at a time, so it never competes
+  // with the page's own requests). By the time the user opens the dropdown
+  // and picks one, its Summary is usually already in memory.
+  useEffect(() => {
+    if (!campaigns.length) return;
+    let cancelled = false;
+    const queue = campaigns.map((c) => c.id);
+    const worker = async () => {
+      while (!cancelled && queue.length) {
+        const cid = queue.shift();
+        try {
+          await loadFollowupPreview(cid);
+        } catch {
+          /* prefetch is best-effort; a real selection will surface errors */
+        }
+      }
+    };
+    const t = setTimeout(() => {
+      worker();
+      worker();
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [campaigns]);
+
   const handleSelectCampaign = async (id) => {
     setSelectedCampaignId(id);
     const campaign = campaigns.find((c) => String(c.id) === String(id));
 
     if (!campaign) {
+      selectSeqRef.current++; // drop any in-flight preview
       setLoadedCampaign(null);
       setAllSentRecipients([]);
       setOriginalBody("");
+      setLoadingRecipients(false);
       return;
     }
 
@@ -341,62 +424,36 @@ export default function CampaignDetail() {
       setSubjects([campaign.subject]);
     }
 
-    const token = localStorage.getItem("token");
-    const auth = { headers: { Authorization: `Bearer ${token}` } };
-
-    setLoadingRecipients(true);
+    const seq = ++selectSeqRef.current;
     setRecipientsError("");
+
+    // Cached (prefetched or seen before) → render instantly, no spinner.
+    const hit = previewCacheRef.current.get(String(campaign.id));
+    if (hit && Date.now() - hit.at < PREVIEW_CLIENT_TTL_MS) {
+      applyPreview(campaign, hit.data);
+      setLoadingRecipients(false);
+      return;
+    }
+
+    // Not cached: the count shown meanwhile comes from the campaign row
+    // (campaign.sentCount), so the Summary is never blank while this loads.
+    setLoadingRecipients(true);
     try {
-      // ⚡ One request instead of three. This used to be:
-      //   GET /:id/view?pageSize=1                (parallel)
-      //   GET /:id/recipients?status=sent          (parallel, but UNPAGINATED —
-      //                                              every sent row, could be
-      //                                              thousands, just to show 2
-      //                                              addresses + a count)
-      //   GET /:id/recipients/:recipientId/body    (only started AFTER the
-      //                                              recipients call resolved —
-      //                                              a fully sequential 3rd
-      //                                              round trip)
-      // /followup-preview does the equivalent work server-side with 3 tiny,
-      // parallel DB queries (a COUNT + a take:3 findMany) and returns one
-      // small payload — no large recipient list on this critical path.
-      // The full unpaginated list (needed to build senderRecipientMap) is
-      // now fetched lazily in createFollowUp, only when actually sending.
-      const res = await fetch(
-        `${API_BASE_URL}/api/campaigns/${campaign.id}/followup-preview`,
-        auth,
-      );
-
-      if (!res.ok) {
-        throw new Error(
-          res.status === 404
-            ? "GET /api/campaigns/:id/followup-preview returned 404 — check campaigns.routes.js"
-            : `Preview request failed (HTTP ${res.status})`,
-        );
-      }
-
-      const json = await res.json();
-      if (!json.success)
-        throw new Error(json.message || "Failed to load preview");
-
-      const {
-        campaign: detailCampaign,
-        sentCount,
-        previewRecipients,
-        previousBody,
-      } = json.data;
-
-      setLoadedCampaign({ ...campaign, ...detailCampaign, sentCount });
-      setAllSentRecipients(previewRecipients || []); // preview sample only (≤3) — NOT the full list
-      setOriginalBody(previousBody || campaign.bodyHtml || "");
+      // /followup-preview: one small payload (count + 3 sample rows + the
+      // previous body). The full recipient list is only fetched when the
+      // follow-up is actually sent (fetchFullSentRecipients).
+      const data = await loadFollowupPreview(campaign.id);
+      if (seq !== selectSeqRef.current) return; // user picked another campaign
+      applyPreview(campaign, data);
     } catch (err) {
+      if (seq !== selectSeqRef.current) return;
       console.error("Failed to load campaign detail", err);
       setAllSentRecipients([]);
       setRecipientsError(
         err.message || "Could not load this campaign's recipients.",
       );
     } finally {
-      setLoadingRecipients(false);
+      if (seq === selectSeqRef.current) setLoadingRecipients(false);
     }
   };
 
@@ -641,35 +698,35 @@ export default function CampaignDetail() {
     }
   };
 
-  // Function to refresh campaign details after updating recipients
+  // Refresh after the Update Recipients modal saves. Was: GET /:id/view
+  // (a 200-row recipient page + stats) followed by the FULL unpaginated
+  // sent list — two heavy sequential calls that also never refreshed the
+  // count. Now: one small, cache-bypassing /followup-preview call.
   const fetchCampaignDetails = async () => {
-    if (!selectedCampaignId) return;
-
+    if (!selectedCampaignId || !loadedCampaign) return;
+    const campaign = loadedCampaign;
+    const seq = ++selectSeqRef.current;
+    previewCacheRef.current.delete(String(selectedCampaignId));
+    setLoadingRecipients(true);
+    setRecipientsError("");
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(
-        `${API_BASE_URL}/api/campaigns/${selectedCampaignId}/view`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+      const data = await loadFollowupPreview(selectedCampaignId, { fresh: true });
+      if (seq !== selectSeqRef.current) return;
+      applyPreview(campaign, data);
+      // Keep the dropdown label "(N recipients)" in step with the new count.
+      setCampaigns((prev) =>
+        prev.map((c) =>
+          String(c.id) === String(selectedCampaignId)
+            ? { ...c, sentCount: data.sentCount, recipientCount: data.sentCount }
+            : c,
+        ),
       );
-      const data = await res.json();
-
-      if (data.success) {
-        setLoadedCampaign((prev) => ({ ...prev, ...data.data.campaign }));
-      }
-
-      // The recipients modal can delete rows, so re-pull the full sent list.
-      const recRes = await fetch(
-        `${API_BASE_URL}/api/campaigns/${selectedCampaignId}/recipients?status=sent&forFollowup=1`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      const recJson = await recRes.json();
-      if (recJson.success) setAllSentRecipients(recJson.data || []);
     } catch (err) {
+      if (seq !== selectSeqRef.current) return;
       console.error("Failed to refresh campaign details", err);
+      setRecipientsError(err.message || "Could not refresh recipients.");
+    } finally {
+      if (seq === selectSeqRef.current) setLoadingRecipients(false);
     }
   };
 
@@ -714,6 +771,7 @@ export default function CampaignDetail() {
                       <button
                         key={level}
                         onClick={() => {
+                          selectSeqRef.current++; // drop any in-flight preview
                           setFollowupLevel(level);
                           setSelectedCampaignId("");
                           setLoadedCampaign(null);
@@ -1140,12 +1198,12 @@ export default function CampaignDetail() {
                     </p>
                   </div>
 
-                  {/* The number above is instant — it rides on the campaign row.
-                    Sending additionally needs every address, fetched separately;
-                    report that separately rather than blocking the count. */}
+                  {/* The number above is instant — it rides on the campaign row
+                    and is replaced by the live count when the preview lands
+                    (usually already prefetched, so this hint rarely shows). */}
                   {loadingRecipients && (
                     <p className="text-xs text-sky-600 font-semibold animate-pulse">
-                      Loading address list…
+                      Refreshing…
                     </p>
                   )}
                   {!loadingRecipients && recipientsError && (
