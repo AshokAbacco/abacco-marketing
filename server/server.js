@@ -80,6 +80,7 @@ const DEFAULT_ORIGINS = [
   "http://localhost:5174",
   "https://v3m45cfg-5173.inc1.devtunnels.ms",
   "https://abaccomarketing.onrender.com",
+  "https://abacco-marketing-6by7.onrender.com"
 ];
 const allowedOrigins = (
   process.env.CORS_ORIGINS
