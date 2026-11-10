@@ -185,23 +185,44 @@ export default function UsersPage() {
     setOpen(true);
   };
 
+  const [deletingId, setDeletingId] = useState(null);
+
   const handleDelete = async (userId, userName) => {
-    if (window.confirm(`Are you sure you want to delete ${userName}?`)) {
-      try {
-        await api.delete(`${API_BASE_URL}/api/users/${userId}`);
-        fetchUsers();
-        alert(`✅ ${userName} has been deleted successfully.`);
-      } catch (error) {
-        console.error("Error deleting employee:", error);
-        const errorMessage =
-          error.response?.data?.error || "Failed to delete employee";
-        const suggestion = error.response?.data?.suggestion;
-        if (suggestion) {
-          alert(`❌ ${errorMessage}\n\n💡 ${suggestion}`);
-        } else {
-          alert(`❌ ${errorMessage}`);
-        }
-      }
+    if (deletingId) return;
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${userName}?\n\nThis permanently removes their mailboxes, emails, campaigns and leads. Their CRM records will be reassigned to you.`,
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(userId);
+    try {
+      await api.delete(`${API_BASE_URL}/api/users/${userId}`);
+      // Remove the row immediately, then re-sync with the server.
+      setUsers((prev) => prev.filter((u) => u.id !== userId));
+      fetchUsers().catch(() => {});
+      alert(`✅ ${userName} has been deleted successfully.`);
+    } catch (error) {
+      console.error("Error deleting employee:", error);
+      const status = error.response?.status;
+      const data = error.response?.data || {};
+      let message =
+        data.error ||
+        (status === 403
+          ? "Only Admin/HR can delete employees"
+          : error.request && !error.response
+            ? "Cannot reach the server. Please try again."
+            : "Failed to delete employee");
+      if (data.code) message += ` (${data.code})`;
+      alert(
+        data.suggestion
+          ? `❌ ${message}\n\n💡 ${data.suggestion}`
+          : `❌ ${message}`,
+      );
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -459,8 +480,9 @@ export default function UsersPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(u.id, u.name)}
-                        className="p-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg transition-all duration-200 hover:scale-110"
-                        title="Delete (or deactivate if has data)"
+                        disabled={deletingId === u.id}
+                        className="disabled:opacity-50 disabled:cursor-not-allowed p-2 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg transition-all duration-200 hover:scale-110"
+                        title="Delete employee"
                       >
                         <Trash2 size={18} />
                       </button>

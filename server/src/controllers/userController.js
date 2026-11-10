@@ -12,7 +12,7 @@
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import prisma from "../prismaClient.js";
+import prisma, { isDbUnavailableError } from "../prismaClient.js";
 import { invalidateUserCache } from "../middlewares/authMiddleware.js";
 import { reassignCrmOwnership } from "../services/crm.service.js";
 
@@ -447,6 +447,32 @@ export const changeOwnPassword = async (req, res) => {
 /* ═══════════════════════════════════════════════════════════════════════════
    DELETE USER  (Admin/HR)
 ═══════════════════════════════════════════════════════════════════════════ */
+// Retries a short DB step when the connection pool / network hiccups.
+async function withRetry(fn, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isDbUnavailableError(err) || i === tries - 1) throw err;
+      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// Deletes rows in small batches so no single statement or connection is
+// held for long (a one-shot cascade is what was timing out / dropping the
+// connection).
+async function purgeInBatches(findIds, deleteIds, batchSize = 500) {
+  for (;;) {
+    const ids = await withRetry(() => findIds(batchSize));
+    if (ids.length === 0) break;
+    await withRetry(() => deleteIds(ids));
+  }
+}
+
 export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -459,25 +485,81 @@ export const deleteUser = async (req, res) => {
         .json({ error: "You cannot delete your own account" });
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { id },
-      select: { id: true, email: true, name: true },
-    });
+    const existingUser = await withRetry(() =>
+      prisma.user.findUnique({
+        where: { id },
+        select: { id: true, email: true, name: true },
+      }),
+    );
     if (!existingUser) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // EmailAccount, Campaign, Lead, ScheduledMessage, EmailAccountGroup all
-    // cascade from User in schema.prisma. EmailMessage cascades from
-    // EmailAccount. Tags do NOT cascade, so remove them explicitly.
-    // CRM records (contacts, companies, deals, open tasks) are handed to the
-    // admin doing the deletion — customer history must not disappear.
-    const reassigned = await prisma.$transaction(async (tx) => {
-      const moved = await reassignCrmOwnership(id, req.user.id, tx);
-      await tx.tag.deleteMany({ where: { userId: id } });
-      await tx.user.delete({ where: { id } });
-      return moved;
-    });
+    // ── Step 1: remove the heavy data in small batches ────────────────────
+    // Emails (+ attachments / tags via cascade), conversations, and
+    // campaign recipients. Deleting these through the User cascade in one
+    // statement is what failed with "database busy".
+    const accounts = await withRetry(() =>
+      prisma.emailAccount.findMany({
+        where: { userId: id },
+        select: { id: true },
+      }),
+    );
+    const accountIds = accounts.map((a) => a.id);
+
+    if (accountIds.length) {
+      await purgeInBatches(
+        (take) =>
+          prisma.emailMessage
+            .findMany({
+              where: { emailAccountId: { in: accountIds } },
+              select: { id: true },
+              take,
+            })
+            .then((rows) => rows.map((r) => r.id)),
+        (ids) => prisma.emailMessage.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await withRetry(() =>
+        prisma.conversation.deleteMany({
+          where: { emailAccountId: { in: accountIds } },
+        }),
+      );
+    }
+
+    const campaigns = await withRetry(() =>
+      prisma.campaign.findMany({ where: { userId: id }, select: { id: true } }),
+    );
+    const campaignIds = campaigns.map((c) => c.id);
+    if (campaignIds.length) {
+      await purgeInBatches(
+        (take) =>
+          prisma.campaignRecipient
+            .findMany({
+              where: { campaignId: { in: campaignIds } },
+              select: { id: true },
+              take,
+            })
+            .then((rows) => rows.map((r) => r.id)),
+        (ids) =>
+          prisma.campaignRecipient.deleteMany({ where: { id: { in: ids } } }),
+      );
+    }
+
+    // ── Step 2: small final transaction ───────────────────────────────────
+    // CRM records (contacts, companies, deals, open tasks, sequences) are
+    // handed to the admin doing the deletion — customer history must not
+    // disappear. Tags don't cascade, so they are removed explicitly.
+    const reassigned = await withRetry(() =>
+      prisma.$transaction(
+        async (tx) => {
+          const moved = await reassignCrmOwnership(id, req.user.id, tx);
+          await tx.tag.deleteMany({ where: { userId: id } });
+          await tx.user.delete({ where: { id } });
+          return moved;
+        },
+        { maxWait: 15000, timeout: 60000 },
+      ),
+    );
 
     invalidateUserCache(id);
 
@@ -487,8 +569,42 @@ export const deleteUser = async (req, res) => {
       reassignedToYou: reassigned,
     });
   } catch (err) {
-    console.error("Delete user error:", err);
-    res.status(500).json({ error: "Server error during delete" });
+    console.error("Delete user error:", err.code || "", err.message);
+
+    if (err.code === "P2025") {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (err.code === "P2028") {
+      return res.status(504).json({
+        error: "Deleting this user took too long and was cancelled.",
+        code: err.code,
+        suggestion: "Try again — the data is deleted in steps, so it resumes.",
+      });
+    }
+    if (err.code === "P2003" || err.code === "P2014") {
+      return res.status(409).json({
+        error: "This user is still linked to other records and cannot be deleted.",
+        code: err.code,
+        detail: err.meta?.field_name || err.meta?.constraint || undefined,
+        suggestion: "Deactivate the user instead.",
+      });
+    }
+    if (isDbUnavailableError(err)) {
+      res.set("Retry-After", "5");
+      return res.status(503).json({
+        error: "Database is busy. Please try again in a moment.",
+        code: err.code || "DB_UNAVAILABLE",
+        suggestion:
+          "Click delete again — already-removed data is skipped. Reason: " +
+          String(err.message || "").split("\n").pop().slice(0, 160),
+        retryable: true,
+      });
+    }
+
+    res.status(500).json({
+      error: "Server error during delete",
+      code: err.code || undefined,
+    });
   }
 };
 
