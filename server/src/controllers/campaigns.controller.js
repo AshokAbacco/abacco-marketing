@@ -1242,21 +1242,61 @@ export const getAllCampaigns = async (req, res) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   GET DASHBOARD CAMPAIGNS
+   GET DASHBOARD CAMPAIGNS  (paginated)
+
+   Query params
+     range        all | today | week | month           (default "all")
+     date         YYYY-MM-DD — overrides range
+     search       case-insensitive match on campaign name (server-side)
+     pageSize     rows per request, 1–100               (default 25)
+     cursor       "<createdAtISO>_<id>" of the last row the client already
+                  has → returns the rows AFTER it (keyset pagination; stable
+                  even if campaigns are created/deleted between requests)
+     page         legacy offset paging, used only when no cursor is sent
+     includeStats "false" skips header stats + total count (Load More only
+                  needs rows, so it costs 2 small queries instead of 6)
+
+   Response: { stats, recentCampaigns, pagination:{ page, pageSize, total,
+               hasMore, nextCursor } }   — stats/total are null when skipped.
 ═══════════════════════════════════════════════════════════════════════════ */
+const parseCursor = (raw) => {
+  if (!raw || typeof raw !== "string") return null;
+  const i = raw.lastIndexOf("_");
+  if (i <= 0) return null;
+  const createdAt = new Date(raw.slice(0, i));
+  const id = Number(raw.slice(i + 1));
+  if (Number.isNaN(createdAt.getTime()) || !Number.isInteger(id)) return null;
+  return { createdAt, id };
+};
+
+const makeCursor = (row) =>
+  row ? `${new Date(row.createdAt).toISOString()}_${row.id}` : null;
+
 export const getDashboardCampaigns = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { range = "all", date, page = "1", pageSize = "25" } = req.query;
+    const {
+      range = "all",
+      date,
+      page = "1",
+      pageSize = "25",
+      cursor: rawCursor,
+      includeStats = "true",
+    } = req.query;
 
-    const take = Math.min(Number(pageSize) || 25, 100);
-    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+    const search = String(req.query.search || "").trim().slice(0, 100);
+    const withStats = includeStats !== "false";
+    const take = Math.min(Math.max(Number(pageSize) || 25, 1), 100);
+    const pageNum = Math.max(Number(page) || 1, 1);
+    const cursor = parseCursor(rawCursor);
 
-    const cacheKey = `dashboard:${userId}:${date || range}:${page}:${take}`;
+    const cacheKey = `dashboard:${userId}:${date || range}:${search.toLowerCase()}:${
+      cursor ? rawCursor : `p${pageNum}`
+    }:${take}:${withStats ? 1 : 0}`;
     const cached = cache.get(cacheKey);
     if (cached) return res.json({ success: true, data: cached });
 
-    /* -- date range (same logic, but no longer mutates `now` via setHours) -- */
+    /* -- date range ---------------------------------------------------------- */
     let startDate = null;
     let endDate = null;
     const now = new Date();
@@ -1276,91 +1316,142 @@ export const getDashboardCampaigns = async (req, res) => {
     }
     if (date) {
       const d = new Date(date);
-      startDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      endDate = new Date(
-        d.getFullYear(),
-        d.getMonth(),
-        d.getDate(),
-        23,
-        59,
-        59,
-        999,
-      );
+      if (!Number.isNaN(d.getTime())) {
+        startDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        endDate = new Date(
+          d.getFullYear(),
+          d.getMonth(),
+          d.getDate(),
+          23,
+          59,
+          59,
+          999,
+        );
+      }
     }
 
-    const where = {
+    // Range filter — used for the header stats (search does NOT change the
+    // stat cards, same as before when search was done in the browser).
+    const rangeWhere = {
       userId,
       ...(startDate && { createdAt: { gte: startDate, lte: endDate } }),
     };
 
-    /* -- 1. campaign rows for THIS PAGE ONLY, no recipients ---------------- */
-    const [campaigns, totalCount] = await Promise.all([
-      prisma.campaign.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take,
-        skip,
-        select: {
-          id: true,
-          name: true,
-          status: true,
-          sendType: true,
-          subject: true,
-          createdAt: true,
-          scheduledAt: true,
-          estimatedCompletion: true,
-          parentCampaignId: true,
-          fromAccountIds: true,
-        },
-      }),
-      prisma.campaign.count({ where }),
-    ]);
+    // Range + search — used for the list rows and the "x of y" total.
+    const listWhere = {
+      ...rangeWhere,
+      ...(search && { name: { contains: search, mode: "insensitive" } }),
+    };
 
-    /* -- 2. header stats over the WHOLE range (not just this page) ---------
-       Two cheap queries: the id/sendType list, then one grouped count.
-       No recipient rows ever enter Node's memory.                          */
-    const allInRange = await prisma.campaign.findMany({
-      where,
-      select: { id: true, sendType: true },
+    // Keyset: rows strictly after the cursor in (createdAt DESC, id DESC).
+    // Served by @@index([userId, createdAt]).
+    const pageWhere = cursor
+      ? {
+          AND: [
+            listWhere,
+            {
+              OR: [
+                { createdAt: { lt: cursor.createdAt } },
+                { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+              ],
+            },
+          ],
+        }
+      : listWhere;
+
+    /* -- 1. ONE page of campaign rows (+1 to detect "has more") ----------- */
+    const rowsPromise = prisma.campaign.findMany({
+      where: pageWhere,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: take + 1,
+      ...(!cursor && pageNum > 1 && { skip: (pageNum - 1) * take }),
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        sendType: true,
+        subject: true,
+        createdAt: true,
+        scheduledAt: true,
+        estimatedCompletion: true,
+        parentCampaignId: true,
+        fromAccountIds: true,
+      },
     });
 
-    const followupIds = new Set(
-      allInRange.filter((c) => c.sendType === "followup").map((c) => c.id),
-    );
-    const totalFollowups = followupIds.size;
-    const totalCampaigns = allInRange.length - totalFollowups;
+    /* -- 2. header stats over the WHOLE range, computed in the database ----
+       Three aggregate queries; no campaign-id lists or recipient rows are
+       loaded into Node.                                                     */
+    const statsPromise = withStats
+      ? Promise.all([
+          prisma.campaign.groupBy({
+            by: ["sendType"],
+            where: rangeWhere,
+            _count: { _all: true },
+          }),
+          prisma.campaignRecipient.groupBy({
+            by: ["status"],
+            where: {
+              campaign: { ...rangeWhere, sendType: { not: "followup" } },
+            },
+            _count: { _all: true },
+          }),
+          prisma.campaignRecipient.count({
+            where: { campaign: { ...rangeWhere, sendType: "followup" } },
+          }),
+          prisma.campaign.count({ where: listWhere }),
+        ])
+      : Promise.resolve(null);
 
-    const statRows = allInRange.length
-      ? await prisma.campaignRecipient.groupBy({
-          by: ["campaignId", "status"],
-          where: { campaignId: { in: allInRange.map((c) => c.id) } },
-          _count: { _all: true },
-        })
-      : [];
+    const [rowsPlusOne, statResults] = await Promise.all([
+      rowsPromise,
+      statsPromise,
+    ]);
 
-    let totalRecipients = 0,
-      sentRecipients = 0,
-      pendingRecipients = 0,
-      failedRecipients = 0,
-      followupEmails = 0;
+    const hasMore = rowsPlusOne.length > take;
+    const campaigns = hasMore ? rowsPlusOne.slice(0, take) : rowsPlusOne;
 
-    for (const row of statRows) {
-      const n = row._count._all;
-      if (followupIds.has(row.campaignId)) {
-        followupEmails += n;
-        continue;
+    let stats = null;
+    let totalCount = null;
+    if (statResults) {
+      const [typeRows, statusRows, followupEmails, listTotal] = statResults;
+      totalCount = listTotal;
+
+      let totalFollowups = 0;
+      let totalCampaigns = 0;
+      for (const r of typeRows) {
+        if (r.sendType === "followup") totalFollowups += r._count._all;
+        else totalCampaigns += r._count._all;
       }
-      totalRecipients += n;
-      if (row.status === "sent") sentRecipients += n;
-      else if (row.status === "failed") failedRecipients += n;
-      else if (row.status === "pending" || row.status === "processing")
-        pendingRecipients += n;
+
+      let totalRecipients = 0,
+        sentRecipients = 0,
+        pendingRecipients = 0,
+        failedRecipients = 0;
+      for (const r of statusRows) {
+        const n = r._count._all;
+        totalRecipients += n;
+        if (r.status === "sent") sentRecipients += n;
+        else if (r.status === "failed") failedRecipients += n;
+        else if (r.status === "pending" || r.status === "processing")
+          pendingRecipients += n;
+      }
+
+      stats = {
+        totalCampaigns,
+        totalRecipients,
+        sentRecipients,
+        pendingRecipients,
+        failedRecipients,
+        totalFollowups,
+        followupEmails,
+      };
     }
 
     /* -- 3. per-row counts for the visible page only ------------------------ */
     const counts = await getRecipientCounts(campaigns.map((c) => c.id));
 
-    /* -- 4. sender labels --------------------------------------------------- */
+    /* -- 4. sender labels (only for accounts used on this page) ------------- */
     const accountIds = new Set();
     for (const c of campaigns) {
       try {
@@ -1372,7 +1463,7 @@ export const getDashboardCampaigns = async (req, res) => {
       }
     }
 
-    let accountEmailMap = {};
+    const accountEmailMap = {};
     if (accountIds.size > 0) {
       const allAccounts = await prisma.emailAccount.findMany({
         where: { id: { in: Array.from(accountIds) } },
@@ -1402,17 +1493,15 @@ export const getDashboardCampaigns = async (req, res) => {
     });
 
     const responseData = {
-      stats: {
-        totalCampaigns,
-        totalRecipients,
-        sentRecipients,
-        pendingRecipients,
-        failedRecipients,
-        totalFollowups,
-        followupEmails,
-      },
+      stats,
       recentCampaigns,
-      pagination: { page: Number(page), pageSize: take, total: totalCount },
+      pagination: {
+        page: cursor ? null : pageNum,
+        pageSize: take,
+        total: totalCount,
+        hasMore,
+        nextCursor: hasMore ? makeCursor(campaigns[campaigns.length - 1]) : null,
+      },
     };
 
     cache.set(cacheKey, responseData, 15);

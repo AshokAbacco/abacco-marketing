@@ -12,7 +12,7 @@
 //  - Expanded rows show CampaignStatusPanel (why pending / waiting, ETA,
 //    per-mailbox state). There is no Pause button any more.
 //  - Stat cards go 2-up on mobile instead of stacking to one column.
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import {
   LayoutDashboard,
   Send,
@@ -269,6 +269,23 @@ const getCampaignMeta = (campaign) => {
   return { type, date, config, label, labelClasses };
 };
 
+// Campaigns fetched per request (first load and each "Load More").
+const PAGE_SIZE = 10;
+// Server cap per request — the 30s auto-refresh re-fetches at most this many
+// of the already-loaded rows in one call.
+const MAX_REFRESH = 100;
+
+// Cursor for keyset pagination: the last row the list currently holds.
+const cursorOf = (row) =>
+  row ? `${new Date(row.createdAt).toISOString()}_${row.id}` : "";
+
+// true if row `a` sorts after row `b` (createdAt DESC, id DESC)
+const sortsAfter = (a, b) => {
+  const ta = new Date(a.createdAt).getTime();
+  const tb = new Date(b.createdAt).getTime();
+  return ta < tb || (ta === tb && a.id < b.id);
+};
+
 const DashboardTab = () => {
   const [campaigns, setCampaigns] = useState([]);
   const [stats, setStats] = useState({});
@@ -278,46 +295,162 @@ const DashboardTab = () => {
   const [filter, setFilter] = useState("all");
   const [customDate, setCustomDate] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const [resending, setResending] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
 
-  // ✅ PERF FIX: fetchCampaigns takes explicit args to avoid stale closure bug.
-  // The interval callback previously captured the initial filter/customDate values
-  // and never updated when the user changed filters, causing stale data on auto-refresh.
-  const fetchCampaigns = async (currentFilter, currentDate, isInitial) => {
-    const f = currentFilter !== undefined ? currentFilter : filter;
-    const d = currentDate !== undefined ? currentDate : customDate;
+  // Pagination
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Refs so polling / load-more always see the latest values (no stale
+  // closures), and so responses for an old filter/search are discarded.
+  const campaignsRef = useRef([]);
+  const hasMoreRef = useRef(false);
+  const queryRef = useRef({ filter: "all", customDate: "", search: "" });
+  const queryVersionRef = useRef(0); // bumps when filter/search changes
+  const requestIdRef = useRef(0); // bumps on every list (re)fetch
+  const firstLoadRef = useRef(true);
+
+  useEffect(() => {
+    campaignsRef.current = campaigns;
+  }, [campaigns]);
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  // Search runs on the server — debounce so we don't fire per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const buildParams = ({ cursor, pageSize, includeStats }) => {
+    const { filter: f, customDate: d, search: q } = queryRef.current;
+    const params = new URLSearchParams();
+    if (f) params.append("range", f);
+    if (d) params.append("date", d);
+    if (q) params.append("search", q);
+    params.append("pageSize", String(pageSize));
+    if (cursor) params.append("cursor", cursor);
+    if (!includeStats) params.append("includeStats", "false");
+    return params.toString();
+  };
+
+  /**
+   * mode "reset"   — filter/search changed: load the first 10 only.
+   * mode "refresh" — auto/manual refresh, after delete/pause/resend:
+   *                  re-fetch the rows already loaded (up to MAX_REFRESH)
+   *                  so statuses/counts stay current without collapsing
+   *                  the list back to 10.
+   */
+  const fetchCampaigns = useCallback(async (mode = "refresh", isInitial) => {
+    const requestId = ++requestIdRef.current;
+    const loadedCount = mode === "reset" ? 0 : campaignsRef.current.length;
+    const pageSize = Math.min(
+      Math.max(Math.ceil(loadedCount / PAGE_SIZE) * PAGE_SIZE, PAGE_SIZE),
+      MAX_REFRESH,
+    );
+
     try {
       if (!isInitial) setIsRefreshing(true);
-      const params = new URLSearchParams();
-      if (f) params.append("range", f);
-      if (d) params.append("date", d);
-
       const res = await api.get(
-        `${API_BASE_URL}/api/campaigns/dashboard?${params.toString()}`,
+        `${API_BASE_URL}/api/campaigns/dashboard?${buildParams({
+          pageSize,
+          includeStats: true,
+        })}`,
       );
 
+      // A newer request (e.g. user changed the filter again) has started.
+      if (requestId !== requestIdRef.current) return;
+
       if (res.data.success) {
-        setCampaigns(res.data.data?.recentCampaigns || []);
-        setStats(res.data.data?.stats || {});
+        const data = res.data.data || {};
+        const rows = data.recentCampaigns || [];
+        const pg = data.pagination || {};
+
+        if (mode === "refresh" && rows.length) {
+          // Replace the head with fresh data and keep any already-loaded
+          // rows after it (more than MAX_REFRESH loaded, or a Load More
+          // finished while this refresh was in flight).
+          const ids = new Set(rows.map((r) => r.id));
+          const last = rows[rows.length - 1];
+          const tail = campaignsRef.current.filter(
+            (c) => !ids.has(c.id) && sortsAfter(c, last),
+          );
+          setCampaigns([...rows, ...tail]);
+          setHasMore(tail.length ? hasMoreRef.current : !!pg.hasMore);
+        } else {
+          setCampaigns(rows);
+          setHasMore(!!pg.hasMore);
+        }
+        setStats(data.stats || {});
+        setTotal(pg.total ?? rows.length);
+        setError("");
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       console.error("Error fetching campaigns:", err);
-      setError(err.response?.data?.message || "Failed to load campaigns");
+      if (isInitial) {
+        setError(err.response?.data?.message || "Failed to load campaigns");
+      }
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
+    }
+  }, []);
+
+  // Load the next 10 — rows + per-row counts only (no stats recomputation).
+  const loadMore = async () => {
+    if (loadingMore || !hasMoreRef.current) return;
+    const list = campaignsRef.current;
+    const cursor = cursorOf(list[list.length - 1]);
+    const version = queryVersionRef.current;
+
+    try {
+      setLoadingMore(true);
+      const res = await api.get(
+        `${API_BASE_URL}/api/campaigns/dashboard?${buildParams({
+          cursor,
+          pageSize: PAGE_SIZE,
+          includeStats: false,
+        })}`,
+      );
+      // Filter/search changed while this was in flight — drop it.
+      if (version !== queryVersionRef.current) return;
+
+      if (res.data.success) {
+        const rows = res.data.data?.recentCampaigns || [];
+        setCampaigns((prev) => {
+          const seen = new Set(prev.map((c) => c.id));
+          return [...prev, ...rows.filter((r) => !seen.has(r.id))];
+        });
+        setHasMore(!!res.data.data?.pagination?.hasMore);
+      }
+    } catch (err) {
+      console.error("Error loading more campaigns:", err);
+      alert(err.response?.data?.message || "Failed to load more campaigns");
+    } finally {
+      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    // Pass filter/date explicitly so the 30s interval never uses stale closure values
-    fetchCampaigns(filter, customDate, true);
-    return startVisiblePolling(() => fetchCampaigns(filter, customDate), 30000);
+    queryRef.current = { filter, customDate, search: debouncedSearch };
+    queryVersionRef.current += 1;
+    const isInitial = firstLoadRef.current;
+    firstLoadRef.current = false;
+    if (!isInitial) setExpandedRows(new Set());
+    // New filter/search → start over at the first 10 rows.
+    fetchCampaigns("reset", isInitial);
+    return startVisiblePolling(() => fetchCampaigns("refresh"), 30000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, customDate]);
+  }, [filter, customDate, debouncedSearch]);
 
   const toggleRow = (id) => {
     const newSet = new Set(expandedRows);
@@ -345,8 +478,11 @@ const DashboardTab = () => {
       );
 
       if (res.data.success) {
-        // ✅ PERF FIX: Update local state directly — no need for a second full API call
+        // Remove locally (no list reload) and keep the "x of y" count right.
         setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
+        setTotal((t) => Math.max(t - 1, 0));
+        // Refresh stat cards + loaded rows in the background.
+        fetchCampaigns("refresh");
       }
     } catch (err) {
       console.error("Error deleting campaign:", err);
@@ -370,7 +506,7 @@ const DashboardTab = () => {
       setPausing(id);
       const res = await api.post(`${API_BASE_URL}/api/campaigns/${id}/stop`);
       alert(res.data.message || "Campaign paused");
-      fetchCampaigns(filter, customDate);
+      fetchCampaigns("refresh");
     } catch (error) {
       alert(error.response?.data?.message || "Network or server error");
     } finally {
@@ -393,7 +529,7 @@ const DashboardTab = () => {
 
       if (res.data.success) {
         alert(res.data.message || "Campaign resumed successfully!");
-        fetchCampaigns(filter, customDate);
+        fetchCampaigns("refresh");
       } else {
         alert(res.data.message || "Failed to resend campaign");
       }
@@ -406,7 +542,7 @@ const DashboardTab = () => {
   };
 
   const manualRefresh = async () => {
-    await fetchCampaigns(filter, customDate);
+    await fetchCampaigns("refresh");
   };
 
   if (loading) {
@@ -461,9 +597,8 @@ const DashboardTab = () => {
     );
   }
 
-  const filteredCampaigns = campaigns.filter((campaign) =>
-    campaign.name?.toLowerCase().includes(search.toLowerCase()),
-  );
+  // Search is applied by the server; the list is already filtered.
+  const filteredCampaigns = campaigns;
 
   return (
     <div>
@@ -613,7 +748,9 @@ const DashboardTab = () => {
             No campaigns found
           </p>
           <p className="text-slate-600 text-sm">
-            Create your first campaign to get started
+            {debouncedSearch || customDate || filter !== "all"
+              ? "Try a different search or date filter"
+              : "Create your first campaign to get started"}
           </p>
         </div>
       ) : (
@@ -841,9 +978,7 @@ const DashboardTab = () => {
                               <div className="py-5 space-y-4">
                                 <CampaignStatusPanel
                                   campaignId={campaign.id}
-                                  onChanged={() =>
-                                    fetchCampaigns(filter, customDate)
-                                  }
+                                  onChanged={() => fetchCampaigns("refresh")}
                                 />
                               </div>
                             </td>
@@ -998,13 +1133,40 @@ const DashboardTab = () => {
                     <div className="mt-3 space-y-3">
                       <CampaignStatusPanel
                         campaignId={campaign.id}
-                        onChanged={() => fetchCampaigns(filter, customDate)}
+                        onChanged={() => fetchCampaigns("refresh")}
                       />
                     </div>
                   )}
                 </div>
               );
             })}
+          </div>
+
+          {/* ── Pagination: Load More ─────────────────────────────── */}
+          <div className="flex flex-col items-center gap-3 mt-6">
+            <p className="text-xs font-semibold text-slate-600">
+              Showing {campaigns.length.toLocaleString()} of{" "}
+              {Math.max(total, campaigns.length).toLocaleString()} campaigns
+            </p>
+            {hasMore && (
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-sky-500/30 hover:shadow-xl transition-all disabled:opacity-60 disabled:cursor-not-allowed transform hover:scale-105"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={16} />
+                    Load More
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </>
       )}
