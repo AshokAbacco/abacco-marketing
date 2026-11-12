@@ -612,7 +612,7 @@ async function reserveDailySend(account) {
    • Outside that window the sender pauses and polls until 17:00 resumes
 ═══════════════════════════════════════════════════════════════════════════ */
 
-export const DAILY_LIMIT = Number(process.env.DAILY_SEND_LIMIT) || 5000;
+export const DAILY_LIMIT = Number(process.env.DAILY_SEND_LIMIT) || 6500;
 
 /**
  * Returns a stable Redis key for the current "day bucket".
@@ -954,7 +954,7 @@ const sleepMs = sleep;
 
 // Emails per HOUR per mailbox, by provider. This is the only per-mailbox
 // limit: it refills every hour and never stops a campaign. The only daily
-// limit is the company-wide DAILY_LIMIT (5 000). A limit picked on the
+// limit is the company-wide DAILY_LIMIT (6 500). A limit picked on the
 // Create Campaign screen overrides these for that campaign.
 export const PROVIDER_HOURLY_LIMITS = Object.freeze({
   gmail: 40,

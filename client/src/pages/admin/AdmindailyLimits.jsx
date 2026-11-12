@@ -21,7 +21,7 @@ import {
 import { api } from "../utils/api"; // adjust path
 
 const POLL_INTERVAL = 15_000;
-const DAILY_LIMIT = 5_000;
+const DAILY_LIMIT = 6_500;
 const PAGE_SIZE = 10;
 
 // ─── Status badge config ──────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ export default function AdminDailyOverview() {
           icon={<CheckCircle2 size={20} className="text-red-500" />}
           label="Limit Reached"
           value={counts.completed ?? 0}
-          sub="users at 5,000 / day"
+          sub="users at 6,500 / day"
         />
       </div>
 
@@ -517,7 +517,7 @@ export default function AdminDailyOverview() {
       {/* ── Footer ──────────────────────────────────────────────────────────── */}
       <p className="text-xs text-slate-400 text-center pb-2">
         Auto-refreshes every 15 seconds · Quota resets daily at 5:00 PM IST ·
-        Limit: 5,000 emails / user / day
+        Limit: 6,500 emails / user / day
       </p>
     </div>
   );
