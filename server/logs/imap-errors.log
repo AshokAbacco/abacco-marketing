@@ -544778,3 +544778,5 @@ Foreign key constraint violated: `Conversation_emailAccountId_fkey (index)`
 [2026-11-12T10:56:49.838Z] [Victoria.Adams@zoominleads.com] Sync error: Command failed
 [2026-11-12T10:56:54.830Z] [Madison.Brooks@zoominleads.com] Sync error: Command failed
 [2026-11-12T10:56:59.834Z] [Olivia.Bennett@zoominleads.com] Sync error: Command failed
+[2026-11-12T10:57:24.044Z] [Brooklyn.Foster@zoominleads.com] Sync error: Command failed
+[2026-11-12T10:57:29.388Z] [Abigail.Davis@zoominleads.com] Sync error: Command failed
