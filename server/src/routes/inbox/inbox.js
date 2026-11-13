@@ -64,7 +64,7 @@ function withinRetention(folder) {
 // Upper bound on rows scanned per list request. With a 7-day window a
 // single folder is normally a few hundred rows; this only guards
 // against an unusually busy mailbox.
-const MAX_SCAN_ROWS = 20000;
+const MAX_SCAN_ROWS = 5000;
 
 /* =========================================================
    HELPER: Build ALL cache keys for an account+folder
